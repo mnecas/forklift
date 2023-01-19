@@ -17,22 +17,23 @@ VALIDATION_IMAGE=${REGISTRY}/${REGISTRY_ACCOUNT}/forklift-validation:${REGISTRY_
 VIRT_V2V_IMAGE=${REGISTRY}/${REGISTRY_ACCOUNT}/forklift-virt-v2v:${REGISTRY_TAG}
 API_IMAGE=${REGISTRY}/${REGISTRY_ACCOUNT}/forklift-api:${REGISTRY_TAG}
 
-bazel run push-forklift-api
-bazel run push-forklift-virt-v2v
-bazel run push-forklift-controller
-bazel run push-forklift-validation
-bazel run push-forklift-operator
-bazel run push-forklift-operator-bundle \
-    --action_env OPERATOR_IMAGE=${OPERATOR_IMAGE} \
-    --action_env MUST_GATHER_IMAGE=${MUST_GATHER_IMAGE} \
-    --action_env MUST_GATHER_API_IMAGE=${MUST_GATHER_API_IMAGE} \
-    --action_env UI_IMAGE=${UI_IMAGE} \
-    --action_env UI_PLUGIN_IMAGE=${UI_PLUGIN_IMAGE} \
-    --action_env VALIDATION_IMAGE=${VALIDATION_IMAGE} \
-    --action_env VIRT_V2V_IMAGE=${VIRT_V2V_IMAGE} \
-    --action_env CONTROLLER_IMAGE=${CONTROLLER_IMAGE} \
-    --action_env API_IMAGE=${API_IMAGE}
-bazel run push-forklift-operator-index \
-    --action_env REGISTRY=${REGISTRY} \
-    --action_env REGISTRY_TAG=${REGISTRY_TAG} \
-    --action_env REGISTRY_ACCOUNT=${REGISTRY_ACCOUNT}
+echo ${REGISTRY_TAG}
+# bazel run push-forklift-api
+# bazel run push-forklift-virt-v2v
+# bazel run push-forklift-controller
+# bazel run push-forklift-validation
+# bazel run push-forklift-operator
+# bazel run push-forklift-operator-bundle \
+#     --action_env OPERATOR_IMAGE=${OPERATOR_IMAGE} \
+#     --action_env MUST_GATHER_IMAGE=${MUST_GATHER_IMAGE} \
+#     --action_env MUST_GATHER_API_IMAGE=${MUST_GATHER_API_IMAGE} \
+#     --action_env UI_IMAGE=${UI_IMAGE} \
+#     --action_env UI_PLUGIN_IMAGE=${UI_PLUGIN_IMAGE} \
+#     --action_env VALIDATION_IMAGE=${VALIDATION_IMAGE} \
+#     --action_env VIRT_V2V_IMAGE=${VIRT_V2V_IMAGE} \
+#     --action_env CONTROLLER_IMAGE=${CONTROLLER_IMAGE} \
+#     --action_env API_IMAGE=${API_IMAGE}
+# bazel run push-forklift-operator-index \
+#     --action_env REGISTRY=${REGISTRY} \
+#     --action_env REGISTRY_TAG=${REGISTRY_TAG} \
+#     --action_env REGISTRY_ACCOUNT=${REGISTRY_ACCOUNT}
