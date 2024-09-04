@@ -15,16 +15,6 @@ import (
 	"strings"
 )
 
-const (
-	OVA     = "ova"
-	vSphere = "vSphere"
-	DIR     = "/var/tmp/v2v"
-	FS      = "/mnt/disks/disk[0-9]*"
-	Block   = "/dev/block[0-9]*"
-	VDDK    = "/opt/vmware-vix-disklib-distrib"
-	LUKSDIR = "/etc/luks"
-)
-
 var (
 	xmlFilePath string
 	server      *http.Server
@@ -109,7 +99,7 @@ func customizeVM(source string, xmlFilePath string) error {
 		if strings.Contains(operatingSystem, "win") {
 			t := EmbedTool{filesystem: &scriptFS}
 
-			err = CustomizeWindows(disks, DIR, &t)
+			err = CustomizeWindows(CustomizeDomainExec, disks, DIR, &t)
 			if err != nil {
 				fmt.Println("Error customizing disk image:", err)
 				return err

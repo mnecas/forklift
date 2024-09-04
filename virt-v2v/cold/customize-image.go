@@ -1,53 +1,32 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
-//go:embed scripts
-var scriptFS embed.FS
-
-const (
-	WIN_FIRSTBOOT_PATH         = "/Program Files/Guestfs/Firstboot"
-	WIN_FIRSTBOOT_SCRIPTS_PATH = "/Program Files/Guestfs/Firstboot/scripts"
-)
-
-// CustomizeWindows customizes a windows disk image by uploading scripts.
-//
-// The function writes two bash scripts to the specified local tmp directory,
-// uploads them to the disk image using `virt-customize`.
+// CustomizeDomainExec executes `virt-customize` to customize the image.
 //
 // Arguments:
-//   - disks ([]string): The list of disk paths which should be customized
+//   - extraArgs (...string): The additional arguments which will be appended to the `virt-customize` arguments.
 //
 // Returns:
 //   - error: An error if something goes wrong during the process, or nil if successful.
-func CustomizeWindows(disks []string, dir string, t FileSystemTool) error {
-	fmt.Printf("Customizing disks '%s'", disks)
-	err := t.CreateFilesFromFS(dir)
-	if err != nil {
-		return err
-	}
-	windowsScriptsPath := filepath.Join(dir, "scripts", "windows")
-	initPath := filepath.Join(windowsScriptsPath, "9999-restore_config_init.bat")
-	restoreScriptPath := filepath.Join(windowsScriptsPath, "9999-restore_config.ps1")
-	firstbootPath := filepath.Join(windowsScriptsPath, "firstboot.bat")
+func CustomizeDomainExec(extraArgs ...string) error {
+	args := []string{"--verbose", "--format", "raw"}
+	args = append(args, extraArgs...)
 
-	// Upload scripts to the windows
-	uploadScriptPath := fmt.Sprintf("%s:%s", restoreScriptPath, WIN_FIRSTBOOT_SCRIPTS_PATH)
-	uploadInitPath := fmt.Sprintf("%s:%s", initPath, WIN_FIRSTBOOT_SCRIPTS_PATH)
-	uploadFirstbootPath := fmt.Sprintf("%s:%s", firstbootPath, WIN_FIRSTBOOT_PATH)
+	customizeCmd := exec.Command("virt-customize", args...)
+	customizeCmd.Stdout = os.Stdout
+	customizeCmd.Stderr = os.Stderr
 
-	var extraArgs []string
-	extraArgs = append(extraArgs, getScriptArgs("upload", uploadScriptPath, uploadInitPath, uploadFirstbootPath)...)
-	extraArgs = append(extraArgs, getScriptArgs("add", disks...)...)
-	err = CustomizeDomainExec(extraArgs...)
-	if err != nil {
-		return err
+	fmt.Println("exec:", customizeCmd)
+	if err := customizeCmd.Run(); err != nil {
+		return fmt.Errorf("error executing virt-customize command: %w", err)
 	}
 	return nil
 }
@@ -71,24 +50,43 @@ func getScriptArgs(argName string, values ...string) []string {
 	return args
 }
 
-// CustomizeDomainExec executes `virt-customize` to customize the image.
-//
-// Arguments:
-//   - extraArgs (...string): The additional arguments which will be appended to the `virt-customize` arguments.
-//
-// Returns:
-//   - error: An error if something goes wrong during the process, or nil if successful.
-func CustomizeDomainExec(extraArgs ...string) error {
-	args := []string{"--verbose"}
-	args = append(args, extraArgs...)
-
-	customizeCmd := exec.Command("virt-customize", args...)
-	customizeCmd.Stdout = os.Stdout
-	customizeCmd.Stderr = os.Stderr
-
-	fmt.Println("exec:", customizeCmd)
-	if err := customizeCmd.Run(); err != nil {
-		return fmt.Errorf("error executing virt-customize command: %w", err)
+// getScriptsWithSuffix retrieves all scripts with suffix from the specified directory
+func getScriptsWithSuffix(directory string, suffix string) ([]string, error) {
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read scripts directory: %w", err)
 	}
-	return nil
+
+	var scripts []string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), suffix) {
+			scriptPath := filepath.Join(directory, file.Name())
+			scripts = append(scripts, scriptPath)
+		}
+	}
+
+	return scripts, nil
+}
+
+// addDisksToCustomize appends disk arguments to extraArgs
+func addDisksToCustomize(extraArgs *[]string, disks []string) {
+	*extraArgs = append(*extraArgs, getScriptArgs("add", disks...)...)
+}
+
+// getScriptsWithRegex retrieves all scripts with suffix from the specified directory
+func getScriptsWithRegex(directory string, regex string) ([]string, error) {
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read scripts directory: %w", err)
+	}
+
+	r := regexp.MustCompile(regex)
+	var scripts []string
+	for _, file := range files {
+		if !file.IsDir() && r.MatchString(file.Name()) {
+			scriptPath := filepath.Join(directory, file.Name())
+			scripts = append(scripts, scriptPath)
+		}
+	}
+	return scripts, nil
 }

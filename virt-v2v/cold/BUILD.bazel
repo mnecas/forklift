@@ -93,7 +93,9 @@ container_image(
 go_library(
     name = "cold_lib",
     srcs = [
+        "consts.go",
         "customize-image.go",
+        "customize-win.go",
         "customize-rhel.go",
         "embed-tool.go",
         "entrypoint.go",
@@ -101,7 +103,7 @@ go_library(
     ],
     embedsrcs = [
         "scripts/windows/9999-restore_config.ps1",
-        "scripts/windows/9999-restore_config_init.bat",
+        "scripts/windows/9999-run-mtv-ps-scripts.bat",
         "scripts/windows/firstboot.bat",
         "scripts/rhel/firstboot/README.md",
         "scripts/rhel/run/README.md",

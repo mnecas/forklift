@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/fields"
 	"math/rand"
 	"net/http"
 	"os"
@@ -65,8 +66,11 @@ const (
 	// DV deletion on completion
 	AnnDeleteAfterCompletion = "cdi.kubevirt.io/storage.deleteAfterCompletion"
 	// Max Length for vm name
-	NameMaxLength  = 63
-	VddkVolumeName = "vddk-vol-mount"
+	NameMaxLength               = 63
+	VddkVolumeName              = "vddk-vol-mount"
+	DynamicScriptsVolumeName    = "scripts-volume-mount"
+	DynamicScriptsConfigMapName = "mtv-virt-customize"
+	DynamicScriptsMountPath     = "/mnt/dynamic_scripts"
 )
 
 // Labels
@@ -1643,8 +1647,9 @@ func (r *KubeVirt) guestConversionPod(vm *plan.VMStatus, vmVolumes []cnv.Volume,
 			InitContainers: initContainers,
 			Containers: []core.Container{
 				{
-					Name: "virt-v2v",
-					Env:  environment,
+					Name:            "virt-v2v",
+					Env:             environment,
+					ImagePullPolicy: core.PullAlways,
 					EnvFrom: []core.EnvFromSource{
 						{
 							Prefix: "V2V_",
@@ -1778,6 +1783,28 @@ func (r *KubeVirt) podVolumeMounts(vmVolumes []cnv.Volume, configMap *core.Confi
 		)
 	}
 
+	_, exists, err := r.findConfigMapInNamespace(DynamicScriptsConfigMapName, r.Plan.Spec.TargetNamespace)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	if exists {
+		volumes = append(volumes, core.Volume{
+			Name: DynamicScriptsVolumeName,
+			VolumeSource: core.VolumeSource{
+				ConfigMap: &core.ConfigMapVolumeSource{
+					LocalObjectReference: core.LocalObjectReference{
+						Name: DynamicScriptsConfigMapName,
+					},
+				},
+			},
+		})
+		mounts = append(mounts, core.VolumeMount{
+			Name:      DynamicScriptsVolumeName,
+			MountPath: DynamicScriptsMountPath,
+		})
+	}
+
 	// Temporary space for VDDK library
 	volumes = append(volumes, core.Volume{
 		Name: VddkVolumeName,
@@ -1880,6 +1907,33 @@ func (r *KubeVirt) libvirtDomain(vmCr *VirtualMachine, pvcs []*core.PersistentVo
 	}
 
 	return
+}
+
+func (r *KubeVirt) findConfigMapInNamespace(name string, namespace string) (configMap *core.ConfigMap, exists bool, err error) {
+	if err != nil {
+		return
+	}
+	list := &core.ConfigMapList{}
+	nameField := "metadata.name"
+	namespaceField := "metadata.namespace"
+	err = r.Destination.Client.List(
+		context.TODO(),
+		list,
+		&client.ListOptions{
+			FieldSelector: fields.SelectorFromSet(map[string]string{
+				nameField:      name,
+				namespaceField: namespace,
+			}),
+		},
+	)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	if len(list.Items) > 0 {
+		return &list.Items[0], true, nil
+	}
+	return nil, false, nil
 }
 
 // Ensure the config map exists on the destination.
