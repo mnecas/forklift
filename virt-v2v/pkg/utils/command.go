@@ -82,6 +82,25 @@ func GetFilesInPath(rootPath string) (paths []string, err error) {
 // VirtV2VPrepEnvironment used in the cold migration.
 // It creates a links between the downloaded guest image from virt-v2v and mounted PVC.
 func VirtV2VPrepEnvironment() (err error) {
+	source := os.Getenv("V2V_source")
+	_, inplace := os.LookupEnv("V2V_inPlace")
+	if source == global.VSPHERE && !inplace {
+		if _, err := os.Stat("/etc/secret/cacert"); err == nil {
+			// use the specified certificate
+			err = os.Symlink("/etc/secret/cacert", "/opt/ca-bundle.crt")
+			if err != nil {
+				fmt.Println("Error creating ca cert link ", err)
+				os.Exit(1)
+			}
+		} else {
+			// otherwise, keep system pool certificates
+			err := os.Symlink("/etc/pki/tls/certs/ca-bundle.crt.bak", "/opt/ca-bundle.crt")
+			if err != nil {
+				fmt.Println("Error creating ca cert link ", err)
+				os.Exit(1)
+			}
+		}
+	}
 	if err = os.MkdirAll(global.DIR, os.ModePerm); err != nil {
 		return fmt.Errorf("Error creating directory: %v", err)
 	}
@@ -129,6 +148,22 @@ func getDiskLink(kind global.MountPath, disk string) (string, error) {
 		global.DIR,
 		fmt.Sprintf("%s-sd%s", os.Getenv("V2V_vmName"), genName(diskNum+1)),
 	), nil
+}
+
+func GetLinkedDisks() ([]string, error) {
+	disks, err := filepath.Glob(
+		filepath.Join(
+			global.DIR,
+			fmt.Sprintf("%s-sd*", os.Getenv("V2V_vmName")),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(disks) != 0 {
+		return disks, nil
+	}
+	return nil, fmt.Errorf("no disks founds")
 }
 
 func LinkDisks(path global.MountPath) (err error) {

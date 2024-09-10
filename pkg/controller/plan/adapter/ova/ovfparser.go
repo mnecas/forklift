@@ -120,27 +120,35 @@ func GetFirmwareFromConfig(vmConfigXML string) (firmware string, err error) {
 	return BIOS, nil
 }
 
-func GetOperationSystemFromConfig(vmConfigXML string) (os string, err error) {
-	xmlConf, err := readConfFromXML(vmConfigXML)
-	if err != nil {
-		return
-	}
-	return mapOs(xmlConf.Metadata.LibOsInfo.V2VOS.ID), nil
+type InspectionOS struct {
+	Name   string `xml:"name"`
+	Distro string `xml:"distro"`
+	Osinfo string `xml:"osinfo"`
+	Arch   string `xml:"arch"`
 }
 
-func mapOs(xmlOs string) (os string) {
-	split := strings.Split(xmlOs, "/")
-	distro := split[3]
-	switch distro {
-	case "rocky", "opensuse", "ubuntu", "fedora":
-		os = distro
-	default:
-		os = split[3] + strings.Split(split[4], ".")[0]
+type InspectionV2V struct {
+	OS InspectionOS `xml:"operatingsystem"`
+}
+
+func ParseInspectionFromString(xmlData string) (*InspectionV2V, error) {
+	var xmlConf InspectionV2V
+	err := xml.Unmarshal([]byte(xmlData), &xmlConf)
+	if err != nil {
+		return nil, fmt.Errorf("Error unmarshalling XML: %v\n", err)
 	}
-	os, ok := osV2VMap[os]
+	return &xmlConf, nil
+}
+
+func GetOperationSystemFromConfig(vmConfigXML string) (string, error) {
+	inspection, err := ParseInspectionFromString(vmConfigXML)
+	if err != nil {
+		return "", err
+	}
+	os, ok := osV2VMap[inspection.OS.Osinfo]
 	if !ok {
-		log.Info(fmt.Sprintf("Received %s, mapped to: %s", xmlOs, os))
+		log.Info(fmt.Sprintf("Received %s, mapped to: %s", os, os))
 		os = "otherGuest64"
 	}
-	return
+	return os, nil
 }
