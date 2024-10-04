@@ -111,6 +111,7 @@ func (r *Scheduler) buildInFlight() (err error) {
 		}
 	}
 
+	// calculate the cost for each host across all running plans
 	planList := &api.PlanList{}
 	err = r.List(context.TODO(), planList)
 	if err != nil {
