@@ -976,6 +976,7 @@ func getVddkImageValidationJobLabels(plan *api.Plan) map[string]string {
 	sum := md5.Sum([]byte(image))
 	return map[string]string{
 		"plan": string(plan.ObjectMeta.UID),
+		"step": "vddk-validation",
 		"vddk": hex.EncodeToString(sum[:]),
 	}
 }
