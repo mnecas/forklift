@@ -30,6 +30,7 @@ const (
 	VddkJobActiveDeadline     = "VDDK_JOB_ACTIVE_DEADLINE"
 	VirtV2vExtraArgs          = "VIRT_V2V_EXTRA_ARGS"
 	VirtV2vExtraConfConfigMap = "VIRT_V2V_EXTRA_CONF_CONFIG_MAP"
+	VirtV2vGetHash            = "VIRT_V2V_GET_HASH"
 )
 
 // Migration settings
@@ -70,6 +71,8 @@ type Migration struct {
 	VirtV2vExtraArgs string
 	// Additional configuration for virt-v2v
 	VirtV2vExtraConfConfigMap string
+	// Get hash before running virt-v2v
+	VirtV2vGetHash bool
 }
 
 // Load settings.
@@ -145,5 +148,7 @@ func (r *Migration) Load() (err error) {
 	if val, found := os.LookupEnv(VirtV2vExtraConfConfigMap); found {
 		r.VirtV2vExtraConfConfigMap = val
 	}
+
+	r.VirtV2vGetHash = getEnvBool(VirtV2vGetHash, false)
 	return
 }

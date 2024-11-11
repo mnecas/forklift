@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -158,4 +160,35 @@ func LinkDisks(path global.MountPath) (err error) {
 		}
 	}
 	return
+}
+
+func GetDiskHash(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	hasher := sha256.New()
+	_, err = io.Copy(hasher, file)
+
+	if err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
+}
+
+func GetDiskMounts() ([]string, error) {
+	var disks []string
+	fsDisk, err := filepath.Glob(string(global.FS))
+	if err != nil {
+		return nil, fmt.Errorf("error getting disks %v", err)
+	}
+	for _, disk := range fsDisk {
+		disks = append(disks, fmt.Sprintf("%s/disk.img", disk))
+	}
+	blockDisk, err := filepath.Glob(string(global.BLOCK))
+	if err != nil {
+		return nil, fmt.Errorf("error getting disks %v", err)
+	}
+	disks = append(disks, blockDisk...)
+	return disks, nil
 }

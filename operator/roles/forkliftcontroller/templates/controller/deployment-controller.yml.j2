@@ -127,6 +127,10 @@ spec:
         - name: VIRT_V2V_DONT_REQUEST_KVM
           value: "true"
 {% endif %}
+{% if virt_v2v_get_hashes|bool %}
+        - name: VIRT_V2V_GET_HASH
+          value: "true"
+{% endif %}
         - name: VIRT_V2V_EXTRA_ARGS
           value: "{{ virt_v2v_extra_args }}"
         - name: VIRT_V2V_EXTRA_CONF_CONFIG_MAP

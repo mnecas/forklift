@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,9 @@ func main() {
 
 	// virt-v2v or virt-v2v-in-place
 	if _, found := os.LookupEnv("V2V_inPlace"); found {
+		if _, found := os.LookupEnv("V2V_get_hash"); found {
+			printHashes()
+		}
 		err = runVirtV2vInPlace()
 	} else {
 		err = runVirtV2v()
@@ -270,4 +274,21 @@ func virtV2VPrepEnvironment() (err error) {
 		return
 	}
 	return nil
+}
+
+func printHashes() {
+	disks, err := utils.GetDiskMounts()
+	if err != nil {
+		fmt.Println("Failed to get mounted disk", err)
+		os.Exit(1)
+	}
+	for _, disk := range disks {
+		fmt.Println(fmt.Sprintf("Getting the hash of disk: '%s'", disk))
+		hash, err := utils.GetDiskHash(disk)
+		if err != nil {
+			fmt.Println("Failed to get hash of the disk", err)
+			os.Exit(1)
+		}
+		fmt.Println(hex.EncodeToString(hash))
+	}
 }

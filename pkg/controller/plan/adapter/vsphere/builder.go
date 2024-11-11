@@ -237,6 +237,16 @@ func (r *Builder) PodEnvironment(vmRef ref.Ref, sourceSecret *core.Secret) (env 
 			Value: settings.Settings.Migration.VirtV2vExtraArgs,
 		},
 	)
+	if settings.Settings.Migration.VirtV2vGetHash {
+		env = append(
+			env,
+			core.EnvVar{
+				Name:  "V2V_get_hash",
+				Value: "1",
+			},
+		)
+	}
+
 	if macsToIps != "" {
 		env = append(env, core.EnvVar{
 			Name:  "V2V_staticIPs",
