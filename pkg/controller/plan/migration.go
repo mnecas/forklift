@@ -55,36 +55,38 @@ var (
 
 // Phases.
 const (
-	Started                    = "Started"
-	PreHook                    = "PreHook"
-	StorePowerState            = "StorePowerState"
-	PowerOffSource             = "PowerOffSource"
-	WaitForPowerOff            = "WaitForPowerOff"
-	CreateDataVolumes          = "CreateDataVolumes"
-	CreateVM                   = "CreateVM"
-	CopyDisks                  = "CopyDisks"
-	AllocateDisks              = "AllocateDisks"
-	CopyingPaused              = "CopyingPaused"
-	AddCheckpoint              = "AddCheckpoint"
-	AddFinalCheckpoint         = "AddFinalCheckpoint"
-	CreateSnapshot             = "CreateSnapshot"
-	CreateInitialSnapshot      = "CreateInitialSnapshot"
-	CreateFinalSnapshot        = "CreateFinalSnapshot"
-	Finalize                   = "Finalize"
-	CreateGuestConversionPod   = "CreateGuestConversionPod"
-	ConvertGuest               = "ConvertGuest"
-	CopyDisksVirtV2V           = "CopyDisksVirtV2V"
-	PostHook                   = "PostHook"
-	Completed                  = "Completed"
-	WaitForSnapshot            = "WaitForSnapshot"
-	WaitForInitialSnapshot     = "WaitForInitialSnapshot"
-	WaitForFinalSnapshot       = "WaitForFinalSnapshot"
-	ConvertOpenstackSnapshot   = "ConvertOpenstackSnapshot"
-	StoreSnapshotDeltas        = "StoreSnapshotDeltas"
-	StoreInitialSnapshotDeltas = "StoreInitialSnapshotDeltas"
-	RemovePreviousSnapshot     = "RemovePreviousSnapshot"
-	RemovePenultimateSnapshot  = "RemovePenultimateSnapshot"
-	RemoveFinalSnapshot        = "RemoveFinalSnapshot"
+	Started                              = "Started"
+	PreHook                              = "PreHook"
+	StorePowerState                      = "StorePowerState"
+	PowerOffSource                       = "PowerOffSource"
+	WaitForPowerOff                      = "WaitForPowerOff"
+	CreateDataVolumes                    = "CreateDataVolumes"
+	CreateVM                             = "CreateVM"
+	CopyDisks                            = "CopyDisks"
+	AllocateDisks                        = "AllocateDisks"
+	CopyingPaused                        = "CopyingPaused"
+	AddCheckpoint                        = "AddCheckpoint"
+	AddFinalCheckpoint                   = "AddFinalCheckpoint"
+	CreateSnapshot                       = "CreateSnapshot"
+	CreateInitialSnapshot                = "CreateInitialSnapshot"
+	CreateFinalSnapshot                  = "CreateFinalSnapshot"
+	Finalize                             = "Finalize"
+	CreateGuestConversionPod             = "CreateGuestConversionPod"
+	ConvertGuest                         = "ConvertGuest"
+	CopyDisksVirtV2V                     = "CopyDisksVirtV2V"
+	PostHook                             = "PostHook"
+	Completed                            = "Completed"
+	WaitForSnapshot                      = "WaitForSnapshot"
+	WaitForInitialSnapshot               = "WaitForInitialSnapshot"
+	WaitForFinalSnapshot                 = "WaitForFinalSnapshot"
+	ConvertOpenstackSnapshot             = "ConvertOpenstackSnapshot"
+	StoreSnapshotDeltas                  = "StoreSnapshotDeltas"
+	StoreInitialSnapshotDeltas           = "StoreInitialSnapshotDeltas"
+	RemovePreviousSnapshot               = "RemovePreviousSnapshot"
+	WaitForDisksConsolidation            = "WaitForDisksConsolidation"
+	RemovePenultimateSnapshot            = "RemovePenultimateSnapshot"
+	WaitForPenultimateDisksConsolidation = "WaitForPenultimateDisksConsolidation"
+	RemoveFinalSnapshot                  = "RemoveFinalSnapshot"
 )
 
 // Steps.
@@ -137,6 +139,7 @@ var (
 			{Name: CopyDisks},
 			{Name: CopyingPaused},
 			{Name: RemovePreviousSnapshot, All: VSphere},
+			{Name: WaitForDisksConsolidation, All: VSphere},
 			{Name: CreateSnapshot},
 			{Name: WaitForSnapshot},
 			{Name: StoreSnapshotDeltas, All: VSphere},
@@ -145,6 +148,7 @@ var (
 			{Name: PowerOffSource},
 			{Name: WaitForPowerOff},
 			{Name: RemovePenultimateSnapshot, All: VSphere},
+			{Name: WaitForPenultimateDisksConsolidation, All: VSphere},
 			{Name: CreateFinalSnapshot},
 			{Name: WaitForFinalSnapshot},
 			{Name: AddFinalCheckpoint},
@@ -662,9 +666,9 @@ func (r *Migration) step(vm *plan.VMStatus) (step string) {
 		step = Initialize
 	case AllocateDisks:
 		step = DiskAllocation
-	case CopyDisks, CopyingPaused, RemovePreviousSnapshot, CreateSnapshot, WaitForSnapshot, StoreSnapshotDeltas, AddCheckpoint, ConvertOpenstackSnapshot:
+	case CopyDisks, CopyingPaused, RemovePreviousSnapshot, WaitForDisksConsolidation, CreateSnapshot, WaitForSnapshot, StoreSnapshotDeltas, AddCheckpoint, ConvertOpenstackSnapshot:
 		step = DiskTransfer
-	case RemovePenultimateSnapshot, CreateFinalSnapshot, WaitForFinalSnapshot, AddFinalCheckpoint, Finalize, RemoveFinalSnapshot:
+	case RemovePenultimateSnapshot, WaitForPenultimateDisksConsolidation, CreateFinalSnapshot, WaitForFinalSnapshot, AddFinalCheckpoint, Finalize, RemoveFinalSnapshot:
 		step = Cutover
 	case CreateGuestConversionPod, ConvertGuest:
 		step = ImageConversion
@@ -1003,6 +1007,22 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 			break
 		}
 		vm.Phase = r.next(vm.Phase)
+	case WaitForDisksConsolidation, WaitForPenultimateDisksConsolidation:
+		step, found := vm.FindStep(r.step(vm))
+		if !found {
+			vm.AddError(fmt.Sprintf("Step '%s' not found", r.step(vm)))
+			break
+		}
+		ready, err := r.provider.CheckDisksConsolidationReady(vm.Ref, r.kubevirt.loadHosts)
+		if err != nil {
+			r.Log.Error(err, "Failed to query events")
+			step.AddError(err.Error())
+			err = nil
+			break
+		}
+		if ready {
+			vm.Phase = r.next(vm.Phase)
+		}
 	case CreateInitialSnapshot, CreateSnapshot, CreateFinalSnapshot:
 		step, found := vm.FindStep(r.step(vm))
 		if !found {
