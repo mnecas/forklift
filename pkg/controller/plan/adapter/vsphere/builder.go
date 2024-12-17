@@ -81,6 +81,8 @@ const (
 	AnnImportBackingFile = "cdi.kubevirt.io/storage.import.backingFile"
 )
 
+const VddkConf = "vddk-conf"
+
 // Map of vmware guest ids to osinfo ids.
 var osMap = map[string]string{
 	"centos64Guest":              "centos5.11",
@@ -142,6 +144,10 @@ type Builder struct {
 	hosts map[string]*api.Host
 	// MAC addresses already in use on the destination cluster. k=mac, v=vmName
 	macConflictsMap map[string]string
+}
+
+func genVddkConfConfigMapName(plan *api.Plan) string {
+	return fmt.Sprintf("%s-%s", plan.Name, VddkConf)
 }
 
 // Get list of destination VMs with mac addresses that would
@@ -483,6 +489,9 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 					dv.ObjectMeta.Annotations = make(map[string]string)
 				}
 				dv.ObjectMeta.Annotations[planbase.AnnDiskSource] = r.baseVolume(disk.File)
+				if !coldLocal && r.Source.Provider.UseVddkAioOptimization() {
+					dv.ObjectMeta.Annotations[planbase.AnnVddkExtraArgs] = genVddkConfConfigMapName(r.Plan)
+				}
 				dvs = append(dvs, *dv)
 			}
 		}
