@@ -39,7 +39,7 @@ require (
 	k8s.io/utils v0.0.0-20240102154912-e7106e64919e
 	kubevirt.io/api v1.1.1
 	kubevirt.io/containerized-data-importer-api v1.59.0
-	libvirt.org/libvirt-go-xml v7.4.0+incompatible
+	libvirt.org/go/libvirt v1.11001.0
 	sigs.k8s.io/controller-runtime v0.16.3
 	sigs.k8s.io/yaml v1.3.0
 )

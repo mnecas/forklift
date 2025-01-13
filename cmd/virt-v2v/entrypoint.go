@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"libvirt.org/go/libvirt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,7 +14,28 @@ import (
 	"github.com/konveyor/forklift-controller/pkg/virt-v2v/customize"
 	"github.com/konveyor/forklift-controller/pkg/virt-v2v/global"
 	"github.com/konveyor/forklift-controller/pkg/virt-v2v/server"
-	utils "github.com/konveyor/forklift-controller/pkg/virt-v2v/utils"
+	"github.com/konveyor/forklift-controller/pkg/virt-v2v/utils"
+)
+
+// Env variables
+const (
+	VM_NAME     = "V2V_vmName"
+	VM_NEWNAME  = "V2V_NewName"
+	LIBVIRT_URI = "V2V_libvirtURL"
+	FINGERPRINT = "V2V_fingerprint"
+	EXTRA_ARGS  = "V2V_extraArgs"
+	SECRET_KEY  = "V2V_secretKey"
+	ROOT_DISK   = "V2V_RootDisk"
+	STATIC_IPS  = "V2V_staticIPs"
+
+	// OVA
+	DISK_PATH = "V2V_diskPath"
+
+	// Misc
+	SOURCE          = "V2V_source"
+	LOCAL_MIGRATION = "LOCAL_MIGRATION"
+	IN_PLACE        = "V2V_inPlace"
+	SECRET_KEY_PATH = "/etc/secret/secretKey"
 )
 
 func main() {
@@ -24,7 +46,7 @@ func main() {
 	}
 
 	// virt-v2v or virt-v2v-in-place
-	if _, found := os.LookupEnv("V2V_inPlace"); found {
+	if _, found := os.LookupEnv(IN_PLACE); found {
 		err = runVirtV2vInPlace()
 	} else {
 		err = runVirtV2v()
@@ -98,11 +120,74 @@ func runVirtV2vInPlace() error {
 	if err != nil {
 		return err
 	}
-	args = append(args, "/mnt/v2v/input.xml")
+	domainFile, err := getLibvirtDomainFile(os.Getenv(VM_NAME), os.Getenv(LIBVIRT_URI), SECRET_KEY_PATH)
+	if err != nil {
+		return err
+	}
+	args = append(args, domainFile)
 	v2vCmd := exec.Command("/usr/libexec/virt-v2v-in-place", args...)
 	v2vCmd.Stdout = os.Stdout
 	v2vCmd.Stderr = os.Stderr
 	return v2vCmd.Run()
+}
+
+func getLibvirtDomain(vmName string, domainUri string, passwordFile string) (string, error) {
+	// Authentication callback function
+	authCallback := func(credentials []*libvirt.ConnectCredential) {
+		for i := range credentials {
+			cred := credentials[i]
+			switch cred.Type {
+			case libvirt.CRED_PASSPHRASE:
+				file, err := os.ReadFile(passwordFile)
+				if err != nil {
+					return
+				}
+				cred.Result = string(file)
+			}
+			cred.ResultLen = len(cred.Result)
+		}
+	}
+
+	// Define the authentication details
+	auth := libvirt.ConnectAuth{
+		CredType: []libvirt.ConnectCredentialType{
+			libvirt.CRED_PASSPHRASE,
+		},
+		Callback: authCallback,
+	}
+
+	conn, err := libvirt.NewConnectWithAuth(domainUri, &auth, 0)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	dom, err := conn.LookupDomainByName(vmName)
+	if err != nil {
+		return "", err
+	}
+	xml, err := dom.GetXMLDesc(0)
+	if err != nil {
+		return "", err
+	}
+	return xml, nil
+}
+
+func getLibvirtDomainFile(vmName string, domainUri string, passwordFile string) (string, error) {
+	filePath := "/tmp/input.xml"
+	file, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	domain, err := getLibvirtDomain(vmName, domainUri, passwordFile)
+	if err != nil {
+		return "", err
+	}
+	_, err = file.Write([]byte(domain))
+	if err != nil {
+		return "", err
+	}
+	return filePath, nil
 }
 
 func virtV2vBuildCommand() (args []string, err error) {
@@ -110,8 +195,8 @@ func virtV2vBuildCommand() (args []string, err error) {
 	source := os.Getenv("V2V_source")
 
 	requiredEnvVars := map[string][]string{
-		global.VSPHERE: {"V2V_libvirtURL", "V2V_secretKey", "V2V_vmName"},
-		global.OVA:     {"V2V_diskPath", "V2V_vmName"},
+		global.VSPHERE: {LIBVIRT_URI, SECRET_KEY, VM_NAME},
+		global.OVA:     {DISK_PATH, VM_NAME},
 	}
 
 	if envVars, ok := requiredEnvVars[source]; ok {
@@ -135,15 +220,15 @@ func virtV2vBuildCommand() (args []string, err error) {
 		}
 		args = append(args, vsphereArgs...)
 	case global.OVA:
-		args = append(args, "-i", "ova", os.Getenv("V2V_diskPath"))
+		args = append(args, "-i", "ova", os.Getenv(DISK_PATH))
 	}
 
 	return args, nil
 }
 
 func virtV2vVsphereArgs() (args []string, err error) {
-	args = append(args, "-i", "libvirt", "-ic", os.Getenv("V2V_libvirtURL"))
-	args = append(args, "-ip", "/etc/secret/secretKey")
+	args = append(args, "-i", "libvirt", "-ic", os.Getenv(LIBVIRT_URI))
+	args = append(args, "-ip", SECRET_KEY_PATH)
 	args, err = addCommonArgs(args)
 	if err != nil {
 		return nil, err
@@ -152,17 +237,17 @@ func virtV2vVsphereArgs() (args []string, err error) {
 		args = append(args,
 			"-it", "vddk",
 			"-io", fmt.Sprintf("vddk-libdir=%s", global.VDDK),
-			"-io", fmt.Sprintf("vddk-thumbprint=%s", os.Getenv("V2V_fingerprint")),
+			"-io", fmt.Sprintf("vddk-thumbprint=%s", os.Getenv(FINGERPRINT)),
 		)
 	}
 
 	// When converting VM with name that do not meet DNS1123 RFC requirements,
 	// it should be changed to supported one to ensure the conversion does not fail.
-	if utils.CheckEnvVariablesSet("V2V_NewName") {
-		args = append(args, "-on", os.Getenv("V2V_NewName"))
+	if utils.CheckEnvVariablesSet(VM_NEWNAME) {
+		args = append(args, "-on", os.Getenv(VM_NEWNAME))
 	}
 
-	args = append(args, "--", os.Getenv("V2V_vmName"))
+	args = append(args, "--", os.Getenv(VM_NAME))
 	return args, nil
 }
 
@@ -170,14 +255,14 @@ func virtV2vVsphereArgs() (args []string, err error) {
 func addCommonArgs(args []string) ([]string, error) {
 	// Allow specifying which disk should be the bootable disk
 	args = append(args, "--root")
-	if utils.CheckEnvVariablesSet("V2V_RootDisk") {
-		args = append(args, os.Getenv("V2V_RootDisk"))
+	if utils.CheckEnvVariablesSet(ROOT_DISK) {
+		args = append(args, os.Getenv(ROOT_DISK))
 	} else {
 		args = append(args, "first")
 	}
 
 	// Add the mapping to the virt-v2v, used mainly in the windows when migrating VMs with static IP
-	if envStaticIPs := os.Getenv("V2V_staticIPs"); envStaticIPs != "" {
+	if envStaticIPs := os.Getenv(STATIC_IPS); envStaticIPs != "" {
 		for _, macToIp := range strings.Split(envStaticIPs, "_") {
 			args = append(args, "--mac", macToIp)
 		}
@@ -191,7 +276,7 @@ func addCommonArgs(args []string) ([]string, error) {
 	args = append(args, luksArgs...)
 
 	var extraArgs []string
-	if envExtraArgs := os.Getenv("V2V_extra_args"); envExtraArgs != "" {
+	if envExtraArgs := os.Getenv(EXTRA_ARGS); envExtraArgs != "" {
 		if err := json.Unmarshal([]byte(envExtraArgs), &extraArgs); err != nil {
 			return nil, fmt.Errorf("Error parsing extra arguments %v", err)
 		}
@@ -242,8 +327,8 @@ func runVirtV2v() error {
 // VirtV2VPrepEnvironment used in the cold migration.
 // It creates a links between the downloaded guest image from virt-v2v and mounted PVC.
 func virtV2VPrepEnvironment() (err error) {
-	source := os.Getenv("V2V_source")
-	_, inplace := os.LookupEnv("V2V_inPlace")
+	source := os.Getenv(SOURCE)
+	_, inplace := os.LookupEnv(IN_PLACE)
 	if source == global.VSPHERE && !inplace {
 		if _, err := os.Stat("/etc/secret/cacert"); err == nil {
 			// use the specified certificate
