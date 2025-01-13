@@ -70,6 +70,7 @@ test_dirs() {
 }
 
 expected_to_pass_dirs() {
+    local FAIL_IS_FATAL=true PASS_IS_FATAL=false
     test_dirs "$@"
 }
 
