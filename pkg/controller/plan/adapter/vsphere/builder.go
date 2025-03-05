@@ -542,7 +542,10 @@ func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, 
 	if object.Template == nil {
 		object.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
 	}
-	r.mapDisks(vm, vmRef, persistentVolumeClaims, object)
+	err = r.mapDisks(vm, vmRef, persistentVolumeClaims, object)
+	if err != nil {
+		return
+	}
 	r.mapFirmware(vm, object)
 	if !usesInstanceType {
 		r.mapCPU(vm, object)
@@ -676,7 +679,22 @@ func (r *Builder) mapFirmware(vm *model.VM, object *cnv.VirtualMachineSpec) {
 	object.Template.Spec.Domain.Firmware = firmware
 }
 
-func (r *Builder) mapDisks(vm *model.VM, vmRef ref.Ref, persistentVolumeClaims []*core.PersistentVolumeClaim, object *cnv.VirtualMachineSpec) {
+func (r *Builder) findDiskToPVC(pvcMap map[string]*core.PersistentVolumeClaim, disk vsphere.Disk) (*core.PersistentVolumeClaim, error) {
+	pvc := pvcMap[r.baseVolume(disk.File)]
+	if pvc != nil {
+		return pvc, nil
+	}
+	// If the user creates in middle of migration snapshot the disk file name gets the snapshot suffix.
+	// This is updated in the inventory as it's the current disk state, but all PVCs and DVs were created with
+	// the original name. The trim will remove the suffix from the disk name showing the original name.
+	pvc = pvcMap[trimBackingFileName(disk.File)]
+	if pvc != nil {
+		return pvc, nil
+	}
+	return nil, fmt.Errorf("failed to find persistent volume for disk %s", disk.File)
+}
+
+func (r *Builder) mapDisks(vm *model.VM, vmRef ref.Ref, persistentVolumeClaims []*core.PersistentVolumeClaim, object *cnv.VirtualMachineSpec) error {
 	var kVolumes []cnv.Volume
 	var kDisks []cnv.Disk
 
@@ -704,7 +722,10 @@ func (r *Builder) mapDisks(vm *model.VM, vmRef ref.Ref, persistentVolumeClaims [
 	}
 
 	for i, disk := range disks {
-		pvc := pvcMap[r.baseVolume(disk.File)]
+		pvc, err := r.findDiskToPVC(pvcMap, disk)
+		if err != nil {
+			return err
+		}
 		volumeName := fmt.Sprintf("vol-%v", i)
 		volume := cnv.Volume{
 			Name: volumeName,
@@ -739,6 +760,7 @@ func (r *Builder) mapDisks(vm *model.VM, vmRef ref.Ref, persistentVolumeClaims [
 	}
 	object.Template.Spec.Volumes = kVolumes
 	object.Template.Spec.Domain.Devices.Disks = kDisks
+	return nil
 }
 
 func (r *Builder) mapTpm(vm *model.VM, object *cnv.VirtualMachineSpec) {
