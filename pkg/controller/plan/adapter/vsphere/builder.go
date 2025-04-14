@@ -466,11 +466,7 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 		return
 	}
 
-	// Sort disks by bus, so we can match the disk index to the boot order.
-	// Important: need to match order in mapDisks method
-	disks := r.sortedDisksAsVmware(vm.Disks)
-
-	for diskIndex, disk := range disks {
+	for diskIndex, disk := range vm.Disks {
 		mapped, found := dsMap[disk.Datastore.ID]
 		if !found {
 			continue
@@ -851,21 +847,14 @@ func (r *Builder) sortedDisksAsLibvirt(disks []vsphere.Disk) []vsphere.Disk {
 	return r.sortedDisksByBusses(disks, buses)
 }
 
-func (r *Builder) sortedDisksAsVmware(disks []vsphere.Disk) []vsphere.Disk {
-	var buses = []string{container.SATA, container.IDE, container.SCSI}
-	return r.sortedDisksByBusses(disks, buses)
-}
-
 func (r *Builder) mapDisks(vm *model.VM, vmRef ref.Ref, persistentVolumeClaims []*core.PersistentVolumeClaim, object *cnv.VirtualMachineSpec, sortByLibvirt bool) error {
 	var kVolumes []cnv.Volume
 	var kDisks []cnv.Disk
 	var templateErr error
-	var disks []vsphere.Disk
 
+	disks := vm.Disks
 	if sortByLibvirt {
 		disks = r.sortedDisksAsLibvirt(vm.Disks)
-	} else {
-		disks = r.sortedDisksAsVmware(vm.Disks)
 	}
 	pvcMap := make(map[string]*core.PersistentVolumeClaim)
 	for i := range persistentVolumeClaims {
