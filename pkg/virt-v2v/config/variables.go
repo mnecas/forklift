@@ -50,6 +50,7 @@ const (
 	DynamicScriptsMountPath = "/mnt/dynamic_scripts"
 
 	SecretKey = "/etc/secret/secretKey"
+	SecretId  = "/etc/secret/accessKeyId"
 
 	V2vInPlaceLibvirtDomain = "/mnt/v2v/input.xml"
 )
@@ -93,7 +94,6 @@ type AppConfig struct {
 	DynamicScriptsDir    string
 	Workdir              string
 	VddkLibDir           string
-	LibvirtDomainFile    string
 }
 
 func (s *AppConfig) Load() (err error) {
@@ -115,7 +115,6 @@ func (s *AppConfig) Load() (err error) {
 	flag.StringVar(&s.VddkLibDir, "vddk-lib-dir", VddkLib, "Directory path containing the vddk library")
 	flag.StringVar(&s.VddkConfFile, "vddk-conf-file", VddkConfFile, "Path for additional vddk configuration")
 	flag.StringVar(&s.InspectionOutputFile, "inspection-output-file", InspectionOutputFile, "Path where the virt-v2v-inspector will output the metadata")
-	flag.StringVar(&s.LibvirtDomainFile, "libvirt-domain-file", V2vInPlaceLibvirtDomain, "Path to the libvirt domain used in the in-place conversion")
 	flag.StringVar(&s.VirtIoWinLegacyDrivers, "virtio-win-legacy-drivers", os.Getenv(EnvVirtIoWinLegacyDriversName), "Path to the virtio-win legacy drivers ISO")
 	flag.StringVar(&s.HostName, "hostname", os.Getenv(EnvHostName), "Hostname of the vm")
 	flag.StringVar(&s.MultipleIpsPerNicName, "multiple-ips-per-nic", os.Getenv(EnvMultipleIpsPerNicName), "Multiple IPs per NIC")

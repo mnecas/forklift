@@ -1,9 +1,11 @@
 package conversion
 
 import (
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,9 @@ import (
 	"github.com/kubev2v/forklift/pkg/virt-v2v/config"
 	"github.com/kubev2v/forklift/pkg/virt-v2v/customize"
 	"github.com/kubev2v/forklift/pkg/virt-v2v/utils"
+
+	"libvirt.org/go/libvirt"
+	"libvirt.org/go/libvirtxml"
 )
 
 type Conversion struct {
@@ -109,6 +114,92 @@ func (c *Conversion) RunVirtV2VInspection() error {
 	return v2vCmd.Run()
 }
 
+func (c *Conversion) fetchLibvirtDomain() (string, error) {
+	// The libvirt-go library requires a callback function to handle authentication requests.
+	authCallback := func(creds []*libvirt.ConnectCredential) {
+		for _, cred := range creds {
+			if cred.Type == libvirt.CRED_AUTHNAME {
+				file, err := os.ReadFile(config.SecretId)
+				if err != nil {
+					return
+				}
+				cred.Result = string(file)
+				cred.ResultLen = len(string(file))
+			} else if cred.Type == libvirt.CRED_PASSPHRASE {
+				file, err := os.ReadFile(config.SecretKey)
+				if err != nil {
+					return
+				}
+				cred.Result = string(file)
+				cred.ResultLen = len(string(file))
+			}
+		}
+	}
+	auth := &libvirt.ConnectAuth{
+		CredType: []libvirt.ConnectCredentialType{
+			libvirt.CRED_AUTHNAME,
+			libvirt.CRED_PASSPHRASE,
+		},
+		Callback: authCallback,
+	}
+
+	// Connect to the remote hypervisor using the URI and the authentication callback.
+	conn, err := libvirt.NewConnectWithAuth(c.LibvirtUrl, auth, 0)
+	if err != nil {
+		log.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Get the list of all domains (virtual machines), including inactive ones.
+	// The first argument to ListAllDomains is a bitwise-OR of ConnectListAllDomainsFlags.
+	// Using 0 means no flags are set, which lists all domains.
+	domain, err := conn.LookupDomainByName(c.VmName)
+	if err != nil {
+		log.Fatalf("failed to retrieve domains: %v", err)
+	}
+
+	// Get the domain's XML description.
+	xmlDesc, err := domain.GetXMLDesc(0)
+	if err != nil {
+		log.Fatalf("failed to get XML description for domain '%s': %v", c.VmName, err)
+	}
+
+	// --- EDIT XML DISKS ---
+	// 1. Unmarshal the XML string into the official libvirtxml.Domain struct.
+	var domainXML libvirtxml.Domain
+	if err := xml.Unmarshal([]byte(xmlDesc), &domainXML); err != nil {
+		log.Fatalf("Failed to unmarshal domain XML: %v", err)
+	}
+
+	// 2. Modify the disk information.
+	// Here, we iterate through all disks and change the cache policy.
+	fmt.Println("Modifying disk configurations...")
+	if domainXML.Devices != nil {
+		for i, disk := range c.Disks {
+			if domainXML.Devices.Disks[i].Source.File != nil {
+				domainXML.Devices.Disks[i].Source.File.File = disk.Link
+			}
+			if domainXML.Devices.Disks[i].Source.Block != nil {
+				domainXML.Devices.Disks[i].Source.Block.Dev = disk.Link
+			}
+		}
+	}
+	// 3. Marshal the modified struct back into a formatted XML byte slice.
+	modifiedXML, err := xml.MarshalIndent(domainXML, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal modified domain XML: %v", err)
+	}
+	// --- END EDIT XML ---
+
+	// Write the MODIFIED XML description to a file.
+	filename := c.VmName + ".xml"
+	err = os.WriteFile(filename, modifiedXML, 0644)
+	if err != nil {
+		log.Fatalf("failed to write XML to file '%s': %v", filename, err)
+	}
+	return filename, nil
+}
+
 func (c *Conversion) RunVirtV2vInPlace() error {
 	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-in-place").
 		AddFlag("-v").
@@ -118,7 +209,11 @@ func (c *Conversion) RunVirtV2vInPlace() error {
 	if err != nil {
 		return err
 	}
-	v2vCmdBuilder.AddPositional(c.LibvirtDomainFile)
+	libvirtDomainFile, err := c.fetchLibvirtDomain()
+	if err != nil {
+		return err
+	}
+	v2vCmdBuilder.AddPositional(libvirtDomainFile)
 
 	v2vCmd := v2vCmdBuilder.Build()
 	v2vCmd.SetStdout(os.Stdout)
