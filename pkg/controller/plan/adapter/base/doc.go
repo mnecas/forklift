@@ -47,6 +47,10 @@ const (
 
 	// UDN L2 bridge binding, needed for KubeVirt VMs with UDN
 	UdnL2bridge = "l2bridge"
+
+	// Enhancmnet doc: https://github.com/openshift/enhancements/pull/1793
+	// Example: network.kubevirt.io/addresses: '{"iface1": ["192.168.0.1/24", "fd23:3214::123/64"]}'
+	AnnStaticUdnIp = "network.kubevirt.io/addresses"
 )
 
 var VolumePopulatorNotSupportedError = liberr.New("provider does not support volume populators")
@@ -74,7 +78,7 @@ type Builder interface {
 	// Build DataVolume config map.
 	ConfigMap(vmRef ref.Ref, secret *core.Secret, object *core.ConfigMap) error
 	// Build the Kubevirt VirtualMachine spec.
-	VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) error
+	VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) error
 	// Build DataVolumes.
 	DataVolumes(vmRef ref.Ref, secret *core.Secret, configMap *core.ConfigMap, dvTemplate *cdi.DataVolume, vddkConfigMap *core.ConfigMap) (dvs []cdi.DataVolume, err error)
 	// Build tasks.
@@ -139,6 +143,8 @@ type Client interface {
 }
 
 // Validator API.
+// Validate if the VM has the same IP as from the UDN
+// UdnStaticIPs(vmRef ref.Ref, client client.Client) (bool, error)
 // Performs provider-specific validation.
 type Validator interface {
 	// Validate that a VM's disk backing storage has been mapped.
@@ -157,6 +163,8 @@ type Validator interface {
 	PodNetwork(vmRef ref.Ref) (bool, error)
 	// Validate that we have information about static IPs for every virtual NIC
 	StaticIPs(vmRef ref.Ref) (bool, error)
+	//
+	UdnStaticIPs(vmRef ref.Ref, client client.Client) (ok bool, err error)
 	// Validate the shared disk, returns msg and category as the errors depends on the provider implementations
 	SharedDisks(vmRef ref.Ref, client client.Client) (ok bool, msg string, category string, err error)
 	// Validate that the vm has the change tracking enabled

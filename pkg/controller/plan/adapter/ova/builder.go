@@ -184,28 +184,28 @@ func updateDataVolumeAnnotations(dv *cdi.DataVolume, disk *ova.Disk) {
 }
 
 // Create the destination Kubevirt VM.
-func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
+func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
 	vm := &model.VM{}
 	err = r.Source.Inventory.Find(vm, vmRef)
 	if err != nil {
 		err = liberr.Wrap(err, "vm", vmRef.String())
 		return
 	}
-
-	if object.Template == nil {
-		object.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
+	vmSpec := &object.Spec
+	if vmSpec.Template == nil {
+		vmSpec.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
 	}
-	r.mapDisks(vm, persistentVolumeClaims, object)
-	r.mapFirmware(vm, vmRef, object)
-	r.mapInput(object)
+	r.mapDisks(vm, persistentVolumeClaims, vmSpec)
+	r.mapFirmware(vm, vmRef, vmSpec)
+	r.mapInput(vmSpec)
 	if !usesInstanceType {
-		r.mapCPU(vm, object)
-		err = r.mapMemory(vm, object)
+		r.mapCPU(vm, vmSpec)
+		err = r.mapMemory(vm, vmSpec)
 		if err != nil {
 			return
 		}
 	}
-	err = r.mapNetworks(vm, object)
+	err = r.mapNetworks(vm, vmSpec)
 	if err != nil {
 		return
 	}

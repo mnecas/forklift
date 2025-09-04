@@ -3,6 +3,7 @@ package vsphere
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -604,7 +605,7 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 }
 
 // Create the destination Kubevirt VM.
-func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
+func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
 	vm := &model.VM{}
 	err = r.Source.Inventory.Find(vm, vmRef)
 	if err != nil {
@@ -652,22 +653,22 @@ func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, 
 	if err != nil {
 		return
 	}
-
-	if object.Template == nil {
-		object.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
+	vmSpec := &object.Spec
+	if vmSpec.Template == nil {
+		vmSpec.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
 	}
-	err = r.mapDisks(vm, vmRef, persistentVolumeClaims, object, sortVolumesByLibvirt)
+	err = r.mapDisks(vm, vmRef, persistentVolumeClaims, vmSpec, sortVolumesByLibvirt)
 	if err != nil {
 		return
 	}
-	r.mapFirmware(vm, object)
+	r.mapFirmware(vm, vmSpec)
 	if !usesInstanceType {
-		r.mapCPU(vm, object)
-		r.mapMemory(vm, object)
+		r.mapCPU(vm, vmSpec)
+		r.mapMemory(vm, vmSpec)
 	}
-	r.mapClock(host, object)
-	r.mapInput(object)
-	r.mapTpm(vm, object)
+	r.mapClock(host, vmSpec)
+	r.mapInput(vmSpec)
+	r.mapTpm(vm, vmSpec)
 	err = r.mapNetworks(vm, object)
 	if err != nil {
 		return
@@ -676,9 +677,26 @@ func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, 
 	return
 }
 
-func (r *Builder) mapNetworks(vm *model.VM, object *cnv.VirtualMachineSpec) (err error) {
+func IsIPv4(address string) bool {
+	return strings.Count(address, ":") < 2
+}
+
+func (r *Builder) findInterfaceIps(vm *model.VM, nic vsphere.NIC) []string {
+	var interfaceIps []string
+	for _, net := range vm.GuestNetworks {
+		if net.DeviceConfigId == nic.DeviceKey {
+			if IsIPv4(net.IP) {
+				interfaceIps = append(interfaceIps, net.IP)
+			}
+		}
+	}
+	return interfaceIps
+}
+
+func (r *Builder) mapNetworks(vm *model.VM, object *cnv.VirtualMachine) (err error) {
 	var kNetworks []cnv.Network
 	var kInterfaces []cnv.Interface
+	var statcIpInterfaces = make(map[string][]string)
 
 	numNetworks := 0
 	hasUDN := r.Plan.DestinationHasUdnNetwork(r.Destination)
@@ -721,6 +739,9 @@ func (r *Builder) mapNetworks(vm *model.VM, object *cnv.VirtualMachineSpec) (err
 				kInterface.Binding = &cnv.PluginBinding{
 					Name: planbase.UdnL2bridge,
 				}
+				if r.Plan.Spec.PreserveStaticIPs {
+					statcIpInterfaces[networkName] = r.findInterfaceIps(vm, nic)
+				}
 			} else {
 				kInterface.Masquerade = &cnv.InterfaceMasquerade{}
 			}
@@ -735,8 +756,20 @@ func (r *Builder) mapNetworks(vm *model.VM, object *cnv.VirtualMachineSpec) (err
 		kInterfaces = append(kInterfaces, kInterface)
 	}
 
-	object.Template.Spec.Networks = kNetworks
-	object.Template.Spec.Domain.Devices.Interfaces = kInterfaces
+	object.Spec.Template.Spec.Networks = kNetworks
+	object.Spec.Template.Spec.Domain.Devices.Interfaces = kInterfaces
+
+	if hasUDN && r.Plan.Spec.PreserveStaticIPs {
+		var statcIpInterfacesAnnotation []byte
+		statcIpInterfacesAnnotation, err = json.Marshal(statcIpInterfaces)
+		if err != nil {
+			return err
+		}
+		if object.Spec.Template.ObjectMeta.Annotations == nil {
+			object.Spec.Template.ObjectMeta.Annotations = make(map[string]string)
+		}
+		object.Spec.Template.ObjectMeta.Annotations[planbase.AnnStaticUdnIp] = string(statcIpInterfacesAnnotation)
+	}
 	return
 }
 

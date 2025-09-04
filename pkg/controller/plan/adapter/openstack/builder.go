@@ -248,14 +248,14 @@ var DefaultProperties = map[string]string{
 }
 
 // Create the destination Kubevirt VM.
-func (r *Builder) VirtualMachine(vmRef ref.Ref, vmSpec *cnv.VirtualMachineSpec, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
+func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
 	vm := &model.Workload{}
 	err = r.Source.Inventory.Find(vm, vmRef)
 	if err != nil {
 		err = liberr.Wrap(err, "vm", vmRef.String())
 		return
 	}
-
+	vmSpec := &object.Spec
 	if vmSpec.Template == nil {
 		vmSpec.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
 	}

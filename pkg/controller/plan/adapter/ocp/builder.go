@@ -249,7 +249,7 @@ func (r *Builder) TemplateLabels(vmRef ref.Ref) (labels map[string]string, err e
 }
 
 // VirtualMachine implements base.Builder
-func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, persistentVolumeClaims []*v1.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) error {
+func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*v1.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) error {
 	vmExport := &export.VirtualMachineExport{}
 	err := r.sourceClient.Get(context.Background(), client.ObjectKey{Namespace: vmRef.Namespace, Name: vmRef.Name}, vmExport)
 	if err != nil {
@@ -262,7 +262,7 @@ func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, 
 	}
 
 	targetVmSpec := sourceVm.Spec.DeepCopy()
-	object.Template = targetVmSpec.Template
+	object.Spec.Template = targetVmSpec.Template
 	r.mapDisks(sourceVm, targetVmSpec, persistentVolumeClaims, vmRef)
 	r.mapNetworks(sourceVm, targetVmSpec)
 

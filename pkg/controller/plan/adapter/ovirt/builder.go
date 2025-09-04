@@ -204,27 +204,27 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, configMap *cor
 }
 
 // Create the destination Kubevirt VM.
-func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachineSpec, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
+func (r *Builder) VirtualMachine(vmRef ref.Ref, object *cnv.VirtualMachine, persistentVolumeClaims []*core.PersistentVolumeClaim, usesInstanceType bool, sortVolumesByLibvirt bool) (err error) {
 	vm := &model.Workload{}
 	err = r.Source.Inventory.Find(vm, vmRef)
 	if err != nil {
 		err = liberr.Wrap(err, "vm", vmRef.String())
 		return
 	}
-
-	if object.Template == nil {
-		object.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
+	vmSpec := &object.Spec
+	if vmSpec.Template == nil {
+		vmSpec.Template = &cnv.VirtualMachineInstanceTemplateSpec{}
 	}
-	r.mapDisks(vm, persistentVolumeClaims, object)
-	r.mapFirmware(vm, &vm.Cluster, object)
+	r.mapDisks(vm, persistentVolumeClaims, vmSpec)
+	r.mapFirmware(vm, &vm.Cluster, vmSpec)
 	if !usesInstanceType {
-		r.mapCPU(vm, object)
-		r.mapMemory(vm, object)
+		r.mapCPU(vm, vmSpec)
+		r.mapMemory(vm, vmSpec)
 	}
-	r.mapClock(vm, object)
-	r.mapInput(object)
-	r.mapTpm(vm, object)
-	err = r.mapNetworks(vm, object)
+	r.mapClock(vm, vmSpec)
+	r.mapInput(vmSpec)
+	r.mapTpm(vm, vmSpec)
+	err = r.mapNetworks(vm, vmSpec)
 	if err != nil {
 		return
 	}
