@@ -384,6 +384,11 @@ spec:
                         The VM Namespace
                         Only relevant for an openshift source.
                       type: string
+                    nbdeClevis:
+                      description: |-
+                        Disk decryption will be done with the clevis client
+                        If the nbdeClevis and luks are used together, the nbdeClevis will be used
+                      type: boolean
                     networkNameTemplate:
                       description: |-
                         NetworkNameTemplate is a template for generating network interface names in the target virtual machine.

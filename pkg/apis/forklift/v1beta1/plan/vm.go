@@ -43,6 +43,10 @@ type VM struct {
 	// Disk decryption LUKS keys
 	// +optional
 	LUKS core.ObjectReference `json:"luks" ref:"Secret"`
+	// Disk decryption will be done with the clevis client
+	// If the nbdeClevis and luks are used together, the nbdeClevis will be used
+	// +optional
+	NbdeClevis bool `json:"nbdeClevis,omitempty"`
 	// Choose the primary disk the VM boots from
 	// +optional
 	RootDisk string `json:"rootDisk,omitempty"`
