@@ -480,6 +480,46 @@ func (r *Builder) buildDatastoreMap() (map[string]*api.StoragePair, error) {
 
 	return dsMap, nil
 }
+func (r *Builder) tmpDv(disks []vsphere.Disk, dsMap map[string]*api.StoragePair, dvTemplate *cdi.DataVolume) *cdi.DataVolume {
+	var size int64
+	var mapped *api.StoragePair
+	for _, disk := range disks {
+		var found bool
+		mapped, found = dsMap[disk.Datastore.ID]
+		if !found {
+			continue
+		}
+		size += disk.Capacity
+	}
+	if mapped == nil {
+		return nil
+	}
+	alignedCapacity := utils.RoundUp(size, utils.DefaultAlignBlockSize)
+	dvTemplate.ObjectMeta.GenerateName = "tmp-var-v2v-"
+
+	dvSpec := cdi.DataVolumeSpec{
+		Source: &cdi.DataVolumeSource{
+			Blank: &cdi.DataVolumeBlankImage{},
+		},
+		Storage: &cdi.StorageSpec{
+			Resources: core.VolumeResourceRequirements{
+				Requests: core.ResourceList{
+					core.ResourceStorage: *resource.NewQuantity(alignedCapacity, resource.BinarySI),
+				},
+			},
+			StorageClassName: &mapped.Destination.StorageClass,
+		},
+	}
+	if mapped.Destination.AccessMode != "" {
+		dvSpec.Storage.AccessModes = []core.PersistentVolumeAccessMode{mapped.Destination.AccessMode}
+	}
+	if mapped.Destination.VolumeMode != "" {
+		dvSpec.Storage.VolumeMode = &mapped.Destination.VolumeMode
+	}
+	dv := dvTemplate.DeepCopy()
+	dv.Spec = dvSpec
+	return dv
+}
 
 // Create DataVolume specs for the VM.
 func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.ConfigMap, dvTemplate *cdi.DataVolume, vddkConfigMap *core.ConfigMap) (dvs []cdi.DataVolume, err error) {
@@ -641,6 +681,8 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 		}
 		dvs = append(dvs, *dv)
 	}
+	tmpDv := r.tmpDv(disks, dsMap, dvTemplate)
+	dvs = append(dvs, *tmpDv)
 
 	return
 }

@@ -2314,6 +2314,32 @@ func (r *KubeVirt) podVolumeMounts(vmVolumes []cnv.Volume, libvirtConfigMap *cor
 			})
 		}
 	}
+	for name, pvc := range pvcsByName {
+		if !strings.Contains(name, "tmp-var-v2v") {
+			continue
+		}
+		volumes = append(volumes, core.Volume{
+			Name: pvc.Name,
+			VolumeSource: core.VolumeSource{
+				PersistentVolumeClaim: &core.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvc.Name,
+					ReadOnly:  false,
+				},
+			},
+		})
+		if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == core.PersistentVolumeBlock {
+			devices = append(devices, core.VolumeDevice{
+				Name:       pvc.Name,
+				DevicePath: "/var/tmp/",
+			})
+		} else {
+			mounts = append(mounts, core.VolumeMount{
+				Name:      pvc.Name,
+				MountPath: "/var/tmp/",
+			})
+		}
+		break
+	}
 
 	if podType == VirtV2vConversionPod {
 		// add volume and mount for the libvirt domain xml config map.

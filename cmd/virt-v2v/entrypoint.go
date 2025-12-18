@@ -7,8 +7,6 @@ import (
 
 	"github.com/kubev2v/forklift/pkg/virt-v2v/config"
 	"github.com/kubev2v/forklift/pkg/virt-v2v/conversion"
-	"github.com/kubev2v/forklift/pkg/virt-v2v/server"
-	utils "github.com/kubev2v/forklift/pkg/virt-v2v/utils"
 )
 
 func main() {
@@ -56,31 +54,6 @@ func main() {
 		if err != nil {
 			fmt.Println("Failed to inspect the disk", err)
 			os.Exit(1)
-		}
-		inspection, err := utils.GetInspectionV2vFromFile(convert.InspectionOutputFile)
-		if err != nil {
-			fmt.Println("Failed to get inspection file", err)
-			os.Exit(1)
-		}
-
-		// virt-customize
-		err = convert.RunCustomize(inspection.OS)
-		if err != nil {
-			fmt.Println("Failed to customize the VM", err)
-		}
-		// In the remote migrations we can not connect to the conversion pod from the controller.
-		// This connection is needed for to get the additional configuration which is gathered either form virt-v2v or
-		// virt-v2v-inspector. We expose those parameters via server in this pod and once the controller gets the config
-		// the controller sends the request to terminate the pod.
-		if convert.IsLocalMigration {
-			s := server.Server{
-				AppConfig: env,
-			}
-			err = s.Start()
-			if err != nil {
-				fmt.Println("failed to run the server", err)
-				os.Exit(1)
-			}
 		}
 	}
 }
