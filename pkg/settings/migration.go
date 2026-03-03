@@ -35,6 +35,7 @@ const (
 	VirtV2vExtraConfConfigMap        = "VIRT_V2V_EXTRA_CONF_CONFIG_MAP"
 	VirtV2vMemSize                   = "VIRT_V2V_MEMSIZE"
 	VirtV2vSmp                       = "VIRT_V2V_SMP"
+	VirtV2vParallel                  = "VIRT_V2V_PARALLEL"
 	VirtV2vContainerLimitsCpu        = "VIRT_V2V_CONTAINER_LIMITS_CPU"
 	VirtV2vContainerLimitsMemory     = "VIRT_V2V_CONTAINER_LIMITS_MEMORY"
 	VirtV2vContainerRequestsCpu      = "VIRT_V2V_CONTAINER_REQUESTS_CPU"
@@ -115,7 +116,9 @@ type Migration struct {
 	// Memory (in MB) allocated for the virt-v2v conversion appliance
 	VirtV2vMemSize int
 	// Number of virtual CPUs used for the virt-v2v conversion appliance
-	VirtV2vSmp                       int
+	VirtV2vSmp int
+	// Maximum number of parallel nbdcopy instances for multi-disk guests
+	VirtV2vParallel int
 	VirtV2vContainerLimitsCpu        string
 	VirtV2vContainerLimitsMemory     string
 	VirtV2vContainerRequestsCpu      string
@@ -242,6 +245,9 @@ func (r *Migration) Load() (err error) {
 		return liberr.Wrap(err)
 	}
 	if r.VirtV2vSmp, err = getNonNegativeEnvLimit(VirtV2vSmp, 0); err != nil {
+		return liberr.Wrap(err)
+	}
+	if r.VirtV2vParallel, err = getNonNegativeEnvLimit(VirtV2vParallel, 0); err != nil {
 		return liberr.Wrap(err)
 	}
 	// Containers configurations

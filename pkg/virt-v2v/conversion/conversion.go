@@ -100,6 +100,9 @@ func (c *Conversion) addCommonArgs(cmd utils.CommandBuilder) error {
 
 // addConversionExtraArgs adds extra args that apply ONLY to virt-v2v and virt-v2v-in-place
 func (c *Conversion) addConversionExtraArgs(cmd utils.CommandBuilder) {
+	if c.Parallel > 0 {
+		cmd.AddArg("--parallel", fmt.Sprintf("%d", c.Parallel))
+	}
 	if c.ExtraArgs != nil {
 		cmd.AddExtraArgs(c.ExtraArgs...)
 	}

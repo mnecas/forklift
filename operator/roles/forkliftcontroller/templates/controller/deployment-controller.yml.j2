@@ -191,6 +191,10 @@ spec:
         - name: VIRT_V2V_SMP
           value: "{{ virt_v2v_smp }}"
 {% endif %}
+{% if virt_v2v_parallel is defined and virt_v2v_parallel != "" %}
+        - name: VIRT_V2V_PARALLEL
+          value: "{{ virt_v2v_parallel }}"
+{% endif %}
         - name: VIRT_V2V_CONTAINER_LIMITS_CPU
           value: "{{ virt_v2v_container_limits_cpu }}"
         - name: VIRT_V2V_CONTAINER_LIMITS_MEMORY

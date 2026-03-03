@@ -490,6 +490,11 @@ spec:
                   appliance (default: virt-v2v chooses)'
                 example: 4096
                 type: integer
+              virt_v2v_parallel:
+                description: 'Maximum number of parallel nbdcopy instances for multi-disk
+                  guests (default: 1)'
+                example: 4
+                type: integer
               virt_v2v_smp:
                 description: 'Number of virtual CPUs for the virt-v2v conversion appliance
                   (default: virt-v2v chooses)'
@@ -7986,6 +7991,11 @@ spec:
       - description: Number of virtual CPUs for the virt-v2v conversion appliance
         displayName: Virt-v2v SMP
         path: virt_v2v_smp
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:hidden
+      - description: Maximum number of parallel nbdcopy instances for multi-disk guests
+        displayName: Virt-v2v Parallel
+        path: virt_v2v_parallel
         x-descriptors:
         - urn:alm:descriptor:com.tectonic.ui:hidden
       - description: Don't request KVM for virt-v2v

@@ -142,6 +142,7 @@ virt_v2v_inspector_extra_args: "{{ lookup( 'env', 'VIRT_V2V_INSPECTOR_EXTRA_ARGS
 virt_v2v_extra_conf_config_map: "{{ lookup( 'env', 'VIRT_V2V_EXTRA_CONF_CONFIG_MAP') }}"
 virt_v2v_memsize: "4096"
 virt_v2v_smp: "4"
+virt_v2v_parallel: ""
 virt_v2v_container_limits_cpu: "4500m"
 virt_v2v_container_limits_memory: "8Gi"
 virt_v2v_container_requests_cpu: "2000m"

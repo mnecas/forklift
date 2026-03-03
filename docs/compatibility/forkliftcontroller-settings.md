@@ -197,6 +197,7 @@ Provider CR (type: ova or hyperv)
 | `virt_v2v_extra_conf_config_map` | `VIRT_V2V_EXTRA_CONF_CONFIG_MAP` | ConfigMap with extra virt-v2v configuration |
 | `virt_v2v_memsize` | `VIRT_V2V_MEMSIZE` | Memory (in MB) for the virt-v2v conversion appliance (default: virt-v2v chooses) |
 | `virt_v2v_smp` | `VIRT_V2V_SMP` | Number of virtual CPUs for the virt-v2v conversion appliance (default: virt-v2v chooses) |
+| `virt_v2v_parallel` | `VIRT_V2V_PARALLEL` | Maximum number of parallel nbdcopy instances for multi-disk guests (default: 1) |
 
 ---
 

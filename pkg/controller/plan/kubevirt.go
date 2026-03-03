@@ -2243,6 +2243,13 @@ func (r *KubeVirt) getVirtV2vPod(vm *plan.VMStatus, vmVolumes []cnv.Volume, vddk
 				Value: strconv.Itoa(settings.Settings.Migration.VirtV2vSmp),
 			})
 	}
+	if settings.Settings.Migration.VirtV2vParallel > 0 {
+		environment = append(environment,
+			core.EnvVar{
+				Name:  "V2V_parallel",
+				Value: strconv.Itoa(settings.Settings.Migration.VirtV2vParallel),
+			})
+	}
 
 	environment = append(environment,
 		core.EnvVar{

@@ -388,6 +388,10 @@ spec:
                 type: integer
                 description: "Number of virtual CPUs for the virt-v2v conversion appliance (default: virt-v2v chooses)"
                 example: 8
+              virt_v2v_parallel:
+                type: integer
+                description: "Maximum number of parallel nbdcopy instances for multi-disk guests (default: 1)"
+                example: 4
 
               # Hooks Settings
               hooks_container_limits_cpu:

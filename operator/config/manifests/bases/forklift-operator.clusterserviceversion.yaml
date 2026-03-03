@@ -447,6 +447,11 @@ spec:
         path: virt_v2v_smp
         x-descriptors:
         - urn:alm:descriptor:com.tectonic.ui:hidden
+      - description: Maximum number of parallel nbdcopy instances for multi-disk guests
+        displayName: Virt-v2v Parallel
+        path: virt_v2v_parallel
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:hidden
       - description: Don't request KVM for virt-v2v
         displayName: Virt-v2v Don't Request KVM
         path: virt_v2v_dont_request_kvm

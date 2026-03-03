@@ -11,6 +11,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/settings"
 )
 
 // Phases.
@@ -209,11 +210,17 @@ func (r *Scheduler) cost(vm *model.VM, vmStatus *plan.VMStatus) int {
 	if useV2vForTransfer {
 		switch vmStatus.Phase {
 		case CreateVM, PostHook, Completed:
-			// In these phases we already have the disk transferred and are left only to create the VM
-			// By setting the cost to 0 other VMs can start migrating
 			return 0
 		default:
-			return 1
+			parallel := settings.Settings.Migration.VirtV2vParallel
+			if parallel <= 1 {
+				return 1
+			}
+			numDisks := len(vm.Disks)
+			if parallel > numDisks {
+				return numDisks
+			}
+			return parallel
 		}
 	} else {
 		switch vmStatus.Phase {

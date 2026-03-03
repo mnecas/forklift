@@ -34,6 +34,7 @@ const (
 	EnvRemoteInspectionDisk       = "V2V_remoteInspectDisk_"
 	EnvMemSizeName                = "V2V_memSize"
 	EnvSmpName                    = "V2V_smp"
+	EnvParallelName               = "V2V_parallel"
 )
 
 const (
@@ -105,6 +106,8 @@ type AppConfig struct {
 	MemSize int
 	// V2V_smp
 	Smp int
+	// V2V_parallel
+	Parallel int
 
 	// V2V_multipleIPsPerNic
 	MultipleIpsPerNicName string
@@ -148,6 +151,7 @@ func (s *AppConfig) Load() (err error) {
 	flag.BoolVar(&s.IsRemoteInspection, "remote-inspection", s.getEnvBool(EnvRemoteInspection, false), "Run virt-v2v-inspection on remote disks")
 	flag.IntVar(&s.MemSize, "memsize", s.getEnvInt(EnvMemSizeName, 0), "Amount of memory (in MB) allocated for the conversion appliance")
 	flag.IntVar(&s.Smp, "smp", s.getEnvInt(EnvSmpName, 0), "Number of virtual CPUs used for the conversion appliance")
+	flag.IntVar(&s.Parallel, "parallel", s.getEnvInt(EnvParallelName, 0), "Maximum number of parallel nbdcopy instances for multi-disk guests")
 	s.RemoteInspectionDisks = s.getRemoteInspectionDisks()
 	flag.Parse()
 
