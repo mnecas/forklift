@@ -11,6 +11,7 @@ NETWORK_INTERFACES_DIR="${NETWORK_INTERFACES_DIR:-/etc/network/interfaces}"
 IFQUERY_CMD="${IFQUERY_CMD:-ifquery}"
 SYSTEMD_NETWORK_DIR="${SYSTEMD_NETWORK_DIR:-/run/systemd/network}"
 SYSLOG="${SYSLOG:-/var/log/syslog}"
+WICKED_DIR="${WICKED_DIR:-/var/lib/wicked}"
 UDEV_RULES_FILE="${UDEV_RULES_FILE:-/etc/udev/rules.d/70-persistent-net.rules}"
 NETPLAN_DIR="${NETPLAN_DIR:-/}"
 
@@ -79,7 +80,9 @@ get_device_from_ifcfg() {
     echo ""
 }
 
-# Ubuntu does not store the
+# Ubuntu stores the DHCP leases inside the /run/systemd/netif/ this causes problems for the conversion.
+# The problem is that the VM is powered off and the /run directory is not available.
+# The only available place that holds this informaiton is the systemd logs which inside ubuntu are stored in /var/log/syslog.
 udev_from_syslog() {
     # Check if the syslog exist
     if [ ! -f "$SYSLOG" ]; then
@@ -112,6 +115,45 @@ udev_from_syslog() {
         echo "SUBSYSTEM==\"net\",ACTION==\"add\",ATTR{address}==\"$(remove_quotes "$S_HW")\",NAME=\"$(remove_quotes "$DEVICE")\""
     done
 }
+
+# SUSE uses "wicked" dhcp leases
+udev_from_wicked() {
+    # Check if the SUSE wicked dir exist
+    if [ ! -d "$WICKED_DIR" ]; then
+        log "Warning: Directory $WICKED_DIR does not exist."
+        return 0
+    fi
+
+    # Read the mapping file line by line
+    cat "$V2V_MAP_FILE" | while read -r line;
+    do
+        # Extract S_HW and S_IP
+        extract_mac_ip "$line"
+
+        # If S_HW and S_IP were not extracted, skip the line
+        if [ -z "$S_HW" ] || [ -z "$S_IP" ]; then
+            log "Warning: invalid mac to ip line: $line."
+            continue
+        fi
+
+        # Find the matching wicked connection file
+        WICKED_FILE=$(grep -El "<address>$S_IP</address>" "$WICKED_DIR"/*)
+        if [ -z "$WICKED_FILE" ]; then
+            log "Info: no wicked file name found for $S_IP."
+            continue
+        fi
+
+        # Extract the DEVICE (interface name) from the matching file
+        DEVICE=$(basename "$WICKED_FILE" | cut -d'-' -f2)
+        if [ -z "$DEVICE" ]; then
+            log "Info: no interface name found to $S_IP."
+            continue
+        fi
+
+        echo "SUBSYSTEM==\"net\",ACTION==\"add\",ATTR{address}==\"$(remove_quotes "$S_HW")\",NAME=\"$(remove_quotes "$DEVICE")\""
+    done
+}
+
 # Create udev rules based on the macToip mapping + ifcfg network scripts
 # Supports both RHEL (/etc/sysconfig/network-scripts/) and SUSE (/etc/sysconfig/network/)
 # Automatically detects which path exists and uses it (RHEL path takes precedence)
@@ -537,6 +579,7 @@ main() {
         udev_from_netplan
         udev_from_ifquery
         udev_from_syslog
+        udev_from_wicked
     } | check_dupe_hws > "$UDEV_RULES_FILE" 2>/dev/null
     echo "New udev rule:"
     cat $UDEV_RULES_FILE
