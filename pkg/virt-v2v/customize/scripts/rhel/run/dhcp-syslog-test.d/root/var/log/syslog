@@ -1,0 +1,13 @@
+Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Link UP
+Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Gained carrier
+Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
+Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Gained IPv6LL
+Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: DHCPv6 lease lost
+Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Link UP
+Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Gained carrier
+Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Gained IPv6LL
+Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
+Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Link UP
+Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Gained carrier
+Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
+Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Gained IPv6LL

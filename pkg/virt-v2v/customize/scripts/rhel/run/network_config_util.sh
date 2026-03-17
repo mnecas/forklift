@@ -10,6 +10,7 @@ DHCLIENT_LEASES_DIR="${DHCLIENT_LEASES_DIR:-/var/lib/dhclient}"
 NETWORK_INTERFACES_DIR="${NETWORK_INTERFACES_DIR:-/etc/network/interfaces}"
 IFQUERY_CMD="${IFQUERY_CMD:-ifquery}"
 SYSTEMD_NETWORK_DIR="${SYSTEMD_NETWORK_DIR:-/run/systemd/network}"
+SYSLOG="${SYSLOG:-/var/log/syslog}"
 UDEV_RULES_FILE="${UDEV_RULES_FILE:-/etc/udev/rules.d/70-persistent-net.rules}"
 NETPLAN_DIR="${NETPLAN_DIR:-/}"
 
@@ -78,6 +79,39 @@ get_device_from_ifcfg() {
     echo ""
 }
 
+# Ubuntu does not store the
+udev_from_syslog() {
+    # Check if the syslog exist
+    if [ ! -f "$SYSLOG" ]; then
+        log "Warning: File $SYSLOG does not exist."
+        return 0
+    fi
+
+    # Read the mapping file line by line
+    cat "$V2V_MAP_FILE" | while read -r line;
+    do
+        # Extract S_HW and S_IP
+        extract_mac_ip "$line"
+
+        # If S_HW and S_IP were not extracted, skip the line
+        if [ -z "$S_HW" ] || [ -z "$S_IP" ]; then
+            log "Warning: invalid mac to ip line: $line."
+            continue
+        fi
+
+        # Extract device name from ifcfg file
+        # RHEL/CentOS: typically has DEVICE= or HWADDR= inside the file
+        # SUSE: device name is encoded in the filename itself (ifcfg-eth0 -> eth0)
+        DEVICE=$(grep -Eo "]:.*: DHCPv4 address.*$S_IP" $SYSLOG | awk -F':' '{print $2}' | cut -d" " -f2 | tail -1  2>/dev/null)
+
+        if [ -z "$DEVICE" ] || [ "$DEVICE" = "lo" ]; then
+            log "Info: no valid interface name found in $IFCFG."
+            continue
+        fi
+
+        echo "SUBSYSTEM==\"net\",ACTION==\"add\",ATTR{address}==\"$(remove_quotes "$S_HW")\",NAME=\"$(remove_quotes "$DEVICE")\""
+    done
+}
 # Create udev rules based on the macToip mapping + ifcfg network scripts
 # Supports both RHEL (/etc/sysconfig/network-scripts/) and SUSE (/etc/sysconfig/network/)
 # Automatically detects which path exists and uses it (RHEL path takes precedence)
@@ -502,6 +536,7 @@ main() {
         udev_from_dhclient_lease
         udev_from_netplan
         udev_from_ifquery
+        udev_from_syslog
     } | check_dupe_hws > "$UDEV_RULES_FILE" 2>/dev/null
     echo "New udev rule:"
     cat $UDEV_RULES_FILE
