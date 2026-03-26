@@ -1,13 +1,45 @@
-Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Link UP
-Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Gained carrier
-Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
-Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: Gained IPv6LL
-Mar 13 09:26:50 mnecas systemd-networkd[637]: enp1s0: DHCPv6 lease lost
-Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Link UP
-Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Gained carrier
-Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: Gained IPv6LL
-Mar 13 09:26:50 mnecas systemd-networkd[709]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
-Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Link UP
-Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Gained carrier
-Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: DHCPv4 address 192.168.1.10/24 via 192.168.122.1
-Mar 13 09:31:42 mnecas systemd-networkd[637]: enp1s0: Gained IPv6LL
+Mar 13 10:19:51 mnecas kernel: [    1.325159] virtio_net virtio1 enp1s0: renamed from eth0
+Mar 13 10:19:51 mnecas systemd-networkd[805]: enp1s0: IPv6 successfully enabled
+Mar 13 10:19:51 mnecas systemd-networkd[805]: enp1s0: Link UP
+Mar 13 10:19:51 mnecas systemd-networkd[805]: enp1s0: Gained carrier
+Mar 13 10:19:51 mnecas systemd-networkd[805]: enp1s0: DHCPv4 address 192.168.122.162/24 via 192.168.122.1
+Mar 13 10:19:51 mnecas systemd-networkd[805]: enp1s0: Gained IPv6LL
+Mar 13 10:19:51 mnecas systemd-networkd-wait-online[807]: managing: enp1s0
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: | enp1s0 | True |      192.168.122.162       | 255.255.255.0 | global | 52:54:00:eb:82:98 |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: | enp1s0 | True | fe80::5054:ff:feeb:8298/64 |       .       |  link  | 52:54:00:eb:82:98 |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   0   |    0.0.0.0    | 192.168.122.1 |     0.0.0.0     |   enp1s0  |   UG  |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   1   | 192.168.122.0 |    0.0.0.0    |  255.255.255.0  |   enp1s0  |   U   |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   2   | 192.168.122.1 |    0.0.0.0    | 255.255.255.255 |   enp1s0  |   UH  |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   1   |  fe80::/64  |    ::   |   enp1s0  |   U   |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   3   |    local    |    ::   |   enp1s0  |   U   |
+Mar 13 10:19:51 mnecas cloud-init[818]: ci-info: |   4   |  multicast  |    ::   |   enp1s0  |   U   |
+Mar 17 09:19:35 mnecas kernel: [    1.419378] virtio_net virtio1 enp1s0: renamed from eth0
+Mar 17 09:19:35 mnecas systemd-networkd[656]: enp1s0: IPv6 successfully enabled
+Mar 17 09:19:35 mnecas systemd-networkd[656]: enp1s0: Link UP
+Mar 17 09:19:35 mnecas systemd-networkd[656]: enp1s0: Gained carrier
+Mar 17 09:19:35 mnecas systemd-networkd[656]: enp1s0: Gained IPv6LL
+Mar 17 09:19:35 mnecas systemd-networkd[656]: enp1s0: DHCPv4 address 192.168.122.162/24 via 192.168.122.1
+Mar 17 09:19:35 mnecas systemd-networkd-wait-online[657]: managing: enp1s0
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: | enp1s0 | True |      192.168.122.162       | 255.255.255.0 | global | 52:54:00:eb:82:98 |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: | enp1s0 | True | fe80::5054:ff:feeb:8298/64 |       .       |  link  | 52:54:00:eb:82:98 |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   0   |    0.0.0.0    | 192.168.122.1 |     0.0.0.0     |   enp1s0  |   UG  |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   1   | 192.168.122.0 |    0.0.0.0    |  255.255.255.0  |   enp1s0  |   U   |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   2   | 192.168.122.1 |    0.0.0.0    | 255.255.255.255 |   enp1s0  |   UH  |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   1   |  fe80::/64  |    ::   |   enp1s0  |   U   |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   3   |    local    |    ::   |   enp1s0  |   U   |
+Mar 17 09:19:35 mnecas cloud-init[664]: ci-info: |   4   |  multicast  |    ::   |   enp1s0  |   U   |
+Mar 17 13:42:27 mnecas systemd-networkd[658]: enp1s0: IPv6 successfully enabled
+Mar 17 13:42:27 mnecas systemd-networkd[658]: enp1s0: Link UP
+Mar 17 13:42:27 mnecas systemd-networkd[658]: enp1s0: Gained carrier
+Mar 17 13:42:27 mnecas systemd-networkd[658]: enp1s0: Gained IPv6LL
+Mar 17 13:42:27 mnecas systemd-networkd[658]: enp1s0: DHCPv4 address 192.168.122.162/24 via 192.168.122.1
+Mar 17 13:42:27 mnecas systemd-networkd-wait-online[659]: managing: enp1s0
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: | enp1s0 |  True |      192.168.122.162       | 255.255.255.0 | global | 52:54:00:eb:82:98 |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: | enp1s0 |  True | fe80::5054:ff:feeb:8298/64 |       .       |  link  | 52:54:00:eb:82:98 |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: | enp7s0 | False |             .              |       .       |   .    | 52:54:00:fa:9e:2b |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   0   |    0.0.0.0    | 192.168.122.1 |     0.0.0.0     |   enp1s0  |   UG  |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   1   | 192.168.122.0 |    0.0.0.0    |  255.255.255.0  |   enp1s0  |   U   |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   2   | 192.168.122.1 |    0.0.0.0    | 255.255.255.255 |   enp1s0  |   UH  |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   1   |  fe80::/64  |    ::   |   enp1s0  |   U   |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   3   |    local    |    ::   |   enp1s0  |   U   |
+Mar 17 13:42:27 mnecas cloud-init[666]: ci-info: |   4   |  multicast  |    ::   |   enp1s0  |   U   |
