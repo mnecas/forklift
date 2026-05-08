@@ -37,6 +37,7 @@ const (
 	EnvSmpName                          = "V2V_smp"
 	EnvVsphereVmwareDriverRemovalName   = "V2V_vsphereVmwareDriverRemoval"
 	EnvWindowsRegistryNetworkConfigName = "V2V_windowsRegistryNetworkConfig"
+	EnvWaitForGuestRebootName           = "V2V_waitForGuestReboot"
 	EnvXfsCompatibilityName             = "V2V_xfsCompatibility"
 )
 
@@ -114,6 +115,8 @@ type AppConfig struct {
 	VsphereVmwareDriverRemoval bool
 	// V2V_windowsRegistryNetworkConfig
 	WindowsRegistryNetworkConfig bool
+	// V2V_waitForGuestReboot — upload first-boot script signaling CONVERSION_DONE on COM1
+	WaitForGuestReboot bool
 	// V2V_xfsCompatibility — use XFS-capable virt-v2v; omit --no-fstrim when true
 	// the el9 v2v is missing the --no-fstrim flag so the conversion would fail
 	XfsCompatibility bool
@@ -162,6 +165,7 @@ func (s *AppConfig) Load() (err error) {
 	flag.IntVar(&s.Smp, "smp", s.getEnvInt(EnvSmpName, 0), "Number of virtual CPUs used for the conversion appliance")
 	flag.BoolVar(&s.VsphereVmwareDriverRemoval, "vsphere-vmware-driver-removal", s.getEnvBool(EnvVsphereVmwareDriverRemovalName, false), "Run VMware driver removal scripts during Windows vSphere conversion")
 	flag.BoolVar(&s.WindowsRegistryNetworkConfig, "windows-registry-network-config", s.getEnvBool(EnvWindowsRegistryNetworkConfigName, false), "Use registry-based network configuration scripts for Windows static IP setup")
+	flag.BoolVar(&s.WaitForGuestReboot, "wait-for-guest-reboot", s.getEnvBool(EnvWaitForGuestRebootName, false), "Inject first-boot script to signal conversion completion on guest serial (COM1)")
 	flag.BoolVar(&s.XfsCompatibility, "xfs-compatibility", s.getEnvBool(EnvXfsCompatibilityName, false), "XFS compatibility mode: do not pass --no-fstrim to virt-v2v")
 	s.RemoteInspectionDisks = s.getRemoteInspectionDisks()
 	flag.Parse()
