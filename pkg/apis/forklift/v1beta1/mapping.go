@@ -58,6 +58,7 @@ type NetworkPair struct {
 // one will be supported
 type OffloadPlugin struct {
 	VSphereXcopyPluginConfig *VSphereXcopyPluginConfig `json:"vsphereXcopyConfig"`
+	OffloadPluginConfig      *OffloadPluginConfig      `json:"offloadPluginConfig"`
 }
 
 // StorageVendorProduct is an identifier of the product used for XCOPY.
@@ -88,6 +89,20 @@ func StorageVendorProducts() []StorageVendorProduct {
 		StorageVendorProductPowerStore,
 		StorageVendorProductInfinibox,
 	}
+}
+
+// OffloadPluginConfig works with the Vsphere Xcopy Volume Populator
+// to offload the copy to Vsphere and the storage array.
+type OffloadPluginConfig struct {
+	FinalFinalStorageClass string `json:"finalFinalStorageClass"`
+	// Service account.
+	ServiceAccount string `json:"serviceAccount,omitempty"`
+	// SecretRef is the name of the secret with the storage credentials for the plugin.
+	// The secret should reside in the same namespace where the source provider is.
+	SecretRef string `json:"secretRef"`
+	// StorageVendorProduct the string identifier of the storage vendor product
+	// +kubebuilder:validation:Enum=flashsystem;vantara;ontap;primera3par;pureFlashArray;powerflex;powermax;powerstore;infinibox
+	StorageVendorProduct StorageVendorProduct `json:"storageVendorProduct"`
 }
 
 // VSphereXcopyPluginConfig works with the Vsphere Xcopy Volume Populator
