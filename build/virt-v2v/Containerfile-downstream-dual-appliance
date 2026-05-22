@@ -1,0 +1,137 @@
+# POC: RHEL 10 runtime; default appliance is full EL10.
+# XFS mode uses hybrid appliance: EL9 kernel+initrd + EL10 root (LIBGUESTFS_PATH via V2V_xfsCompatibility).
+# Experimental — validate boot with guestfish before production use.
+FROM registry.redhat.io/ubi9:9.6-1760340943 AS appliance-rhel9-kernel
+
+RUN subscription-manager register --activationkey="mtv-konflux-rhel9" --org="11009103"
+RUN dnf update -y && \
+    dnf install -y --setopt=install_weak_deps=False \
+    qemu-img \
+    libguestfs-devel \
+    libguestfs-winsupport \
+    libguestfs-xfs
+
+# LIBGUESTFS_BACKEND=direct is required during appliance build (RHEL-104684).
+RUN mkdir -p /usr/local/lib/guestfs/appliance && \
+    cd /usr/local/lib/guestfs/appliance && \
+    LIBGUESTFS_BACKEND=direct libguestfs-make-fixed-appliance . && \
+    qemu-img convert -c -O qcow2 root root.qcow2 && \
+    mv -vf root.qcow2 root
+
+FROM registry.redhat.io/ubi10:10.1-1778562845 AS winlegacyiso
+RUN subscription-manager register --activationkey="mtv-konflux-rhel10" --org="11009103"
+RUN rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+RUN yum install -y --setopt=install_weak_deps=False virtio-win-1.9.12-4.el7
+
+FROM registry.redhat.io/ubi10:10.1-1778562845 AS appliance-rhel10
+RUN subscription-manager register --activationkey="mtv-konflux-rhel10" --org="11009103"
+RUN dnf update -y && \
+    dnf install -y --setopt=install_weak_deps=False \
+    qemu-img \
+    libguestfs-devel \
+    libguestfs-winsupport \
+    libguestfs-xfs
+
+RUN mkdir -p /usr/local/lib/guestfs/appliance && \
+    cd /usr/local/lib/guestfs/appliance && \
+    LIBGUESTFS_BACKEND=direct libguestfs-make-fixed-appliance . && \
+    qemu-img convert -c -O qcow2 root root.qcow2 && \
+    mv -vf root.qcow2 root
+
+FROM registry.redhat.io/ubi10/go-toolset:1.25.9-1778589469 AS builder
+USER 0
+RUN dnf install -y libvirt-devel
+WORKDIR /app
+COPY --chown=1001:0 ./ ./
+ENV GOFLAGS="-mod=vendor -tags=strictfipsruntime"
+ENV GOEXPERIMENT=strictfipsruntime
+
+RUN GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags="-w -s" -o virt-v2v-monitor github.com/kubev2v/forklift/cmd/virt-v2v-monitor
+RUN GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags="-w -s" -o image-converter github.com/kubev2v/forklift/cmd/image-converter
+RUN GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags="-w -s" -o virt-v2v-wrapper github.com/kubev2v/forklift/cmd/virt-v2v
+RUN GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags="-w -s" -o deep-inspection github.com/kubev2v/forklift/cmd/deep-inspection
+
+FROM registry.redhat.io/ubi10:10.1-1778562845 AS runtime
+RUN subscription-manager register --activationkey="mtv-konflux-rhel10" --org="11009103"
+COPY --chown=1001:0 ./libguestfs-fssupport-10.1-4.el10_1.* ./
+
+RUN dnf install -y --setopt=sslverify=false \
+    kernel-6.12.0-124.8.1.el10_1 \
+    kernel-modules-core-6.12.0-124.8.1.el10_1 \
+    kernel-core-6.12.0-124.8.1.el10_1 \
+    kernel-modules-6.12.0-124.8.1.el10_1 \
+    libguestfs-fssupport-10.1-4.el10_1.x86_64.rpm
+
+RUN rm /etc/pki/tls/fips_local.cnf && \
+    echo -e '[fips_sect]\ntls1-prf-ems-check = 0\nactivate = 1' > /etc/pki/tls/fips_local.cnf && \
+    sed -i '/^\\[ crypto_policy \\]/a Options=RHNoEnforceEMSinFIPS' /etc/pki/tls/openssl.cnf
+
+RUN mkdir /disks && \
+    source /etc/os-release && \
+    dnf update -y --exclude=kernel,kernel-core,kernel-modules,kernel-modules-core && \
+    dnf install -y --setopt=install_weak_deps=False \
+    virt-v2v \
+    virtio-win \
+    libvirt-libs \
+    libguestfs \
+    libguestfs-tools \
+    libguestfs-tools-c \
+    qemu-img \
+    qemu-kvm \
+    nbdkit \
+    nbdkit-vddk-plugin \
+    ca-certificates \
+    sqlite-libs
+
+RUN mkdir /home/qemu && chown qemu:qemu /home/qemu
+ENV HOME=/home/qemu
+
+RUN dnf install -y catatonit
+
+ENV LIBGUESTFS_BACKEND=libvirt:qemu:///session
+ENV PATH="$PATH:/usr/libexec"
+
+COPY --from=appliance-rhel10 /usr/local/lib/guestfs/appliance /usr/lib64/guestfs/appliance
+COPY --from=appliance-rhel9-kernel /usr/local/lib/guestfs/appliance/kernel /tmp/appliance-rhel9-kernel/kernel
+COPY --from=appliance-rhel9-kernel /usr/local/lib/guestfs/appliance/initrd /tmp/appliance-rhel9-kernel/initrd
+COPY --from=appliance-rhel9-kernel /lib/modules /tmp/el9-kernel-modules
+
+RUN set -eux; \
+    mkdir -p /usr/lib64/guestfs/appliance-hybrid; \
+    cp -a /usr/lib64/guestfs/appliance/root /usr/lib64/guestfs/appliance/README.fixed /usr/lib64/guestfs/appliance-hybrid/; \
+    cp -a /tmp/appliance-rhel9-kernel/kernel /tmp/appliance-rhel9-kernel/initrd /usr/lib64/guestfs/appliance-hybrid/
+
+RUN set -eux; \
+    el9_kver="$(ls -1 /tmp/el9-kernel-modules | head -1)"; \
+    test -d "/tmp/el9-kernel-modules/${el9_kver}"; \
+    LIBGUESTFS_BACKEND=direct virt-customize \
+      -a /usr/lib64/guestfs/appliance-hybrid/root \
+      --copy-in "/tmp/el9-kernel-modules/${el9_kver}:/lib/modules"
+
+COPY --from=builder /app/virt-v2v-monitor /usr/local/bin/virt-v2v-monitor
+COPY --from=builder /app/image-converter /usr/local/bin/image-converter
+COPY --from=builder /app/virt-v2v-wrapper /usr/bin/virt-v2v-wrapper
+COPY --from=builder /app/deep-inspection /usr/local/bin/deep-inspection
+
+COPY --from=winlegacyiso /usr/share/virtio-win/virtio-win.iso /usr/local/virtio-win-legacy.iso
+
+ENTRYPOINT ["/usr/libexec/catatonit/catatonit", "/usr/bin/virt-v2v-wrapper"]
+
+ARG MTV_VERSION
+ARG REGISTRY
+ARG REVISION
+ARG CPE
+
+LABEL \
+    com.redhat.component="mtv-virt-v2v-container" \
+    name="${REGISTRY}/mtv-virt-v2v-dual-appliance" \
+    license="Apache License 2.0" \
+    io.k8s.display-name="Migration Toolkit for Virtualization" \
+    io.k8s.description="Migration Toolkit for Virtualization - Virt-V2V (dual libguestfs appliance POC)" \
+    io.openshift.tags="migration,mtv,forklift" \
+    summary="Migration Toolkit for Virtualization - Virt-V2V dual appliance POC" \
+    cpe="cpe:/a:redhat:migration_toolkit_virtualization:${CPE}::el10" \
+    description="Virt-V2V with hybrid libguestfs appliance (RHEL9 kernel, RHEL10 root) for XFS compatibility" \
+    maintainer="Migration Toolkit for Virtualization Team <migtoolkit-virt@redhat.com>" \
+    version="$MTV_VERSION" \
+    revision="$REVISION"

@@ -409,6 +409,12 @@ func (b *Builder) BuildDeepInspectionPodEnvironment(vm *plan.VMStatus) []core.En
 	if b.Config.DeepInspectionSnapshotMoref != "" {
 		env = append(env, core.EnvVar{Name: "SNAPSHOT_MOREF", Value: b.Config.DeepInspectionSnapshotMoref})
 	}
+	if b.Config.XfsCompatibility {
+		env = append(env, core.EnvVar{
+			Name:  "V2V_xfsCompatibility",
+			Value: "true",
+		})
+	}
 	env = b.appendDiskEncryptionEnv(env)
 	return env
 }

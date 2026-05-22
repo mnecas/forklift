@@ -170,6 +170,7 @@ func (s *AppConfig) Load() (err error) {
 	flag.Parse()
 
 	s.SupportsNoFstrim = detectNoFstrimSupport("/etc/os-release")
+	ApplyLibguestfsAppliance(s.XfsCompatibility)
 
 	return s.validate()
 }

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	v2vconfig "github.com/kubev2v/forklift/pkg/virt-v2v/config"
 	"github.com/kubev2v/vm-migration-detective/pkg/vmdetect"
 	"github.com/sirupsen/logrus"
 )
@@ -36,6 +37,8 @@ func main() {
 	log := logrus.New()
 	log.SetLevel(logrus.DebugLevel)
 	log.SetOutput(os.Stdout)
+
+	v2vconfig.ApplyLibguestfsAppliance(v2vconfig.XfsCompatibilityFromEnv())
 
 	creds, err := loadProviderCredentials()
 	if err != nil {
