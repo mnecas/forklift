@@ -387,6 +387,7 @@ type NIC struct {
 	MAC       string `json:"mac"`
 	Index     int    `json:"order"`
 	DeviceKey int32  `json:"deviceKey"`
+	Removed   bool   `json:"removed,omitempty"`
 }
 
 // Guest network.

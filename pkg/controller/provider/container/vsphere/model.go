@@ -798,7 +798,7 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 					v.model.FaultToleranceEnabled = true
 				}
 			case fNetwork:
-				v.model.Networks = v.RefList(p.Val)
+				v.model.Networks = v.mergeNetworks(v.model.Networks, v.RefList(p.Val))
 			case fExtraConfig:
 				if options, cast := p.Val.(types.ArrayOfOptionValue); cast {
 					for _, val := range options.OptionValue {
@@ -939,7 +939,7 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 			case fDevices:
 				if devArray, cast := p.Val.(types.ArrayOfVirtualDevice); cast {
 					devList := []model.Device{}
-					nicList := []model.NIC{}
+					currentNICs := []model.NIC{}
 					nicsIndex := 0
 					for _, dev := range devArray.VirtualDevice {
 						var nic *types.VirtualEthernetCard
@@ -986,8 +986,8 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 									Kind: libref.ToKind(dev),
 								})
 
-							nicList = append(
-								nicList,
+							currentNICs = append(
+								currentNICs,
 								model.NIC{
 									MAC:       strings.ToLower(nic.MacAddress),
 									Index:     nicsIndex,
@@ -1001,7 +1001,7 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 						}
 					}
 					v.model.Devices = devList
-					v.model.NICs = nicList
+					v.model.NICs = v.mergeNICs(v.model.NICs, currentNICs)
 					v.updateControllers(&devArray)
 					v.updateDisks(&devArray)
 
@@ -1015,6 +1015,69 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 			}
 		}
 	}
+}
+
+// mergeNICs merges current NICs with previously known NICs.
+// NICs still present on the VM are updated/added. NICs that were previously
+// known but are no longer reported by VMware are kept in the list with
+// the Removed flag set, so consumers can see the full NIC history.
+// The original Index (order) is preserved for previously known NICs.
+func (v *VmAdapter) mergeNICs(previous, current []model.NIC) []model.NIC {
+	currentByKey := make(map[int32]model.NIC, len(current))
+	for _, nic := range current {
+		currentByKey[nic.DeviceKey] = nic
+	}
+
+	seen := make(map[int32]bool, len(current))
+	merged := make([]model.NIC, 0, len(previous)+len(current))
+	maxIndex := -1
+
+	for _, prev := range previous {
+		if prev.Index > maxIndex {
+			maxIndex = prev.Index
+		}
+		if cur, exists := currentByKey[prev.DeviceKey]; exists {
+			cur.Index = prev.Index
+			cur.Removed = false
+			merged = append(merged, cur)
+			seen[cur.DeviceKey] = true
+		} else {
+			prev.Removed = true
+			merged = append(merged, prev)
+		}
+	}
+
+	for _, cur := range current {
+		if !seen[cur.DeviceKey] {
+			maxIndex++
+			cur.Index = maxIndex
+			merged = append(merged, cur)
+		}
+	}
+
+	return merged
+}
+
+// mergeNetworks merges current networks with previously known networks.
+// Networks still present are kept as-is. Networks that were previously
+// known but no longer reported are preserved so they remain consistent
+// with the retained removed NICs that reference them.
+func (v *VmAdapter) mergeNetworks(previous, current []model.Ref) []model.Ref {
+	seen := make(map[string]bool, len(current))
+	for _, ref := range current {
+		seen[ref.ID] = true
+	}
+
+	merged := make([]model.Ref, 0, len(previous)+len(current))
+	merged = append(merged, current...)
+
+	for _, prev := range previous {
+		if !seen[prev.ID] {
+			merged = append(merged, prev)
+		}
+	}
+
+	return merged
 }
 
 func hasDiskPrefix(key string) bool {
