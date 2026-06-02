@@ -2,6 +2,7 @@ package vsphere
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"strconv"
@@ -1044,6 +1045,8 @@ func (v *VmAdapter) mergeNICs(previous, current []model.NIC) []model.NIC {
 		} else {
 			prev.Removed = true
 			merged = append(merged, prev)
+			log.Printf("mergeNICs [vm=%s]: NIC deviceKey=%d mac=%s network=%s marked as removed",
+				v.model.ID, prev.DeviceKey, prev.MAC, prev.Network.ID)
 		}
 	}
 
@@ -1054,6 +1057,9 @@ func (v *VmAdapter) mergeNICs(previous, current []model.NIC) []model.NIC {
 			merged = append(merged, cur)
 		}
 	}
+
+	log.Printf("mergeNICs [vm=%s]: previous=%d current=%d merged=%d",
+		v.model.ID, len(previous), len(current), len(merged))
 
 	return merged
 }
@@ -1074,8 +1080,13 @@ func (v *VmAdapter) mergeNetworks(previous, current []model.Ref) []model.Ref {
 	for _, prev := range previous {
 		if !seen[prev.ID] {
 			merged = append(merged, prev)
+			log.Printf("mergeNetworks [vm=%s]: retaining previously known network id=%s",
+				v.model.ID, prev.ID)
 		}
 	}
+
+	log.Printf("mergeNetworks [vm=%s]: previous=%d current=%d merged=%d",
+		v.model.ID, len(previous), len(current), len(merged))
 
 	return merged
 }
