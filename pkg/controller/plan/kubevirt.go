@@ -45,6 +45,7 @@ import (
 	"github.com/openshift/library-go/pkg/template/templateprocessing"
 	batch "k8s.io/api/batch/v1"
 	core "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -968,6 +969,8 @@ func (r *KubeVirt) EnsureGuestConversionPod(vm *plan.VMStatus, step *plan.Step) 
 	return r.checkProviderReady(vm.ID)
 }
 
+const waitForRebootSAName = "forklift-wait-reboot"
+
 // EnsureWaitForRebootPod creates a pod that runs the forklift-wait-for-reboot binary to monitor the target VMI serial console (idempotent).
 func (r *KubeVirt) EnsureWaitForRebootPod(vm *plan.VMStatus) (err error) {
 	img := getVirtV2vImage(r.Plan)
@@ -985,16 +988,21 @@ func (r *KubeVirt) EnsureWaitForRebootPod(vm *plan.VMStatus) (err error) {
 		return nil
 	}
 
+	ns := r.Plan.Spec.TargetNamespace
+	if err = r.ensureWaitForRebootRBAC(ns); err != nil {
+		return
+	}
+
 	activeDeadline := int64(settings.Settings.Migration.WindowsRebootTimeout + 600)
 	pod := &core.Pod{
 		ObjectMeta: meta.ObjectMeta{
 			GenerateName: "forklift-wait-reboot-",
-			Namespace:    r.Plan.Spec.TargetNamespace,
+			Namespace:    ns,
 			Labels:       r.waitForRebootLabels(vm.Ref),
 		},
 		Spec: core.PodSpec{
 			RestartPolicy:         core.RestartPolicyNever,
-			ServiceAccountName:    resolveServiceAccount(r.Plan),
+			ServiceAccountName:    waitForRebootSAName,
 			ActiveDeadlineSeconds: &activeDeadline,
 			Containers: []core.Container{
 				{
@@ -1003,7 +1011,7 @@ func (r *KubeVirt) EnsureWaitForRebootPod(vm *plan.VMStatus) (err error) {
 					Command: []string{"/usr/local/bin/forklift-wait-for-reboot"},
 					Env: []core.EnvVar{
 						{Name: "VMI_NAME", Value: r.getNewVMName(vm)},
-						{Name: "VMI_NAMESPACE", Value: r.Plan.Spec.TargetNamespace},
+						{Name: "VMI_NAMESPACE", Value: ns},
 						{Name: "SIGNAL", Value: "CONVERSION_DONE"},
 						{Name: "TIMEOUT", Value: strconv.Itoa(settings.Settings.Migration.WindowsRebootTimeout)},
 					},
@@ -1017,6 +1025,60 @@ func (r *KubeVirt) EnsureWaitForRebootPod(vm *plan.VMStatus) (err error) {
 		return
 	}
 	r.Log.Info("Created Windows wait-for-reboot pod.", "pod", path.Join(pod.Namespace, pod.Name), "vm", vm.String())
+	return nil
+}
+
+// ensureWaitForRebootRBAC creates a dedicated ServiceAccount, Role, and RoleBinding
+// in the target namespace granting access to the VMI serial console.
+func (r *KubeVirt) ensureWaitForRebootRBAC(namespace string) error {
+	sa := &core.ServiceAccount{
+		ObjectMeta: meta.ObjectMeta{
+			Name:      waitForRebootSAName,
+			Namespace: namespace,
+		},
+	}
+	if err := r.Destination.Client.Create(context.TODO(), sa); err != nil && !k8serr.IsAlreadyExists(err) {
+		return liberr.Wrap(err)
+	}
+
+	role := &rbacv1.Role{
+		ObjectMeta: meta.ObjectMeta{
+			Name:      waitForRebootSAName,
+			Namespace: namespace,
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"subresources.kubevirt.io"},
+				Resources: []string{"virtualmachineinstances/console"},
+				Verbs:     []string{"get"},
+			},
+		},
+	}
+	if err := r.Destination.Client.Create(context.TODO(), role); err != nil && !k8serr.IsAlreadyExists(err) {
+		return liberr.Wrap(err)
+	}
+
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: meta.ObjectMeta{
+			Name:      waitForRebootSAName + "-binding",
+			Namespace: namespace,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      waitForRebootSAName,
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "Role",
+			Name:     waitForRebootSAName,
+			APIGroup: "rbac.authorization.k8s.io",
+		},
+	}
+	if err := r.Destination.Client.Create(context.TODO(), binding); err != nil && !k8serr.IsAlreadyExists(err) {
+		return liberr.Wrap(err)
+	}
 	return nil
 }
 

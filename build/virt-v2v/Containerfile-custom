@@ -1,0 +1,12 @@
+# Layer on top of the downstream image
+FROM registry.redhat.io/migration-toolkit-virtualization/mtv-virt-v2v-rhel10:2.11.6-2026-05-11-20-44-20
+
+USER 0
+
+# Replace xfs_repair with a wrapper that can ignore failures; register the
+# original binary in supermin hostfiles so both get copied into the appliance.
+COPY build/virt-v2v/xfs_repair_wrapper.sh /tmp/xfs_repair_wrapper.sh
+RUN cp /usr/sbin/xfs_repair /usr/sbin/xfs_repair.original && \
+    cp /tmp/xfs_repair_wrapper.sh /usr/sbin/xfs_repair && \
+    chmod 755 /usr/sbin/xfs_repair && \
+    echo '/usr/sbin/xfs_repair.original' >> /usr/lib64/guestfs/supermin.d/hostfiles
