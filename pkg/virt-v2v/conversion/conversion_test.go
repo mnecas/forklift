@@ -3,6 +3,7 @@ package conversion
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -1339,6 +1340,28 @@ var _ = Describe("Conversion", func() {
 			mockCommandExecutor.EXPECT().Run()
 
 			err := conversion.RunVirtV2vInPlaceDisk()
+			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("RunVirtV2VOpen", func() {
+		It("runs virt-v2v-open with virt-inspector for OVA sources", func() {
+			appConfig.Source = config.OVA
+			appConfig.DiskPath = "/tmp/source.ova"
+
+			mockCommandBuilder.EXPECT().New("virt-v2v-open").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddFlag("-v").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddFlag("-x").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddArg("-i", "ova").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddArg("--root", "first").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddPositional("/tmp/source.ova").Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddArg("--run", fmt.Sprintf("virt-inspector --format=raw @@ > %s", config.InspectionOutputFile)).Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().Build().Return(mockCommandExecutor)
+			mockCommandExecutor.EXPECT().SetStdout(os.Stdout)
+			mockCommandExecutor.EXPECT().SetStderr(os.Stderr)
+			mockCommandExecutor.EXPECT().Run()
+
+			err := conversion.RunVirtV2VOpen(config.InspectionOutputFile)
 			Expect(err).ToNot(HaveOccurred())
 		})
 	})

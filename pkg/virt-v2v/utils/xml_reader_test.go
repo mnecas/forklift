@@ -65,6 +65,28 @@ var _ = Describe("XML Reader", func() {
 			Expect(result.OS.Osinfo).To(Equal("win10"))
 		})
 
+		It("parses virt-inspector XML correctly", func() {
+			xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
+<operatingsystems>
+  <operatingsystem>
+    <name>Red Hat Enterprise Linux</name>
+    <distro>rhel</distro>
+    <osinfo>rhel9.6</osinfo>
+    <arch>x86_64</arch>
+  </operatingsystem>
+</operatingsystems>`
+			xmlPath := filepath.Join(tempDir, "inspection.xml")
+			err := os.WriteFile(xmlPath, []byte(xmlContent), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			result, err := GetInspectionV2vFromFile(xmlPath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.OS.Name).To(Equal("Red Hat Enterprise Linux"))
+			Expect(result.OS.Distro).To(Equal("rhel"))
+			Expect(result.OS.Osinfo).To(Equal("rhel9.6"))
+			Expect(result.OS.Arch).To(Equal("x86_64"))
+		})
+
 		It("returns error for non-existent file", func() {
 			result, err := GetInspectionV2vFromFile("/non/existent/file.xml")
 			Expect(err).To(HaveOccurred())
@@ -99,6 +121,26 @@ var _ = Describe("XML Reader", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result.OS.Name).To(BeEmpty())
 			Expect(result.OS.Distro).To(BeEmpty())
+		})
+	})
+
+	Describe("WriteInspectionV2vToFile", func() {
+		It("writes canonical v2v XML", func() {
+			xmlPath := filepath.Join(tempDir, "canonical.xml")
+			err := WriteInspectionV2vToFile(xmlPath, &InspectionV2V{
+				OS: InspectionOS{
+					Name:   "Windows Server 2022",
+					Distro: "windows",
+					Osinfo: "win2k22",
+					Arch:   "x86_64",
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			result, err := GetInspectionV2vFromFile(xmlPath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.OS.Name).To(Equal("Windows Server 2022"))
+			Expect(result.OS.Osinfo).To(Equal("win2k22"))
 		})
 	})
 

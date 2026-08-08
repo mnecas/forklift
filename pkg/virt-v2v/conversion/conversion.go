@@ -66,26 +66,40 @@ func (c *Conversion) getDisk() ([]*Disk, error) {
 // addCommonArgs adds v2v arguments which are shared between all virt-v2v commands
 // (virt-v2v, virt-v2v-in-place, and virt-v2v-inspector)
 func (c *Conversion) addCommonArgs(cmd utils.CommandBuilder) error {
+	c.addRootArg(cmd)
+	c.addResourceArgs(cmd)
+	c.addStaticIPArgs(cmd)
+	return c.addDiskUnlockArgs(cmd)
+}
+
+func (c *Conversion) addRootArg(cmd utils.CommandBuilder) {
 	// Allow specifying which disk should be the bootable disk
 	if c.RootDisk != "" {
 		cmd.AddArg("--root", c.RootDisk)
 	} else {
 		cmd.AddArg("--root", "first")
 	}
+}
 
+func (c *Conversion) addResourceArgs(cmd utils.CommandBuilder) {
 	if c.MemSize > 0 {
 		cmd.AddArg("--memsize", fmt.Sprintf("%d", c.MemSize))
 	}
 	if c.Smp > 0 {
 		cmd.AddArg("--smp", fmt.Sprintf("%d", c.Smp))
 	}
+}
 
+func (c *Conversion) addStaticIPArgs(cmd utils.CommandBuilder) {
 	// Add the mapping to the virt-v2v, used mainly in the windows when migrating VMs with static IP
 	if c.StaticIPs != "" {
 		for _, mac := range strings.Split(c.StaticIPs, "_") {
 			cmd.AddArg("--mac", mac)
 		}
 	}
+}
+
+func (c *Conversion) addDiskUnlockArgs(cmd utils.CommandBuilder) error {
 	if c.NbdeClevis {
 		cmd.AddArgs("--key", "all:clevis")
 	} else if c.Luksdir != "" {
@@ -96,6 +110,11 @@ func (c *Conversion) addCommonArgs(cmd utils.CommandBuilder) error {
 		}
 	}
 	return nil
+}
+
+func (c *Conversion) addInspectionArgs(cmd utils.CommandBuilder) error {
+	c.addRootArg(cmd)
+	return c.addDiskUnlockArgs(cmd)
 }
 
 // addConversionExtraArgs adds extra args that apply ONLY to virt-v2v and virt-v2v-in-place
@@ -118,6 +137,19 @@ func (c *Conversion) addInspectorExtraArgs(cmd utils.CommandBuilder) {
 func (c *Conversion) addNoFstrimUnlessXfsCompat(cmd utils.CommandBuilder) {
 	if !c.XfsCompatibility && c.SupportsNoFstrim {
 		cmd.AddFlag("--no-fstrim")
+	}
+}
+
+func (c *Conversion) addVddkArgs(cmd utils.CommandBuilder, allowExtraArgOverride bool) {
+	if info, err := os.Stat(c.VddkLibDir); err == nil && info.IsDir() {
+		cmd.AddArg("-it", "vddk")
+		cmd.AddArg("-io", fmt.Sprintf("vddk-libdir=%s", c.VddkLibDir))
+		cmd.AddArg("-io", fmt.Sprintf("vddk-thumbprint=%s", c.Fingerprint))
+		// Check if the config file exists but still allow the extra args to override the vddk-config for testing
+		var extraArgs = c.ExtraArgs
+		if _, err := os.Stat(c.VddkConfFile); !errors.Is(err, os.ErrNotExist) && (!allowExtraArgOverride || len(extraArgs) == 0) {
+			cmd.AddArg("-io", fmt.Sprintf("vddk-config=%s", c.VddkConfFile))
+		}
 	}
 }
 
@@ -144,52 +176,14 @@ func (c *Conversion) RunVirtV2VInspection() error {
 }
 
 func (c *Conversion) RunVirtV2vInPlace() error {
-	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-in-place").
-		AddFlag("-v").
-		AddFlag("-x").
-		AddArg("-i", "libvirtxml")
-	err := c.addCommonArgs(v2vCmdBuilder)
-	if err != nil {
-		return err
-	}
-	c.addNoFstrimUnlessXfsCompat(v2vCmdBuilder)
-	c.addConversionExtraArgs(v2vCmdBuilder)
-	v2vCmdBuilder.AddPositional(c.LibvirtDomainFile)
-	v2vCmd := v2vCmdBuilder.Build()
-	v2vCmd.SetStdout(os.Stdout)
-	v2vCmd.SetStderr(os.Stderr)
-	return v2vCmd.Run()
+	return c.runVirtV2vInPlace(nil)
 }
 
 // RunVirtV2vInPlaceDisk runs virt-v2v-in-place using disk mode (-i disk).
 // This is used for providers like EC2 that don't have libvirt and where
 // the disks are already populated and mounted as block devices or files.
 func (c *Conversion) RunVirtV2vInPlaceDisk() error {
-	if len(c.Disks) == 0 {
-		return fmt.Errorf("no disks found for in-place conversion")
-	}
-
-	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-in-place").
-		AddFlag("-v").
-		AddFlag("-x").
-		AddArg("-i", "disk")
-
-	err := c.addCommonArgs(v2vCmdBuilder)
-	if err != nil {
-		return err
-	}
-	c.addNoFstrimUnlessXfsCompat(v2vCmdBuilder)
-	c.addConversionExtraArgs(v2vCmdBuilder)
-
-	// Add all disks as positional arguments
-	for _, disk := range c.Disks {
-		v2vCmdBuilder.AddPositional(disk.Link)
-	}
-
-	v2vCmd := v2vCmdBuilder.Build()
-	v2vCmd.SetStdout(os.Stdout)
-	v2vCmd.SetStderr(os.Stderr)
-	return v2vCmd.Run()
+	return c.runVirtV2vInPlaceDisk(nil)
 }
 
 func (c *Conversion) addVirtV2vArgs(cmd utils.CommandBuilder) (err error) {
@@ -231,16 +225,7 @@ func (c *Conversion) addVirtV2vVsphereArgs(cmd utils.CommandBuilder) (err error)
 		return err
 	}
 	c.addConversionExtraArgs(cmd)
-	if info, err := os.Stat(c.VddkLibDir); err == nil && info.IsDir() {
-		cmd.AddArg("-it", "vddk")
-		cmd.AddArg("-io", fmt.Sprintf("vddk-libdir=%s", c.VddkLibDir))
-		cmd.AddArg("-io", fmt.Sprintf("vddk-thumbprint=%s", c.Fingerprint))
-		// Check if the config file exists but still allow the extra args to override the vddk-config for testing
-		var extraArgs = c.ExtraArgs
-		if _, err := os.Stat(c.VddkConfFile); !errors.Is(err, os.ErrNotExist) && len(extraArgs) == 0 {
-			cmd.AddArg("-io", fmt.Sprintf("vddk-config=%s", c.VddkConfFile))
-		}
-	}
+	c.addVddkArgs(cmd, true)
 	cmd.AddPositional("--")
 	cmd.AddPositional(c.VmName)
 	return nil
@@ -259,16 +244,24 @@ func (c *Conversion) addVirtV2vVsphereArgsForInspection(cmd utils.CommandBuilder
 		return err
 	}
 	// Note: NO addConversionExtraArgs here - this is for inspection
-	if info, err := os.Stat(c.VddkLibDir); err == nil && info.IsDir() {
-		cmd.AddArg("-it", "vddk")
-		cmd.AddArg("-io", fmt.Sprintf("vddk-libdir=%s", c.VddkLibDir))
-		cmd.AddArg("-io", fmt.Sprintf("vddk-thumbprint=%s", c.Fingerprint))
-		// Always use vddk-config for inspection if it exists (no extra args override)
-		if _, err := os.Stat(c.VddkConfFile); !errors.Is(err, os.ErrNotExist) {
-			cmd.AddArg("-io", fmt.Sprintf("vddk-config=%s", c.VddkConfFile))
-		}
-	}
+	c.addVddkArgs(cmd, false)
 	c.addNoFstrimUnlessXfsCompat(cmd)
+	cmd.AddPositional("--")
+	cmd.AddPositional(c.VmName)
+	return nil
+}
+
+func (c *Conversion) addVirtV2vOpenVsphereArgs(cmd utils.CommandBuilder) error {
+	cmd.AddArg("-i", "libvirt").
+		AddArg("-ic", c.LibvirtUrl).
+		AddArg("-ip", c.SecretKey).
+		AddArg("--hostname", c.HostName)
+
+	err := c.addInspectionArgs(cmd)
+	if err != nil {
+		return err
+	}
+	c.addVddkArgs(cmd, false)
 	cmd.AddPositional("--")
 	cmd.AddPositional(c.VmName)
 	return nil
@@ -299,10 +292,29 @@ func (c *Conversion) virtV2vHyperVArgs(cmd utils.CommandBuilder) error {
 	return nil
 }
 
+func (c *Conversion) addCustomizeArgs(cmd utils.CommandBuilder, osinfo *utils.InspectionOS) error {
+	if osinfo == nil {
+		return nil
+	}
+	custom := customize.NewCustomize(c.AppConfig, nil, *osinfo)
+	return custom.AddVirtV2vCustomizationArgs(cmd)
+}
+
 func (c *Conversion) RunVirtV2v() error {
+	return c.runVirtV2v(nil)
+}
+
+func (c *Conversion) RunVirtV2vWithCustomization(osinfo utils.InspectionOS) error {
+	return c.runVirtV2v(&osinfo)
+}
+
+func (c *Conversion) runVirtV2v(osinfo *utils.InspectionOS) error {
 	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v")
 	err := c.addVirtV2vArgs(v2vCmdBuilder)
 	if err != nil {
+		return err
+	}
+	if err := c.addCustomizeArgs(v2vCmdBuilder, osinfo); err != nil {
 		return err
 	}
 
@@ -338,6 +350,31 @@ func (c *Conversion) RunVirtV2v() error {
 	return nil
 }
 
+func (c *Conversion) RunVirtV2vInPlaceWithCustomization(osinfo utils.InspectionOS) error {
+	return c.runVirtV2vInPlace(&osinfo)
+}
+
+func (c *Conversion) runVirtV2vInPlace(osinfo *utils.InspectionOS) error {
+	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-in-place").
+		AddFlag("-v").
+		AddFlag("-x").
+		AddArg("-i", "libvirtxml")
+	err := c.addCommonArgs(v2vCmdBuilder)
+	if err != nil {
+		return err
+	}
+	c.addNoFstrimUnlessXfsCompat(v2vCmdBuilder)
+	c.addConversionExtraArgs(v2vCmdBuilder)
+	if err := c.addCustomizeArgs(v2vCmdBuilder, osinfo); err != nil {
+		return err
+	}
+	v2vCmdBuilder.AddPositional(c.LibvirtDomainFile)
+	v2vCmd := v2vCmdBuilder.Build()
+	v2vCmd.SetStdout(os.Stdout)
+	v2vCmd.SetStderr(os.Stderr)
+	return v2vCmd.Run()
+}
+
 func (c *Conversion) RunCustomize(osinfo utils.InspectionOS) error {
 	var disks []string
 	for _, disk := range c.Disks {
@@ -368,6 +405,140 @@ func (c *Conversion) RunRemoteV2vInspection() (err error) {
 	v2vCmd.SetStdout(os.Stdout)
 	v2vCmd.SetStderr(os.Stderr)
 	return v2vCmd.Run()
+}
+
+func (c *Conversion) RunVirtV2vInPlaceDiskWithCustomization(osinfo utils.InspectionOS) error {
+	return c.runVirtV2vInPlaceDisk(&osinfo)
+}
+
+func (c *Conversion) runVirtV2vInPlaceDisk(osinfo *utils.InspectionOS) error {
+	if len(c.Disks) == 0 {
+		return fmt.Errorf("no disks found for in-place conversion")
+	}
+
+	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-in-place").
+		AddFlag("-v").
+		AddFlag("-x").
+		AddArg("-i", "disk")
+
+	err := c.addCommonArgs(v2vCmdBuilder)
+	if err != nil {
+		return err
+	}
+	c.addNoFstrimUnlessXfsCompat(v2vCmdBuilder)
+	c.addConversionExtraArgs(v2vCmdBuilder)
+	if err := c.addCustomizeArgs(v2vCmdBuilder, osinfo); err != nil {
+		return err
+	}
+
+	// Add all disks as positional arguments
+	for _, disk := range c.Disks {
+		v2vCmdBuilder.AddPositional(disk.Link)
+	}
+
+	v2vCmd := v2vCmdBuilder.Build()
+	v2vCmd.SetStdout(os.Stdout)
+	v2vCmd.SetStderr(os.Stderr)
+	return v2vCmd.Run()
+}
+
+func (c *Conversion) InspectSource() (*utils.InspectionV2V, error) {
+	rawInspectionFile := c.InspectionOutputFile + ".virt-inspector"
+	if err := c.RunVirtV2VOpen(rawInspectionFile); err != nil {
+		return nil, err
+	}
+
+	inspection, err := utils.GetInspectionV2vFromFile(rawInspectionFile)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := utils.WriteInspectionV2vToFile(c.InspectionOutputFile, inspection); err != nil {
+		return nil, err
+	}
+
+	if rawInspectionFile != c.InspectionOutputFile {
+		_ = os.Remove(rawInspectionFile)
+	}
+
+	return inspection, nil
+}
+
+func (c *Conversion) RunVirtV2VOpen(outputFile string) error {
+	v2vCmdBuilder := c.CommandBuilder.New("virt-v2v-open").
+		AddFlag("-v").
+		AddFlag("-x")
+
+	if c.IsRemoteInspection {
+		if err := c.addVirtV2vRemoteInspectionArgs(v2vCmdBuilder); err != nil {
+			return err
+		}
+	}
+
+	err := c.addVirtV2VOpenInputArgs(v2vCmdBuilder)
+	if err != nil {
+		return err
+	}
+
+	v2vCmdBuilder.AddArg("--run", fmt.Sprintf("virt-inspector --format=raw @@ > %s", outputFile))
+	v2vCmd := v2vCmdBuilder.Build()
+	v2vCmd.SetStdout(os.Stdout)
+	v2vCmd.SetStderr(os.Stderr)
+	return v2vCmd.Run()
+}
+
+func (c *Conversion) addVirtV2VOpenInputArgs(cmd utils.CommandBuilder) error {
+	switch {
+	case c.IsRemoteInspection:
+		return c.addVirtV2vOpenVsphereArgs(cmd)
+	case c.IsInPlace && c.LibvirtUrl != "":
+		cmd.AddArg("-i", "libvirtxml")
+		if err := c.addInspectionArgs(cmd); err != nil {
+			return err
+		}
+		cmd.AddPositional(c.LibvirtDomainFile)
+		return nil
+	case c.IsInPlace:
+		cmd.AddArg("-i", "disk")
+		if err := c.addInspectionArgs(cmd); err != nil {
+			return err
+		}
+		for _, disk := range c.Disks {
+			cmd.AddPositional(disk.Link)
+		}
+		return nil
+	}
+
+	switch c.Source {
+	case config.VSPHERE:
+		return c.addVirtV2vOpenVsphereArgs(cmd)
+	case config.OVA:
+		cmd.AddArg("-i", "ova")
+		if err := c.addInspectionArgs(cmd); err != nil {
+			return err
+		}
+		cmd.AddPositional(c.DiskPath)
+		return nil
+	case config.HYPERV:
+		cmd.AddArg("-i", "disk")
+		if err := c.addInspectionArgs(cmd); err != nil {
+			return err
+		}
+		var addedDisks int
+		for _, diskPath := range strings.Split(c.DiskPath, ",") {
+			diskPath = strings.TrimSpace(diskPath)
+			if diskPath != "" {
+				cmd.AddPositional(diskPath)
+				addedDisks++
+			}
+		}
+		if addedDisks == 0 {
+			return fmt.Errorf("no valid disk paths provided for HyperV inspection")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported source %q for virt-v2v-open inspection", c.Source)
+	}
 }
 
 func (c *Conversion) addVirtV2vRemoteInspectionArgs(cmd utils.CommandBuilder) (err error) {

@@ -1081,4 +1081,34 @@ var _ = Describe("Customize", func() {
 		})
 	})
 
+	Describe("AddVirtV2vCustomizationArgs", func() {
+		It("adds linux customization arguments without virt-customize disk flags", func() {
+			customize.operatingSystem = utils.InspectionOS{Osinfo: "linux"}
+			mockEmbedTool.EXPECT().CreateFilesFromFS(config.V2vOutputDir).Return(nil)
+			mockFileSystem.EXPECT().Stat(gomock.Any()).Return(nil, os.ErrNotExist)
+			mockFileSystem.EXPECT().ReadDir(filepath.Join(config.V2vOutputDir, "scripts", "rhel", "run")).Return(runScripts, nil)
+			mockFileSystem.EXPECT().ReadDir(filepath.Join(config.V2vOutputDir, "scripts", "rhel", "firstboot")).Return(firstBootScripts, nil)
+			for _, expectedScript := range expectedRunScripts {
+				mockCommandBuilder.EXPECT().AddArg("--run", expectedScript).Return(mockCommandBuilder)
+			}
+			for _, expectedScript := range expectedFirstBootScripts {
+				mockCommandBuilder.EXPECT().AddArg("--firstboot", expectedScript).Return(mockCommandBuilder)
+			}
+
+			err := customize.AddVirtV2vCustomizationArgs(mockCommandBuilder)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("adds windows customization arguments without executing virt-customize", func() {
+			customize.operatingSystem = utils.InspectionOS{Osinfo: "win10"}
+			mockEmbedTool.EXPECT().CreateFilesFromFS(config.V2vOutputDir).Return(nil)
+			mockFileSystem.EXPECT().Stat(gomock.Any()).Return(nil, os.ErrNotExist)
+			mockCommandBuilder.EXPECT().AddArg("--upload", gomock.Any()).Return(mockCommandBuilder)
+			mockCommandBuilder.EXPECT().AddArgs("--upload", "", gomock.Any(), "", "").Return(mockCommandBuilder)
+
+			err := customize.AddVirtV2vCustomizationArgs(mockCommandBuilder)
+			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
 })

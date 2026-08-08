@@ -126,7 +126,7 @@ echo  PHASE 2: VMware Driver Packages
 echo ===============================================================
 echo.
 
-pnputil /enum-drivers > "%temp%\all_drivers.txt"
+%SystemRoot%\System32\pnputil.exe /enum-drivers > "%temp%\all_drivers.txt"
 findstr /i /c:"Published Name" /c:"Provider Name" "%temp%\all_drivers.txt" > "%temp%\vmware_drivers.txt"
 
 set DRV_COUNT=0
@@ -167,7 +167,7 @@ for /l %%I in (0,1,%DRV_COUNT%-1) do (
     set INF=!INF_LIST[%%I]!
     if not "!INF!"=="" (
         echo Removing !INF! ...
-        pnputil /delete-driver "!INF!" /uninstall /force > "%temp%\pnputil_output.txt" 2>&1
+        %SystemRoot%\System32\pnputil.exe /delete-driver "!INF!" /uninstall /force > "%temp%\pnputil_output.txt" 2>&1
         type "%temp%\pnputil_output.txt" >> "%LOG%"
         type "%temp%\pnputil_output.txt" | findstr /i "reboot restart" >nul
         if !errorlevel! == 0 (
@@ -444,7 +444,7 @@ setlocal
 set "SVC=%~1"
 set "IS_VMWARE="
 for /f "tokens=*" %%L in ('sc qc "%SVC%" 2^>nul') do (
-    echo %%L | findstr /I "VMware" >nul && set "IS_VMWARE=1"
+    echo(%%L| findstr /I "VMware" >nul && set "IS_VMWARE=1"
 )
 if defined IS_VMWARE (
     echo [MATCH] %SVC%

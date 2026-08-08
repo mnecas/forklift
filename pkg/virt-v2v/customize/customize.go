@@ -127,6 +127,21 @@ func (c *Customize) Run() (err error) {
 	return nil
 }
 
+// AddVirtV2vCustomizationArgs appends guest customization options that can be
+// passed directly to virt-v2v or virt-v2v-in-place.
+func (c *Customize) AddVirtV2vCustomizationArgs(cmdBuilder utils.CommandBuilder) error {
+	err := c.embeddedFileSystem.CreateFilesFromFS(c.appConfig.Workdir)
+	if err != nil {
+		return fmt.Errorf("failed to create files from filesystem: %w", err)
+	}
+
+	if c.operatingSystem.IsWindows() {
+		return c.addWindowsCustomizationArgs(cmdBuilder)
+	}
+
+	return c.addLinuxCustomizationArgs(cmdBuilder)
+}
+
 // customizeWindows customizes a windows disk image by uploading scripts.
 //
 // The function writes two bash scripts to the specified local tmp directory,
@@ -142,6 +157,21 @@ func (c *Customize) customizeWindows() (err error) {
 	cmdBuilder.AddFlag("--verbose")
 	cmdBuilder.AddArg("--format", "raw")
 
+	if err = c.addWindowsCustomizationArgs(cmdBuilder); err != nil {
+		return err
+	}
+
+	c.addDisksToCustomize(cmdBuilder)
+
+	err = c.runCmd(cmdBuilder)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Customize) addWindowsCustomizationArgs(cmdBuilder utils.CommandBuilder) (err error) {
+
 	if _, err = c.fileSystem.Stat(c.appConfig.DynamicScriptsDir); !os.IsNotExist(err) {
 		fmt.Println("Adding windows dynamic scripts")
 		err = c.addWinDynamicScripts(cmdBuilder, c.appConfig.DynamicScriptsDir)
@@ -156,13 +186,6 @@ func (c *Customize) customizeWindows() (err error) {
 	}
 
 	if err = c.addWinFirstbootScripts(cmdBuilder); err != nil {
-		return err
-	}
-
-	c.addDisksToCustomize(cmdBuilder)
-
-	err = c.runCmd(cmdBuilder)
-	if err != nil {
 		return err
 	}
 	return nil
@@ -403,6 +426,22 @@ func (c *Customize) customizeLinux() (err error) {
 	cmdBuilder.AddFlag("--verbose")
 	cmdBuilder.AddArg("--format", "raw")
 
+	if err := c.addLinuxCustomizationArgs(cmdBuilder); err != nil {
+		return err
+	}
+
+	// Step 5: Add the disks to customize
+	c.addDisksToCustomize(cmdBuilder)
+
+	// Step 7: Execute the customization with the collected arguments
+	if err := c.runCmd(cmdBuilder); err != nil {
+		return fmt.Errorf("failed to execute domain customization: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Customize) addLinuxCustomizationArgs(cmdBuilder utils.CommandBuilder) error {
 	// Step 2: Handle static IP configuration
 	if err := c.handleStaticIPConfiguration(cmdBuilder); err != nil {
 		return err
@@ -424,19 +463,10 @@ func (c *Customize) customizeLinux() (err error) {
 		return err
 	}
 
-	// Step 5: Add the disks to customize
-	c.addDisksToCustomize(cmdBuilder)
-
 	// Step 6: Adds LUKS keys, if they exist
 	if err := c.addLuksKeysToCustomize(cmdBuilder); err != nil {
 		return err
 	}
-
-	// Step 7: Execute the customization with the collected arguments
-	if err := c.runCmd(cmdBuilder); err != nil {
-		return fmt.Errorf("failed to execute domain customization: %w", err)
-	}
-
 	return nil
 }
 
