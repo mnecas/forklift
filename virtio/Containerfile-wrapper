@@ -1,0 +1,35 @@
+# Rebuild virt-v2v-wrapper on CentOS Stream and overlay it onto the MTV virt-v2v image.
+#
+# Build from the repository root:
+#   podman build -f virtio/Containerfile-wrapper -t mtv-virt-v2v-wrapper:local .
+
+FROM quay.io/centos/centos:stream10 AS builder
+USER 0
+
+# libvirt-devel is required for CGO (pkg/virt-v2v/conversion imports libvirt).
+# Install Go 1.25 to match go.mod / downstream go-toolset.
+RUN dnf -y install --enablerepo=crb \
+        libvirt-devel \
+        gcc \
+        make \
+        tar \
+        gzip \
+        curl-minimal && \
+    dnf clean all && \
+    curl -fsSL https://go.dev/dl/go1.25.9.linux-amd64.tar.gz | tar -C /usr/local -xz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+# Stock Go from go.dev does not support Red Hat's strictfipsruntime experiment.
+ENV GOFLAGS="-mod=vendor"
+ENV CGO_ENABLED=1
+
+WORKDIR /app
+COPY --chown=1001:0 ./ ./
+
+RUN go build -buildvcs=false -ldflags="-w -s" -o virt-v2v-wrapper github.com/kubev2v/forklift/cmd/virt-v2v
+
+FROM registry.redhat.io/migration-toolkit-virtualization/mtv-virt-v2v-rhel10:ecbc50f4cd5b4d7637eede4aa6c0d02b473a22d9
+
+USER 0
+
+COPY --from=builder /app/virt-v2v-wrapper /usr/bin/virt-v2v-wrapper

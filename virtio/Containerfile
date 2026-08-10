@@ -1,0 +1,9 @@
+FROM registry.redhat.io/migration-toolkit-virtualization/mtv-virt-v2v-rhel10:ecbc50f4cd5b4d7637eede4aa6c0d02b473a22d9
+
+USER 0
+
+COPY virtio-win-1.9.34-0.el9.noarch.rpm /tmp/
+
+# Replace the image's virtio-win with the local RPM (may be an older version).
+RUN rpm -Uvh --oldpackage /tmp/virtio-win-1.9.34-0.el9.noarch.rpm && \
+    rm -f /tmp/virtio-win-1.9.34-0.el9.noarch.rpm
