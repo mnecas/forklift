@@ -96,6 +96,11 @@ spec:
       kind: Conversion
       name: conversions.forklift.konveyor.io
       version: v1beta1
+    - description: NBD migration appliance lifecycle manager
+      displayName: Toehold
+      kind: Toehold
+      name: toeholds.forklift.konveyor.io
+      version: v1beta1
     - description: ForkliftController is the Schema for the forkliftcontrollers API.
       displayName: Forklift Controller
       kind: ForkliftController

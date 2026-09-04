@@ -92,6 +92,10 @@ spec:
           value: ${VIRT_CUSTOMIZE_MAP}
         - name: VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE
           value: ${VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE}
+        - name: TOEHOLD_UPLOADER_IMAGE
+          value: ${TOEHOLD_UPLOADER_IMAGE}
+        - name: TOEHOLD_BIB_IMAGE
+          value: ${TOEHOLD_BIB_IMAGE}
         livenessProbe:
           httpGet:
             path: /healthz

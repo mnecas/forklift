@@ -1,0 +1,26 @@
+# OpenShift cluster prep for toehold build Jobs.
+# Apply in the namespace where Toehold resources run (spec.targetNamespace or CR namespace).
+#
+#   oc apply -f deploy/toehold/cluster-prep.yaml -n nbdkit-appliance-poc
+#
+# Worker nodes also need hostPath directories (create once per worker):
+#   /var/tmp/nbdkit-bib-store
+#   /var/tmp/nbdkit-bib-rpmmd
+#   /var/tmp/nbdkit-bib-containers
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: toehold-builder-privileged
+subjects:
+  - kind: ServiceAccount
+    name: toehold-builder
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: toehold-builder

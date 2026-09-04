@@ -809,6 +809,11 @@ spec:
         kind: Conversion
         name: conversions.forklift.konveyor.io
         version: v1beta1
+      - description: NBD migration appliance lifecycle manager
+        displayName: Toehold
+        kind: Toehold
+        name: toeholds.forklift.konveyor.io
+        version: v1beta1
   relatedImages:
     - name: forklift-operator
       image: "${OPERATOR_IMAGE}"
@@ -842,3 +847,7 @@ spec:
       image: "${CLI_DOWNLOAD_IMAGE}"
     - name: virt_v2v_rhel9
       image: "${VIRT_V2V_IMAGE_RHEL9}"
+    - name: toehold_uploader
+      image: "${TOEHOLD_UPLOADER_IMAGE}"
+    - name: toehold_bib
+      image: "${TOEHOLD_BIB_IMAGE}"

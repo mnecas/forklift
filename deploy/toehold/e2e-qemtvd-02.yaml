@@ -1,0 +1,20 @@
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Toehold
+metadata:
+  name: nbdkit-toehold
+  namespace: openshift-mtv
+spec:
+  targetNamespace: nbdkit-appliance-poc
+  provider:
+    name: vcenter-qemtvd
+    namespace: openshift-mtv
+  bootcImage: quay.io/mnecas0/nbdkit-appliance-bootc:poc
+  templateName: nbdkit-toehold
+  vmName: nbdkit-toehold-01
+  datastore: datastore1
+  folder: /Datacenter/vm
+  network: VM Network
+  registrySecret:
+    name: nbdkit-appliance-quay
+  powerOn: true
+  forceRebuild: false

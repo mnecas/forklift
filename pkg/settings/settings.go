@@ -38,6 +38,8 @@ type ControllerSettings struct {
 	Features
 	// Provider settings.
 	Providers
+	// Toehold settings.
+	Toehold
 	OpenShift   bool
 	Development bool
 }
@@ -77,6 +79,10 @@ func (r *ControllerSettings) Load() error {
 		return err
 	}
 	err = r.Providers.Load()
+	if err != nil {
+		return err
+	}
+	err = r.Toehold.Load()
 	if err != nil {
 		return err
 	}

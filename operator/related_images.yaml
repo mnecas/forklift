@@ -35,3 +35,7 @@ relatedImages:
     image: ${VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE}
   - name: cli_download
     image: ${CLI_DOWNLOAD_IMAGE}
+  - name: toehold_uploader
+    image: ${TOEHOLD_UPLOADER_IMAGE}
+  - name: toehold_bib
+    image: ${TOEHOLD_BIB_IMAGE}

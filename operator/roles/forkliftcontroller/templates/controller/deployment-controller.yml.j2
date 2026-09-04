@@ -54,6 +54,10 @@ spec:
           value: "{{ deep_inspection_image_fqin or lookup('env', 'DEEP_INSPECTION_IMAGE') or lookup('env', 'RELATED_IMAGE_DEEP_INSPECTION') }}"
         - name: DEEP_INSPECTION_IMAGE_XFS
           value: "{{ deep_inspection_image_xfs_fqin or lookup('env', 'DEEP_INSPECTION_IMAGE_XFS') or lookup('env', 'RELATED_IMAGE_DEEP_INSPECTION_XFS') }}"
+        - name: TOEHOLD_UPLOADER_IMAGE
+          value: "{{ toehold_uploader_image_fqin or lookup('env', 'TOEHOLD_UPLOADER_IMAGE') or lookup('env', 'RELATED_IMAGE_TOEHOLD_UPLOADER') }}"
+        - name: TOEHOLD_BIB_IMAGE
+          value: "{{ toehold_bib_image_fqin or lookup('env', 'TOEHOLD_BIB_IMAGE') or lookup('env', 'RELATED_IMAGE_TOEHOLD_BIB') }}"
         - name: API_PORT
           value: "8443"
         - name: METRICS_PORT
