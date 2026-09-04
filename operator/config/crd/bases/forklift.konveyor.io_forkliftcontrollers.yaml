@@ -338,6 +338,11 @@ spec:
                 description: Deep inspection XFS image. Optional. If left empty, the
                   operator automatically sets this from the release payload.
                 type: string
+              disk_importer_image_fqin:
+                description: Disk importer image for MigrationDiskImport warm migration pods.
+                  Optional. If left empty, the operator automatically sets this from
+                  the release payload.
+                type: string
               feature_auth_required:
                 default: "true"
                 description: Require authentication.
@@ -355,6 +360,13 @@ spec:
               feature_copy_offload:
                 default: "true"
                 description: Enable copy offload plugins.
+                enum:
+                - "true"
+                - "false"
+                type: string
+              feature_migration_disk_import:
+                default: "false"
+                description: Enable MigrationDiskImport warm migration path.
                 enum:
                 - "true"
                 - "false"

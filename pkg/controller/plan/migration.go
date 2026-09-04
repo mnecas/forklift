@@ -569,6 +569,12 @@ func (r *Migration) cleanup(vm *plan.VMStatus, failOnErr func(error) bool, force
 			return err
 		}
 	}
+	if UsesMigrationDiskImport(r.Plan) {
+		r.Log.Info("Deleting MigrationDiskImport resources.", "vm", vm.String())
+		if err := r.kubevirt.DeleteMigrationDiskImports(vm); failOnErr(err) {
+			return err
+		}
+	}
 	r.Log.Info("Deleting populator pods.", "vm", vm.String())
 	if err := r.kubevirt.DeletePopulatorPods(vm); failOnErr(err) {
 		return err
@@ -1114,7 +1120,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 						return
 					}
 				}
-				if vm.Warm != nil {
+				if vm.Warm != nil && !UsesMigrationDiskImport(r.Plan) {
 					err = r.provider.SetCheckpoints(vm.Ref, vm.Warm.Precopies, dataVolumes, false, r.kubevirt.loadHosts)
 					if err != nil {
 						step.AddError(err.Error())
@@ -1202,6 +1208,50 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 						err = shiftErr
 						return
 					}
+				}
+			}
+
+			if UsesMigrationDiskImport(r.Plan) {
+				ready, blankErr := r.kubevirt.blankDataVolumesReady(vm)
+				if blankErr != nil {
+					step.AddError(blankErr.Error())
+					err = nil
+					break
+				}
+				if !ready {
+					return
+				}
+				if blankErr = r.kubevirt.annotateBlankDVProvisionedPVCs(vm); blankErr != nil {
+					step.AddError(blankErr.Error())
+					err = nil
+					break
+				}
+				var imports []api.MigrationDiskImport
+				imports, err = r.kubevirt.MigrationDiskImports(vm)
+				if err != nil {
+					if !errors.As(err, &web.ProviderNotReadyError{}) {
+						step.AddError(err.Error())
+						err = nil
+						break
+					}
+					return
+				}
+				if vm.Warm != nil {
+					err = r.applyMigrationDiskImportCheckpoints(vm, imports)
+					if err != nil {
+						step.AddError(err.Error())
+						err = nil
+						break
+					}
+				}
+				err = r.kubevirt.EnsureMigrationDiskImports(vm, imports)
+				if err != nil {
+					if !errors.As(err, &web.ProviderNotReadyError{}) {
+						step.AddError(err.Error())
+						err = nil
+						break
+					}
+					return
 				}
 			}
 
@@ -1998,6 +2048,9 @@ func (r *Migration) setTaskCompleted(task *plan.Task) {
 
 // Update the progress of the appropriate disk copy step. (DiskTransfer, Cutover)
 func (r *Migration) updateCopyProgress(vm *plan.VMStatus, step *plan.Step) (err error) {
+	if UsesMigrationDiskImport(r.Plan) {
+		return r.updateMigrationDiskImportCopyProgress(vm, step)
+	}
 	var pendingReason string
 	var pending int
 	var completed int
@@ -2347,6 +2400,13 @@ func (r *Migration) updateConversionProgressV2vMonitor(pod *core.Pod, step *plan
 }
 
 func (r *Migration) setDataVolumeCheckpoints(vm *plan.VMStatus) (err error) {
+	if UsesMigrationDiskImport(r.Plan) {
+		imports, listErr := r.kubevirt.getMigrationDiskImports(vm)
+		if listErr != nil {
+			return listErr
+		}
+		return r.setMigrationDiskImportCheckpoints(vm, imports)
+	}
 	disks, err := r.kubevirt.getDVs(vm)
 	if err != nil {
 		return
@@ -2367,6 +2427,72 @@ func (r *Migration) setDataVolumeCheckpoints(vm *plan.VMStatus) (err error) {
 		}
 	}
 
+	return
+}
+
+func (r *Migration) applyMigrationDiskImportCheckpoints(vm *plan.VMStatus, imports []api.MigrationDiskImport) (err error) {
+	client, ok := r.provider.(base.MigrationDiskImportClient)
+	if !ok {
+		return liberr.New("provider does not support MigrationDiskImport checkpoints")
+	}
+	return client.SetMigrationDiskImportCheckpoints(vm.Ref, vm.Warm.Precopies, imports, vm.Phase == api.PhaseAddFinalCheckpoint, r.kubevirt.loadHosts)
+}
+
+func (r *Migration) setMigrationDiskImportCheckpoints(vm *plan.VMStatus, imports []api.MigrationDiskImport) (err error) {
+	err = r.applyMigrationDiskImportCheckpoints(vm, imports)
+	if err != nil {
+		return
+	}
+	for i := range imports {
+		err = r.Destination.Client.Update(context.TODO(), &imports[i])
+		if err != nil {
+			return liberr.Wrap(err)
+		}
+	}
+	return
+}
+
+func (r *Migration) updateMigrationDiskImportCopyProgress(vm *plan.VMStatus, step *plan.Step) (err error) {
+	var pending int
+	var completed int
+	imports, err := r.kubevirt.getMigrationDiskImports(vm)
+	if err != nil {
+		return
+	}
+	builder, ok := r.builder.(base.MigrationDiskImportBuilder)
+	if !ok {
+		return liberr.New("builder does not support MigrationDiskImport")
+	}
+	for _, mdi := range imports {
+		task, found := step.FindTask(builder.ResolveMigrationDiskImportIdentifier(&mdi))
+		if !found {
+			continue
+		}
+		switch mdi.Status.Phase {
+		case api.MigrationDiskImportSucceeded:
+			completed++
+			r.setTaskCompleted(task)
+		case api.MigrationDiskImportPaused:
+			completed++
+			r.setTaskCompleted(task)
+		case api.MigrationDiskImportImportInProgress, api.MigrationDiskImportImportScheduled:
+			task.Phase = api.StepRunning
+			if mdi.Status.Progress != "" {
+				var pct float64
+				_, _ = fmt.Sscanf(mdi.Status.Progress, "%f%%", &pct)
+				task.Progress.Completed = int64(float64(task.Progress.Total) * pct / 100.0)
+			}
+		default:
+			pending++
+			task.Phase = api.StepPending
+		}
+	}
+	if pending > 0 {
+		return
+	}
+	if completed == len(imports) && len(imports) > 0 {
+		step.MarkCompleted()
+	}
 	return
 }
 

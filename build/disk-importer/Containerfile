@@ -1,0 +1,16 @@
+FROM fedora:41 AS builder
+RUN dnf install -y libnbd-devel git gcc curl && dnf clean all
+ARG GO_VERSION=1.25.0
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+ENV PATH=/usr/local/go/bin:$PATH CGO_ENABLED=1
+WORKDIR /app
+COPY --chown=1001:0 ./ ./
+RUN go build -mod=mod -ldflags="-w -s" -o disk-importer github.com/kubev2v/forklift/cmd/disk-importer
+
+FROM fedora:41
+RUN dnf install -y libnbd nbdkit qemu-img ca-certificates shadow-utils && \
+    dnf clean all && \
+    useradd -u 107 -r -g qemu qemu 2>/dev/null || useradd -u 107 -r qemu
+COPY --from=builder /app/disk-importer /usr/local/bin/disk-importer
+USER 107
+ENTRYPOINT ["/usr/local/bin/disk-importer"]

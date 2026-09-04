@@ -54,6 +54,8 @@ spec:
           value: "{{ deep_inspection_image_fqin or lookup('env', 'DEEP_INSPECTION_IMAGE') or lookup('env', 'RELATED_IMAGE_DEEP_INSPECTION') }}"
         - name: DEEP_INSPECTION_IMAGE_XFS
           value: "{{ deep_inspection_image_xfs_fqin or lookup('env', 'DEEP_INSPECTION_IMAGE_XFS') or lookup('env', 'RELATED_IMAGE_DEEP_INSPECTION_XFS') }}"
+        - name: DISK_IMPORTER_IMAGE
+          value: "{{ disk_importer_image_fqin or lookup('env', 'DISK_IMPORTER_IMAGE') or lookup('env', 'RELATED_IMAGE_DISK_IMPORTER') }}"
         - name: API_PORT
           value: "8443"
         - name: METRICS_PORT
@@ -179,6 +181,10 @@ spec:
 {% endif %}
 {% if feature_copy_offload|bool %}
         - name: FEATURE_COPY_OFFLOAD
+          value: "true"
+{% endif %}
+{% if feature_migration_disk_import|bool %}
+        - name: FEATURE_MIGRATION_DISK_IMPORT
           value: "true"
 {% endif %}
 

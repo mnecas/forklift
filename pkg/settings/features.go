@@ -22,6 +22,7 @@ const (
 	FeatureUseConversionCR              = "FEATURE_USE_CONVERSION_CR"
 	FeatureRetainPopulatorPods          = "FEATURE_RETAIN_POPULATOR_PODS"
 	FeatureXfsRepairIgnore              = "FEATURE_XFS_REPAIR_IGNORE"
+	FeatureMigrationDiskImport          = "FEATURE_MIGRATION_DISK_IMPORT"
 )
 
 // OpenShift version where the FeatureVmwareSystemSerialNumber feature is supported:
@@ -77,6 +78,8 @@ type Features struct {
 	RetainPopulatorPods bool
 	// Whether to ignore xfs_repair exit status during conversion.
 	XfsRepairIgnore bool
+	// Whether warm vSphere disk population uses MigrationDiskImport CRs instead of CDI source.vddk.
+	MigrationDiskImport bool
 }
 
 // isOpenShiftVersionAboveMinimum checks if OpenShift version is above or equal to minimum version using semantic versioning
@@ -119,5 +122,6 @@ func (r *Features) Load() (err error) {
 	r.UseConversionCR = getEnvBool(FeatureUseConversionCR, true)
 	r.RetainPopulatorPods = getEnvBool(FeatureRetainPopulatorPods, false)
 	r.XfsRepairIgnore = getEnvBool(FeatureXfsRepairIgnore, false)
+	r.MigrationDiskImport = getEnvBool(FeatureMigrationDiskImport, false)
 	return
 }

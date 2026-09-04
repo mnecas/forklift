@@ -706,8 +706,8 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 			err = vErr
 			return
 		}
-		if useV2vForTransfer {
-			// Let virt-v2v do the copying
+		if useV2vForTransfer || (settings.Settings.Features.MigrationDiskImport && r.Plan.IsWarm()) {
+			// Blank volume: virt-v2v copies directly, or MigrationDiskImport populates after provision.
 			dvSource = cdi.DataVolumeSource{
 				Blank: &cdi.DataVolumeBlankImage{},
 			}

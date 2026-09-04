@@ -19,6 +19,7 @@ virt_v2v_image_fqin: "{{ lookup( 'env', 'VIRT_V2V_IMAGE') or lookup( 'env', 'REL
 virt_v2v_image_xfs_fqin: "{{ lookup( 'env', 'VIRT_V2V_IMAGE_XFS') or lookup( 'env', 'RELATED_IMAGE_VIRT_V2V_XFS') }}"
 deep_inspection_image_fqin: "{{ lookup( 'env', 'DEEP_INSPECTION_IMAGE') or lookup( 'env', 'RELATED_IMAGE_DEEP_INSPECTION') }}"
 deep_inspection_image_xfs_fqin: "{{ lookup( 'env', 'DEEP_INSPECTION_IMAGE_XFS') or lookup( 'env', 'RELATED_IMAGE_DEEP_INSPECTION_XFS') }}"
+disk_importer_image_fqin: "{{ lookup( 'env', 'DISK_IMPORTER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_DISK_IMPORTER') }}"
 ova_provider_server_fqin: "{{ lookup( 'env', 'OVA_PROVIDER_SERVER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_OVA_PROVIDER_SERVER') }}"
 hyperv_provider_server_fqin: "{{ lookup( 'env', 'HYPERV_PROVIDER_SERVER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_HYPERV_PROVIDER_SERVER') }}"
 ova_proxy_fqin: "{{ lookup( 'env', 'OVA_PROXY_IMAGE') or lookup( 'env', 'RELATED_IMAGE_OVA_PROXY') }}"

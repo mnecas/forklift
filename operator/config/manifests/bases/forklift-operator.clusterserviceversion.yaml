@@ -96,6 +96,11 @@ spec:
       kind: Conversion
       name: conversions.forklift.konveyor.io
       version: v1beta1
+    - description: Warm migration disk population into pre-provisioned PVCs
+      displayName: MigrationDiskImport
+      kind: MigrationDiskImport
+      name: migrationdiskimports.forklift.konveyor.io
+      version: v1beta1
     - description: ForkliftController is the Schema for the forkliftcontrollers API.
       displayName: Forklift Controller
       kind: ForkliftController
@@ -391,6 +396,12 @@ spec:
       - description: Enable copy offload plugins.
         displayName: Feature Copy Offload
         path: feature_copy_offload
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:radio:true
+        - urn:alm:descriptor:com.tectonic.ui:radio:false
+      - description: Enable MigrationDiskImport warm migration path.
+        displayName: Feature Migration Disk Import
+        path: feature_migration_disk_import
         x-descriptors:
         - urn:alm:descriptor:com.tectonic.ui:radio:true
         - urn:alm:descriptor:com.tectonic.ui:radio:false

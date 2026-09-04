@@ -2864,6 +2864,7 @@ func (r *KubeVirt) dataVolumes(vm *plan.VMStatus, secret *core.Secret, configMap
 		},
 	}
 	dvTemplate.Labels = r.vmLabels(vm.Ref)
+	dvTemplate.Labels[kDV] = "true"
 
 	// Add vmUUID for any migration where copy and conversion are separate,
 	// so PVCs can be discovered by a resume-conversion migration.

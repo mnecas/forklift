@@ -79,6 +79,7 @@ const (
 	WaitForFinalSnapshotConsolidation      = "WAIT_FOR_FINAL_SNAPSHOT_CONSOLIDATION"
 	ConversionPodPendingTimeout            = "CONVERSION_POD_PENDING_TIMEOUT"
 	StaleConversionTimeout                 = "STALE_CONVERSION_TIMEOUT"
+	DiskImporterImage                      = "DISK_IMPORTER_IMAGE"
 )
 
 // DefaultPendingPodTimeoutMinutes is the default number of minutes a
@@ -203,6 +204,8 @@ type Migration struct {
 	// conversion pod/CR to finish terminating before force-deleting it
 	// during resume-conversion. Default 180s (3 minutes).
 	StaleConversionTimeout int
+	// DiskImporterImage is the container image for MigrationDiskImport importer pods.
+	DiskImporterImage string
 }
 
 // Load settings.
@@ -440,6 +443,9 @@ func (r *Migration) Load() (err error) {
 	}
 	if r.StaleConversionTimeout, err = getPositiveEnvLimit(StaleConversionTimeout, DefaultStaleConversionTimeoutSeconds); err != nil {
 		return liberr.Wrap(err)
+	}
+	if val, found := os.LookupEnv(DiskImporterImage); found {
+		r.DiskImporterImage = strings.TrimSpace(val)
 	}
 	return
 }

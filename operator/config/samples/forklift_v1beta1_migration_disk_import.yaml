@@ -1,0 +1,21 @@
+apiVersion: forklift.konveyor.io/v1beta1
+kind: MigrationDiskImport
+metadata:
+  name: example-mdi
+  namespace: ${NAMESPACE}
+spec:
+  target:
+    name: blank-dv-pvc
+    namespace: ${NAMESPACE}
+  transfer:
+    type: VDDK
+    vddk:
+      url: https://vcenter.example/sdk
+      uuid: vm-uuid
+      backingFile: "[datastore] vm/disk.vmdk"
+      thumbprint: "AA:BB:CC:DD"
+      secretRef: vddk-secret
+  checkpoints:
+  - previous: ""
+    current: snapshot-1
+  finalCheckpoint: false
