@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "toehold-uploader: %v\n", err)
+		fmt.Fprintf(os.Stderr, "toehold-importer: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -29,7 +29,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("toehold-uploader: using vmdk %s", vmdk)
+	log.Printf("toehold-importer: using vmdk %s", vmdk)
 	opts := toeholdvsphere.ConnectOptions{
 		URL:        os.Getenv("VCENTER_URL"),
 		Username:   os.Getenv("VCENTER_USER"),
@@ -37,7 +37,7 @@ func run() error {
 		Thumbprint: os.Getenv("VCENTER_THUMBPRINT"),
 		Insecure:   os.Getenv("VCENTER_INSECURE") == "true" || os.Getenv("VCENTER_INSECURE") == "1",
 	}
-	log.Printf("toehold-uploader: connecting to %s", opts.URL)
+	log.Printf("toehold-importer: connecting to %s", opts.URL)
 	client, err := toeholdvsphere.Connect(ctx, opts)
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func run() error {
 	defer client.Close(ctx)
 
 	name := env("TOEHOLD_TEMPLATE_NAME", "nbdkit-toehold")
-	log.Printf("toehold-uploader: removing existing template %q if present", name)
+	log.Printf("toehold-importer: removing existing template %q if present", name)
 	_ = client.DestroyVMIfExists(ctx, env("TOEHOLD_FOLDER", ""), name)
 
 	cpus := int32(envInt("TOEHOLD_CPUS", 2))
@@ -68,7 +68,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("toehold-uploader: import complete moref=%s", ref.Moref)
+	log.Printf("toehold-importer: import complete moref=%s", ref.Moref)
 	return client.SetAnnotationMap(ctx, ref.VM, map[string]string{
 		annotations.ContentHash:  os.Getenv("TOEHOLD_CONTENT_HASH"),
 		annotations.BootcImage:   os.Getenv("TOEHOLD_BOOTC_IMAGE"),

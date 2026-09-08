@@ -96,9 +96,9 @@ type ToeholdImages struct {
 	// bootc-image-builder initContainer image.
 	// +optional
 	BootcImageBuilder string `json:"bootcImageBuilder,omitempty"`
-	// toehold-uploader main container image.
+	// toehold-importer main container image.
 	// +optional
-	ToeholdUploader string `json:"toeholdUploader,omitempty"`
+	ToeholdImporter string `json:"toeholdImporter,omitempty"`
 }
 
 // ToeholdSpec defines the desired state of Toehold.

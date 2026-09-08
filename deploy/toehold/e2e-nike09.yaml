@@ -1,0 +1,34 @@
+# Toehold e2e manifest for nike09 lab (phase 1: template + VM, no NBD disks).
+#
+# Prerequisites:
+#   - Custom forklift-controller build with toehold controller (feature/toehold-controller)
+#   - toeholds.forklift.konveyor.io CRD applied
+#   - TOEHOLD_IMPORTER_IMAGE and TOEHOLD_BIB_IMAGE set on forklift-controller deployment
+#   - deploy/toehold/cluster-prep.yaml applied in targetNamespace
+#   - hostPath dirs on all worker nodes (see docs/toehold-e2e-nike09.md)
+#   - Provider "vsphere" in openshift-mtv (already present on nike09)
+#   - offload-ssh-keys-vsphere-{public,private} secrets in openshift-mtv
+#   - registry pull secret for bootc image in target namespace
+#
+# Apply:
+#   oc apply -f deploy/toehold/e2e-nike09.yaml
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Toehold
+metadata:
+  name: nbdkit-toehold
+  namespace: openshift-mtv
+spec:
+  targetNamespace: toehold-e2e
+  provider:
+    name: vsphere
+    namespace: openshift-mtv
+  bootcImage: quay.io/mnecas0/nbdkit-appliance-bootc:poc
+  templateName: nbdkit-toehold
+  vmName: nbdkit-toehold-01
+  datastore: datastore1
+  folder: /Datacenter/vm
+  network: VM Network
+  registrySecret:
+    name: nbdkit-appliance-quay
+  powerOn: true
+  forceRebuild: false

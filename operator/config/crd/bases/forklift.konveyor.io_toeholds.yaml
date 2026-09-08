@@ -112,8 +112,8 @@ spec:
                   bootcImageBuilder:
                     description: bootc-image-builder initContainer image.
                     type: string
-                  toeholdUploader:
-                    description: toehold-uploader main container image.
+                  toeholdImporter:
+                    description: toehold-importer main container image.
                     type: string
                 type: object
               nbd:

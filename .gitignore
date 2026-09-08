@@ -34,6 +34,7 @@ tools/tilt/tilt-settings.json
 
 # deploy env
 hack/deploy/**/deploy.env
+deploy/toehold/e2e-nike09.env
 
 # unused Dockerfiles
 vendor/**/Dockerfile

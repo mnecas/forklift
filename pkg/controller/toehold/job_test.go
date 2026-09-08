@@ -23,7 +23,7 @@ func TestBuildJob(t *testing.T) {
 	th.Status.Template.ContentHash = "abc"
 	th.Status.Template.BootcImageID = "id"
 	Settings.Toehold.BibImage = "bib:latest"
-	Settings.Toehold.UploaderImage = "uploader:latest"
+	Settings.Toehold.ImporterImage = "importer:latest"
 	job := r.buildJob(th, "creds")
 	if job == nil {
 		t.Fatal("expected job")
@@ -31,7 +31,10 @@ func TestBuildJob(t *testing.T) {
 	if len(job.Spec.Template.Spec.InitContainers) != 1 {
 		t.Fatalf("expected bib initContainer, got %d", len(job.Spec.Template.Spec.InitContainers))
 	}
-	if job.Spec.Template.Spec.Containers[0].Image != "uploader:latest" {
-		t.Fatalf("unexpected uploader image %q", job.Spec.Template.Spec.Containers[0].Image)
+	if job.Spec.Template.Spec.Containers[0].Name != "import" {
+		t.Fatalf("unexpected container name %q", job.Spec.Template.Spec.Containers[0].Name)
+	}
+	if job.Spec.Template.Spec.Containers[0].Image != "importer:latest" {
+		t.Fatalf("unexpected importer image %q", job.Spec.Template.Spec.Containers[0].Image)
 	}
 }

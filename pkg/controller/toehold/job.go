@@ -24,12 +24,12 @@ func jobLabels(toehold *api.Toehold) map[string]string {
 
 func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job {
 	bibImage := Settings.Toehold.BibImage
-	uploaderImage := Settings.Toehold.UploaderImage
+	importerImage := Settings.Toehold.ImporterImage
 	if toehold.Spec.Images.BootcImageBuilder != "" {
 		bibImage = toehold.Spec.Images.BootcImageBuilder
 	}
-	if toehold.Spec.Images.ToeholdUploader != "" {
-		uploaderImage = toehold.Spec.Images.ToeholdUploader
+	if toehold.Spec.Images.ToeholdImporter != "" {
+		importerImage = toehold.Spec.Images.ToeholdImporter
 	}
 	backoff := int32(0)
 	activeDeadline := int64(7200)
@@ -92,8 +92,8 @@ func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job
 		},
 		Containers: []core.Container{
 			{
-				Name:            "upload",
-				Image:           uploaderImage,
+				Name:            "import",
+				Image:           importerImage,
 				ImagePullPolicy: core.PullAlways,
 				SecurityContext: &core.SecurityContext{Privileged: boolPtr(true), RunAsUser: int64Ptr(0)},
 				EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
