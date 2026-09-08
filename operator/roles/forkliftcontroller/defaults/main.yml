@@ -22,7 +22,7 @@ deep_inspection_image_xfs_fqin: "{{ lookup( 'env', 'DEEP_INSPECTION_IMAGE_XFS') 
 ova_provider_server_fqin: "{{ lookup( 'env', 'OVA_PROVIDER_SERVER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_OVA_PROVIDER_SERVER') }}"
 hyperv_provider_server_fqin: "{{ lookup( 'env', 'HYPERV_PROVIDER_SERVER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_HYPERV_PROVIDER_SERVER') }}"
 ova_proxy_fqin: "{{ lookup( 'env', 'OVA_PROXY_IMAGE') or lookup( 'env', 'RELATED_IMAGE_OVA_PROXY') }}"
-toehold_importer_image_fqin: "{{ lookup( 'env', 'TOEHOLD_IMPORTER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_TOEHOLD_IMPORTER') }}"
+toehold_uploader_image_fqin: "{{ lookup( 'env', 'TOEHOLD_UPLOADER_IMAGE') or lookup( 'env', 'RELATED_IMAGE_TOEHOLD_UPLOADER') }}"
 toehold_bib_image_fqin: "{{ lookup( 'env', 'TOEHOLD_BIB_IMAGE') or lookup( 'env', 'RELATED_IMAGE_TOEHOLD_BIB') or 'quay.io/centos-bootc/bootc-image-builder:latest' }}"
 
 # Computed names derived from app_name (internal to Ansible, not CRD fields).

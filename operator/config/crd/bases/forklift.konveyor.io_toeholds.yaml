@@ -112,8 +112,8 @@ spec:
                   bootcImageBuilder:
                     description: bootc-image-builder initContainer image.
                     type: string
-                  toeholdImporter:
-                    description: toehold-importer main container image.
+                  toeholdUploader:
+                    description: toehold-uploader main container image.
                     type: string
                 type: object
               nbd:
@@ -222,7 +222,8 @@ spec:
                 type: boolean
               targetNamespace:
                 description: Namespace where the build Job runs. Defaults to the CR
-                  namespace.
+                  namespace. Keep the CR in the same namespace as managed resources
+                  so owner references can garbage-collect the Job and creds Secret.
                 type: string
               templateName:
                 description: vCenter template name after OVF import.

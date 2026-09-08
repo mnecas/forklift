@@ -12,6 +12,7 @@ import (
 	batch "k8s.io/api/batch/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -34,6 +35,7 @@ func Add(mgr manager.Manager) error {
 			Client:        mgr.GetClient(),
 			Log:           log,
 		},
+		Scheme: mgr.GetScheme(),
 	}
 	cnt, err := controller.New(Name, mgr, controller.Options{
 		Reconciler:              reconciler,
@@ -53,6 +55,7 @@ func Add(mgr manager.Manager) error {
 
 type Reconciler struct {
 	base.Reconciler
+	Scheme *runtime.Scheme
 }
 
 func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, err error) {

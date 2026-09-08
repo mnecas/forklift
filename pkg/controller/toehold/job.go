@@ -24,12 +24,12 @@ func jobLabels(toehold *api.Toehold) map[string]string {
 
 func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job {
 	bibImage := Settings.Toehold.BibImage
-	importerImage := Settings.Toehold.ImporterImage
+	uploaderImage := Settings.Toehold.UploaderImage
 	if toehold.Spec.Images.BootcImageBuilder != "" {
 		bibImage = toehold.Spec.Images.BootcImageBuilder
 	}
-	if toehold.Spec.Images.ToeholdImporter != "" {
-		importerImage = toehold.Spec.Images.ToeholdImporter
+	if toehold.Spec.Images.ToeholdUploader != "" {
+		uploaderImage = toehold.Spec.Images.ToeholdUploader
 	}
 	backoff := int32(0)
 	activeDeadline := int64(7200)
@@ -54,6 +54,21 @@ func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job
 		{Name: "dev-kvm", MountPath: "/dev/kvm"},
 	}
 
+	bibInitMounts := volumeMounts
+	bibInitEnv := []core.EnvVar{
+		{Name: "BOOTC_IMAGE", Value: toehold.Spec.BootcImage},
+		{Name: "BOOTC_OUTPUT_TYPE", Value: "vmdk"},
+	}
+	if toehold.Spec.RegistrySecret != nil && toehold.Spec.RegistrySecret.Name != "" {
+		bibInitEnv = append(bibInitEnv,
+			core.EnvVar{Name: "REGISTRY_AUTH_FILE", Value: "/etc/bib-auth/auth.json"},
+			core.EnvVar{Name: "CONTAINERS_AUTH_FILE", Value: "/etc/bib-auth/auth.json"},
+		)
+		bibInitMounts = append(bibInitMounts, core.VolumeMount{
+			Name: "quay-auth", MountPath: "/etc/bib-auth", ReadOnly: true,
+		})
+	}
+
 	podSpec := core.PodSpec{
 		RestartPolicy:      core.RestartPolicyNever,
 		ServiceAccountName: saName,
@@ -66,16 +81,9 @@ func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job
 				Image:           bibImage,
 				ImagePullPolicy: core.PullAlways,
 				SecurityContext: &core.SecurityContext{Privileged: boolPtr(true), RunAsUser: int64Ptr(0), SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
-				Env: []core.EnvVar{
-					{Name: "BOOTC_IMAGE", Value: toehold.Spec.BootcImage},
-					{Name: "BOOTC_OUTPUT_TYPE", Value: "vmdk"},
-					{Name: "REGISTRY_AUTH_FILE", Value: "/etc/bib-auth/auth.json"},
-					{Name: "CONTAINERS_AUTH_FILE", Value: "/etc/bib-auth/auth.json"},
-				},
-				Command: []string{"/bin/bash", "-c", bibScript()},
-				VolumeMounts: append(volumeMounts, core.VolumeMount{
-					Name: "quay-auth", MountPath: "/etc/bib-auth", ReadOnly: true,
-				}),
+				Env:             bibInitEnv,
+				Command:         []string{"/bin/bash", "-c", bibScript(toehold.Spec.RegistrySecret != nil && toehold.Spec.RegistrySecret.Name != "")},
+				VolumeMounts:    bibInitMounts,
 				Resources: core.ResourceRequirements{
 					Requests: core.ResourceList{
 						core.ResourceCPU:              resource.MustParse("1"),
@@ -92,8 +100,8 @@ func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job
 		},
 		Containers: []core.Container{
 			{
-				Name:            "import",
-				Image:           importerImage,
+				Name:            "upload",
+				Image:           uploaderImage,
 				ImagePullPolicy: core.PullAlways,
 				SecurityContext: &core.SecurityContext{Privileged: boolPtr(true), RunAsUser: int64Ptr(0)},
 				EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
@@ -156,21 +164,25 @@ func (r Reconciler) buildJob(toehold *api.Toehold, secretName string) *batch.Job
 	}
 }
 
-func bibScript() string {
-	return strings.TrimSpace(`
+func bibScript(withAuth bool) string {
+	authPull := ""
+	if withAuth {
+		authPull = ` --authfile "${REGISTRY_AUTH_FILE}"`
+	}
+	return strings.TrimSpace(fmt.Sprintf(`
 set -euo pipefail
 mkdir -p /work/output /store /rpmmd /var/lib/containers/storage/overlay
 extra=()
 if command -v podman >/dev/null; then
-  podman pull --authfile "${REGISTRY_AUTH_FILE}" "${BOOTC_IMAGE}"
+  podman pull%s "${BOOTC_IMAGE}"
   extra+=(--local)
 elif command -v skopeo >/dev/null; then
-  skopeo copy --authfile "${REGISTRY_AUTH_FILE}" "docker://${BOOTC_IMAGE}" "containers-storage:${BOOTC_IMAGE}"
+  skopeo copy%s "docker://${BOOTC_IMAGE}" "containers-storage:${BOOTC_IMAGE}"
   extra+=(--local)
 fi
 bootc-image-builder build --output /work/output --store /store --rpmmd /rpmmd --type "${BOOTC_OUTPUT_TYPE}" --progress verbose "${extra[@]+"${extra[@]}"}" "${BOOTC_IMAGE}"
 find /work/output -name '*.vmdk' -exec ls -lh {} \;
-`)
+`, authPull, authPull))
 }
 
 func cpuCount(toehold *api.Toehold) int32 {

@@ -2,7 +2,7 @@ apiVersion: forklift.konveyor.io/v1beta1
 kind: Toehold
 metadata:
   name: nbdkit-toehold
-  namespace: openshift-mtv
+  namespace: toehold-e2e
 spec:
   provider:
     name: vcenter

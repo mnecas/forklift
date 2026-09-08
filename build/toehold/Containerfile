@@ -3,12 +3,8 @@ USER 0
 WORKDIR /build
 COPY . .
 ENV GOFLAGS="-mod=vendor"
-RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -ldflags="-w -s" -o /toehold-importer ./cmd/toehold-importer \
-    && curl -fsSL -o /tmp/govc.tgz https://github.com/vmware/govmomi/releases/download/v0.52.0/govc_Linux_x86_64.tar.gz \
-    && tar -C /usr/local/bin -xzf /tmp/govc.tgz govc \
-    && rm -f /tmp/govc.tgz
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -ldflags="-w -s" -o /toehold-uploader ./cmd/toehold-uploader
 
 FROM registry.access.redhat.com/ubi9-minimal:9.7-1778562320
-COPY --from=builder /toehold-importer /usr/local/bin/toehold-importer
-COPY --from=builder /usr/local/bin/govc /usr/local/bin/govc
-ENTRYPOINT ["/usr/local/bin/toehold-importer"]
+COPY --from=builder /toehold-uploader /usr/local/bin/toehold-uploader
+ENTRYPOINT ["/usr/local/bin/toehold-uploader"]

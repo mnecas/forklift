@@ -847,7 +847,7 @@ spec:
       image: "${CLI_DOWNLOAD_IMAGE}"
     - name: virt_v2v_rhel9
       image: "${VIRT_V2V_IMAGE_RHEL9}"
-    - name: toehold_importer
-      image: "${TOEHOLD_IMPORTER_IMAGE}"
+    - name: toehold_uploader
+      image: "${TOEHOLD_UPLOADER_IMAGE}"
     - name: toehold_bib
       image: "${TOEHOLD_BIB_IMAGE}"

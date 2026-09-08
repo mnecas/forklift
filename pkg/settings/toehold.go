@@ -8,13 +8,13 @@ import (
 
 const (
 	ToeholdBibImage      = "TOEHOLD_BIB_IMAGE"
-	ToeholdImporterImage = "TOEHOLD_IMPORTER_IMAGE"
+	ToeholdUploaderImage = "TOEHOLD_UPLOADER_IMAGE"
 )
 
 // Toehold settings for the toehold controller and build Job.
 type Toehold struct {
 	BibImage      string
-	ImporterImage string
+	UploaderImage string
 }
 
 func (r *Toehold) Load() error {
@@ -22,10 +22,10 @@ func (r *Toehold) Load() error {
 	if r.BibImage == "" {
 		r.BibImage = "quay.io/centos-bootc/bootc-image-builder:latest"
 	}
-	if val, ok := os.LookupEnv(ToeholdImporterImage); ok {
-		r.ImporterImage = val
+	if val, ok := os.LookupEnv(ToeholdUploaderImage); ok {
+		r.UploaderImage = val
 	} else if Settings.Role.Has(MainRole) {
-		return liberr.New("failed to find environment variable " + ToeholdImporterImage)
+		return liberr.New("failed to find environment variable " + ToeholdUploaderImage)
 	}
 	return nil
 }

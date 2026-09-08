@@ -31,7 +31,7 @@ From the feature branch:
 export REGISTRY=quay.io REGISTRY_ORG=<your-org> REGISTRY_TAG=toehold-dev
 
 make build-controller-image push-controller-image
-make build-toehold-importer-image push-toehold-importer-image
+make build-toehold-uploader-image push-toehold-uploader-image
 ```
 
 ## Phase 1 — Deploy toehold-enabled controller
@@ -51,7 +51,7 @@ oc -n openshift-mtv set image deployment/forklift-controller \
   main="${CONTROLLER_IMAGE}"
 
 oc -n openshift-mtv set env deployment/forklift-controller \
-  TOEHOLD_IMPORTER_IMAGE="${TOEHOLD_IMPORTER_IMAGE}" \
+  TOEHOLD_UPLOADER_IMAGE="${TOEHOLD_UPLOADER_IMAGE}" \
   TOEHOLD_BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
 
 oc -n openshift-mtv rollout status deployment/forklift-controller
@@ -79,7 +79,7 @@ oc apply -f deploy/toehold/cluster-prep.yaml -n toehold-e2e
 
 ### 5. Registry pull secret for bootc image
 
-If the bootc image is private:
+If the bootc image is private, optionally set `spec.registrySecret` on the Toehold CR and create the secret first:
 
 ```bash
 oc create secret docker-registry nbdkit-appliance-quay \
@@ -117,8 +117,8 @@ oc apply -f deploy/toehold/e2e-nike09.yaml
 Watch progress:
 
 ```bash
-oc get toehold -n openshift-mtv -w
-oc describe toehold nbdkit-toehold -n openshift-mtv
+oc get toehold -n toehold-e2e -w
+oc describe toehold nbdkit-toehold -n toehold-e2e
 ```
 
 Expected stage progression:
@@ -132,7 +132,7 @@ Inspect the build Job:
 ```bash
 oc get jobs -n toehold-e2e
 oc logs -n toehold-e2e job/nbdkit-toehold-build -c bootc-vmdk    # BIB: bootc → VMDK
-oc logs -n toehold-e2e job/nbdkit-toehold-build -c import       # importer: VMDK → vCenter template
+oc logs -n toehold-e2e job/nbdkit-toehold-build -c upload       # uploader: VMDK → vCenter template
 ```
 
 Verify in vCenter (`https://10.37.160.51/ui`):
@@ -173,9 +173,9 @@ cp deploy/toehold/e2e-nike09.env.example deploy/toehold/e2e-nike09.env
 
 | Symptom | Check |
 |---|---|
-| `failed to find environment variable TOEHOLD_IMPORTER_IMAGE` | Controller env vars not set |
+| `failed to find environment variable TOEHOLD_UPLOADER_IMAGE` | Controller env vars not set |
 | Build Job pending | Node selector, resource limits, privileged SCC on `toehold-builder` SA |
 | BIB initContainer fails | hostPath dirs missing, KVM unavailable, registry auth |
-| Importer fails | vCenter creds secret, datastore/folder/network names, govc in image |
+| Uploader fails | vCenter creds secret, datastore/folder/network names |
 | VM clone fails | Template not found, insufficient datastore space |
 | SSH timeout after power-on | `offload-ssh-keys-vsphere-*` secrets, guest cloud-init, firewall |

@@ -811,5 +811,8 @@ spec:
         displayName: Toehold
         kind: Toehold
         name: toeholds.forklift.konveyor.io
-        version: v1beta1
-
+  relatedImages:
+    - name: toehold_uploader
+      image: "${TOEHOLD_UPLOADER_IMAGE}"
+    - name: toehold_bib
+      image: "${TOEHOLD_BIB_IMAGE}"

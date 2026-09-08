@@ -96,9 +96,9 @@ type ToeholdImages struct {
 	// bootc-image-builder initContainer image.
 	// +optional
 	BootcImageBuilder string `json:"bootcImageBuilder,omitempty"`
-	// toehold-importer main container image.
+	// toehold-uploader main container image.
 	// +optional
-	ToeholdImporter string `json:"toeholdImporter,omitempty"`
+	ToeholdUploader string `json:"toeholdUploader,omitempty"`
 }
 
 // ToeholdSpec defines the desired state of Toehold.
@@ -121,6 +121,8 @@ type ToeholdSpec struct {
 	// +optional
 	RegistrySecret *core.LocalObjectReference `json:"registrySecret,omitempty"`
 	// Namespace where the build Job runs. Defaults to the CR namespace.
+	// Managed resources use owner references for garbage collection; keep the CR
+	// in the same namespace as the Job (do not use a different targetNamespace).
 	// +optional
 	TargetNamespace string `json:"targetNamespace,omitempty"`
 	// Optional node selector for the bib Job pod.

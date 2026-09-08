@@ -12,12 +12,20 @@ import (
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const credsSecretSuffix = "-vcenter-creds"
 
 func credsSecretName(toehold *api.Toehold) string {
 	return toehold.Name + credsSecretSuffix
+}
+
+func (r Reconciler) setOwner(toehold *api.Toehold, obj meta.Object) error {
+	if r.Scheme == nil {
+		return liberr.New("controller scheme is not configured")
+	}
+	return controllerutil.SetControllerReference(toehold, obj, r.Scheme)
 }
 
 func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.Toehold) error {
@@ -55,12 +63,18 @@ func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.Toehold,
 			Type:       core.SecretTypeOpaque,
 			StringData: data,
 		}
+		if err = r.setOwner(toehold, secret); err != nil {
+			return liberr.Wrap(err)
+		}
 		return liberr.Wrap(r.Create(ctx, secret))
 	}
 	if err != nil {
 		return liberr.Wrap(err)
 	}
 	secret.StringData = data
+	if err = r.setOwner(toehold, secret); err != nil {
+		return liberr.Wrap(err)
+	}
 	return liberr.Wrap(r.Update(ctx, secret))
 }
 
@@ -88,6 +102,9 @@ func (r Reconciler) ensureJob(ctx context.Context, toehold *api.Toehold) (*batch
 		return &list.Items[0], nil
 	}
 	job := r.buildJob(toehold, credsSecretName(toehold))
+	if err = r.setOwner(toehold, job); err != nil {
+		return nil, liberr.Wrap(err)
+	}
 	err = r.Create(ctx, job)
 	if err != nil {
 		return nil, liberr.Wrap(err)

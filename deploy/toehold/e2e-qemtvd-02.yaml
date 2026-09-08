@@ -2,9 +2,8 @@ apiVersion: forklift.konveyor.io/v1beta1
 kind: Toehold
 metadata:
   name: nbdkit-toehold
-  namespace: openshift-mtv
+  namespace: nbdkit-appliance-poc
 spec:
-  targetNamespace: nbdkit-appliance-poc
   provider:
     name: vcenter-qemtvd
     namespace: openshift-mtv

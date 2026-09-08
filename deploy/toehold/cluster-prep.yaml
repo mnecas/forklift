@@ -1,5 +1,5 @@
 # OpenShift cluster prep for toehold build Jobs.
-# Apply in the namespace where Toehold resources run (spec.targetNamespace or CR namespace).
+# Apply in the same namespace as the Toehold CR (where the build Job runs).
 #
 #   oc apply -f deploy/toehold/cluster-prep.yaml -n nbdkit-appliance-poc
 #

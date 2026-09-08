@@ -44,14 +44,14 @@ cmd_setup() {
     oc -n "$MTV_NAMESPACE" set image deployment/forklift-controller main="$CONTROLLER_IMAGE"
   fi
 
-  importer="${TOEHOLD_IMPORTER_IMAGE:-}"
-  if [[ -n "$importer" ]]; then
-    echo "==> setting TOEHOLD_IMPORTER_IMAGE on controller"
+  uploader="${TOEHOLD_UPLOADER_IMAGE:-}"
+  if [[ -n "$uploader" ]]; then
+    echo "==> setting TOEHOLD_UPLOADER_IMAGE on controller"
     oc -n "$MTV_NAMESPACE" set env deployment/forklift-controller \
-      TOEHOLD_IMPORTER_IMAGE="$importer" \
+      TOEHOLD_UPLOADER_IMAGE="$uploader" \
       TOEHOLD_BIB_IMAGE="${TOEHOLD_BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder:latest}"
   else
-    echo "warning: TOEHOLD_IMPORTER_IMAGE not set in env file; controller may fail to start toehold reconciler"
+    echo "warning: TOEHOLD_UPLOADER_IMAGE not set in env file; controller may fail to start toehold reconciler"
   fi
 
   echo "==> waiting for controller rollout"
@@ -73,15 +73,15 @@ cmd_run() {
   echo "==> applying Toehold CR"
   oc apply -f "$ROOT/deploy/toehold/e2e-nike09.yaml"
   echo "==> watching toehold status (Ctrl-C to stop)"
-  oc get toehold nbdkit-toehold -n "$MTV_NAMESPACE" -w
+  oc get toehold nbdkit-toehold -n "$TOEHOLD_TARGET_NS" -w
 }
 
 cmd_status() {
   load_env
   oc_login
   echo "==> Toehold CR"
-  oc get toehold -n "$MTV_NAMESPACE" -o wide 2>/dev/null || echo "(no toehold CRs)"
-  oc describe toehold nbdkit-toehold -n "$MTV_NAMESPACE" 2>/dev/null || true
+  oc get toehold -n "$TOEHOLD_TARGET_NS" -o wide 2>/dev/null || echo "(no toehold CRs)"
+  oc describe toehold nbdkit-toehold -n "$TOEHOLD_TARGET_NS" 2>/dev/null || true
   echo ""
   echo "==> Build Jobs in $TOEHOLD_TARGET_NS"
   oc get jobs -n "$TOEHOLD_TARGET_NS" -l forklift.konveyor.io/toehold=nbdkit-toehold 2>/dev/null || true
@@ -99,17 +99,15 @@ cmd_logs() {
   echo "==> bootc-vmdk (initContainer)"
   oc logs -n "$TOEHOLD_TARGET_NS" "job/$job" -c bootc-vmdk --tail=80 2>/dev/null || echo "(not started yet)"
   echo ""
-  echo "==> import (main container)"
-  oc logs -n "$TOEHOLD_TARGET_NS" "job/$job" -c import --tail=80 2>/dev/null || echo "(not started yet)"
+  echo "==> upload (main container)"
+  oc logs -n "$TOEHOLD_TARGET_NS" "job/$job" -c upload --tail=80 2>/dev/null || echo "(not started yet)"
 }
 
 cmd_teardown() {
   load_env
   oc_login
-  echo "==> deleting Toehold CR"
+  echo "==> deleting Toehold CR (owned Job and creds Secret are garbage-collected)"
   oc delete -f "$ROOT/deploy/toehold/e2e-nike09.yaml" --ignore-not-found
-  echo "==> deleting build jobs"
-  oc delete jobs -n "$TOEHOLD_TARGET_NS" -l forklift.konveyor.io/toehold=nbdkit-toehold --ignore-not-found
   echo "teardown complete (template/VM retained per spec.retainTemplate default)"
 }
 
