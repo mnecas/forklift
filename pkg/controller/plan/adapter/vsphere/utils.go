@@ -50,6 +50,16 @@ func extractDiskFileName(diskPath string) string {
 	return filename
 }
 
+// parseDatastoreName extracts the datastore name from a vSphere disk file path.
+// Input:  "[datastore13] some-vm/disk-0.vmdk"
+// Output: "datastore13"
+func parseDatastoreName(diskPath string) string {
+	if matches := datastorePattern.FindStringSubmatch(diskPath); len(matches) == 3 {
+		return matches[1]
+	}
+	return ""
+}
+
 func baseVolume(fileName string, warm bool) string {
 	if warm {
 		// for warm migrations, we return the very first volume of the disk
