@@ -1,0 +1,132 @@
+package v1beta1
+
+import (
+	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
+	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+const CopyApplianceFinalizer = "forklift/copy-appliance"
+
+// CopyAppliance phases. Status is written once at the end of each reconcile,
+// so every phase here is one the appliance can actually be observed in.
+const (
+	// The appliance VM is being created in the source provider.
+	CopyAppliancePhaseProvisioning = "Provisioning"
+	// The appliance VM has been created but is not yet running.
+	CopyAppliancePhaseCreated = "Created"
+	// The appliance VM has been asked to power on.
+	CopyAppliancePhasePoweringOn = "PoweringOn"
+	// The appliance VM is present and powered on.
+	CopyAppliancePhaseReady = "Ready"
+	// The appliance VM is being deleted.
+	CopyAppliancePhaseDeleting = "Deleting"
+	// The appliance VM could not be provisioned.
+	CopyAppliancePhaseFailed = "Failed"
+)
+
+// CopyAppliance specification.
+//
+// The appliance VM is named "forklift-copy-<uid>" after the CopyAppliance's
+// UID, and that name is how the controller recognizes the VM as its own. There
+// is no override field: a VM whose name did not follow from its CopyAppliance
+// could not be found again.
+type CopyApplianceSpec struct {
+	// Source provider in which the appliance VM is created.
+	Provider core.ObjectReference `json:"provider" ref:"Provider"`
+	// Guest OS identifier for the appliance VM (e.g. "otherGuest64").
+	GuestId string `json:"guestId"`
+	// Number of virtual CPUs for the appliance VM.
+	// +kubebuilder:validation:Minimum=1
+	NumCPUs int32 `json:"numCpus"`
+	// Memory for the appliance VM, in MiB.
+	// +kubebuilder:validation:Minimum=1
+	MemoryMB int64 `json:"memoryMB"`
+	// Datacenter in which the appliance VM is created.
+	// +optional
+	Datacenter string `json:"datacenter,omitempty"`
+	// Datastore that holds the appliance VM home directory.
+	Datastore string `json:"datastore"`
+	// Resource pool in which the appliance VM is created.
+	ResourcePool string `json:"resourcePool"`
+	// Host on which the appliance VM is placed. When empty, placement is
+	// left to DRS.
+	// +optional
+	Host string `json:"host,omitempty"`
+	// Inventory folder in which the appliance VM is created.
+	Folder string `json:"folder"`
+	// Network the appliance VM is reached on, attached as its first NIC.
+	// Either a standard portgroup or a distributed portgroup.
+	// +kubebuilder:validation:MinLength=1
+	ManagementNetwork string `json:"managementNetwork"`
+	// Network the appliance VM moves disk data over, attached as its second
+	// NIC. When empty the appliance is given only a management NIC.
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	TransferNetwork string `json:"transferNetwork,omitempty"`
+	// Datastore path of the existing root disk image vmdk to boot the
+	// appliance from (e.g. "[datastore1] images/appliance-root.vmdk").
+	// The image must support the paravirtual SCSI controller the appliance
+	// VM is built with, or it will not find its boot disk.
+	// +kubebuilder:validation:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
+	RootDiskPath string `json:"rootDiskPath"`
+	// Datastore paths of existing vmdks (belonging to other VMs) to attach
+	// to the appliance VM (e.g. "[datastore13] some-vm/disk-0.vmdk").
+	// Capped so that the root disk plus the attached disks fit within the
+	// four SCSI controllers vSphere permits per VM (4 x 15 addressable
+	// units = 60 disks).
+	// +kubebuilder:validation:MaxItems=59
+	// +kubebuilder:validation:items:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
+	// +optional
+	AttachDiskPaths []string `json:"attachDiskPaths,omitempty"`
+}
+
+// CopyAppliance status.
+type CopyApplianceStatus struct {
+	// Conditions.
+	libcnd.Conditions `json:",inline"`
+	// The most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// The managed object reference ID of the created appliance VM.
+	// +optional
+	VMID string `json:"vmID,omitempty"`
+	// The instance UUID of the vCenter the appliance VM was created in. A
+	// managed object reference is only unique within one vCenter, so VMID
+	// must not be trusted when this does not match the connected instance.
+	// +optional
+	VCenterInstanceUUID string `json:"vcenterInstanceUUID,omitempty"`
+	// The coarse lifecycle phase of the appliance VM.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+}
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CopyAppliance is the Schema for API which causes copy appliances to be created
+// in source hypervisors to facilitate disk transfer.
+// +k8s:openapi-gen=true
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:subresource:status
+type CopyAppliance struct {
+	meta.TypeMeta   `json:",inline"`
+	meta.ObjectMeta `json:"metadata,omitempty"`
+	Spec            CopyApplianceSpec   `json:"spec,omitempty"`
+	Status          CopyApplianceStatus `json:"status,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CopyApplianceList contains a list of CopyAppliances
+type CopyApplianceList struct {
+	meta.TypeMeta `json:",inline"`
+	meta.ListMeta `json:"metadata,omitempty"`
+	Items         []CopyAppliance `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&CopyAppliance{}, &CopyApplianceList{})
+}

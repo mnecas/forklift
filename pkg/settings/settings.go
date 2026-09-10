@@ -38,6 +38,8 @@ type ControllerSettings struct {
 	Features
 	// Provider settings.
 	Providers
+	// Copy appliance settings.
+	CopyAppliance
 	OpenShift   bool
 	Development bool
 }
@@ -77,6 +79,10 @@ func (r *ControllerSettings) Load() error {
 		return err
 	}
 	err = r.Providers.Load()
+	if err != nil {
+		return err
+	}
+	err = r.CopyAppliance.Load()
 	if err != nil {
 		return err
 	}
