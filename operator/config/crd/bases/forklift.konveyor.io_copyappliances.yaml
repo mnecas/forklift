@@ -1,0 +1,243 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: copyappliances.forklift.konveyor.io
+spec:
+  group: forklift.konveyor.io
+  names:
+    kind: CopyAppliance
+    listKind: CopyApplianceList
+    plural: copyappliances
+    singular: copyappliance
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          CopyAppliance is the Schema for API which causes copy appliances to be created
+          in source hypervisors to facilitate disk transfer.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CopyAppliance specification.
+
+              The appliance VM is named "forklift-copy-<uid>" after the CopyAppliance's
+              UID, and that name is how the controller recognizes the VM as its own. There
+              is no override field: a VM whose name did not follow from its CopyAppliance
+              could not be found again.
+            properties:
+              attachDiskPaths:
+                description: |-
+                  Datastore paths of existing vmdks (belonging to other VMs) to attach
+                  to the appliance VM (e.g. "[datastore13] some-vm/disk-0.vmdk").
+                  Capped so that the root disk plus the attached disks fit within the
+                  four SCSI controllers vSphere permits per VM (4 x 15 addressable
+                  units = 60 disks).
+                items:
+                  pattern: ^\[[^\]]+\]\s*.+\.vmdk$
+                  type: string
+                maxItems: 59
+                type: array
+              datacenter:
+                description: Datacenter in which the appliance VM is created.
+                type: string
+              datastore:
+                description: Datastore that holds the appliance VM home directory.
+                type: string
+              folder:
+                description: Inventory folder in which the appliance VM is created.
+                type: string
+              guestId:
+                description: Guest OS identifier for the appliance VM (e.g. "otherGuest64").
+                type: string
+              host:
+                description: |-
+                  Host on which the appliance VM is placed. When empty, placement is
+                  left to DRS.
+                type: string
+              managementNetwork:
+                description: |-
+                  Network the appliance VM is reached on, attached as its first NIC.
+                  Either a standard portgroup or a distributed portgroup.
+                minLength: 1
+                type: string
+              memoryMB:
+                description: Memory for the appliance VM, in MiB.
+                format: int64
+                minimum: 1
+                type: integer
+              numCpus:
+                description: Number of virtual CPUs for the appliance VM.
+                format: int32
+                minimum: 1
+                type: integer
+              provider:
+                description: Source provider in which the appliance VM is created.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              resourcePool:
+                description: Resource pool in which the appliance VM is created.
+                type: string
+              rootDiskPath:
+                description: |-
+                  Datastore path of the existing root disk image vmdk to boot the
+                  appliance from (e.g. "[datastore1] images/appliance-root.vmdk").
+                  The image must support the paravirtual SCSI controller the appliance
+                  VM is built with, or it will not find its boot disk.
+                pattern: ^\[[^\]]+\]\s*.+\.vmdk$
+                type: string
+              transferNetwork:
+                description: |-
+                  Network the appliance VM moves disk data over, attached as its second
+                  NIC. When empty the appliance is given only a management NIC.
+                minLength: 1
+                type: string
+            required:
+            - datastore
+            - folder
+            - guestId
+            - managementNetwork
+            - memoryMB
+            - numCpus
+            - provider
+            - resourcePool
+            - rootDiskPath
+            type: object
+          status:
+            description: CopyAppliance status.
+            properties:
+              conditions:
+                description: List of conditions.
+                items:
+                  description: Condition
+                  properties:
+                    category:
+                      description: The condition category.
+                      type: string
+                    durable:
+                      description: The condition is durable - never un-staged.
+                      type: boolean
+                    items:
+                      description: A list of items referenced in the `Message`.
+                      items:
+                        type: string
+                      type: array
+                    lastTransitionTime:
+                      description: When the last status transition occurred.
+                      format: date-time
+                      type: string
+                    message:
+                      description: The human readable description of the condition.
+                      type: string
+                    reason:
+                      description: The reason for the condition or transition.
+                      type: string
+                    status:
+                      description: The condition status [true,false].
+                      type: string
+                    suggestion:
+                      description: A suggested action or resolution for the condition.
+                      type: string
+                    type:
+                      description: The condition type.
+                      type: string
+                  required:
+                  - category
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: The most recent generation observed by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: The coarse lifecycle phase of the appliance VM.
+                type: string
+              vcenterInstanceUUID:
+                description: |-
+                  The instance UUID of the vCenter the appliance VM was created in. A
+                  managed object reference is only unique within one vCenter, so VMID
+                  must not be trusted when this does not match the connected instance.
+                type: string
+              vmID:
+                description: The managed object reference ID of the created appliance
+                  VM.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

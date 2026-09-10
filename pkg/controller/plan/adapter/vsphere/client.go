@@ -562,26 +562,17 @@ func nullableHosts() (hosts map[string]*v1beta1.Host, err error) {
 // Connect to the vSphere API.
 func (r *Client) connect() error {
 	r.Close()
-	url, err := liburl.Parse(r.Source.Provider.Spec.URL)
+	client, err := base.ConnectGovmomi(
+		context.TODO(),
+		r.Source.Provider.Spec.URL,
+		r.user(),
+		r.password(),
+		r.thumbprint(),
+		r.Source.Secret)
 	if err != nil {
 		return liberr.Wrap(err)
 	}
-	url.User = liburl.UserPassword(r.user(), r.password())
-	soapClient := soap.NewClient(url, base.GetInsecureSkipVerifyFlag(r.Source.Secret))
-	soapClient.SetThumbprint(url.Host, r.thumbprint())
-	vimClient, err := vim25.NewClient(context.TODO(), soapClient)
-	if err != nil {
-		return liberr.Wrap(err)
-	}
-	r.client = &govmomi.Client{
-		SessionManager: session.NewManager(vimClient),
-		Client:         vimClient,
-	}
-	err = r.client.Login(context.TODO(), url.User)
-	if err != nil {
-		return liberr.Wrap(err)
-	}
-
+	r.client = client
 	return nil
 }
 
