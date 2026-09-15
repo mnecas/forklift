@@ -2,19 +2,17 @@ package copyappliance
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
-	"github.com/kubev2v/forklift/pkg/controller/plan/adapter/vsphere"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -51,7 +49,6 @@ func Add(mgr manager.Manager) error {
 		log.Trace(err)
 		return err
 	}
-	// Primary CR.
 	err = cnt.Watch(
 		source.Kind(mgr.GetCache(), &api.CopyAppliance{},
 			&handler.TypedEnqueueRequestForObject[*api.CopyAppliance]{},
@@ -86,7 +83,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	err = r.Get(ctx, request.NamespacedName, appliance)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.Log.Info("Copy appliance resource deleted.")
+			r.Log.Info("Resource deleted.")
 			err = nil
 		}
 		return
@@ -102,18 +99,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 			return
 		}
 		err = r.Deploy(ctx, appliance)
+		if err != nil {
+			return
+		}
 	} else {
 		err = r.Teardown(ctx, appliance)
-		if err == nil {
-			// The appliance VM is gone; releasing the finalizer allows the
-			// CR to be removed. No status update is needed afterwards.
-			err = r.RemoveFinalizer(ctx, appliance)
+		if err != nil {
+			return
+		}
+		err = r.RemoveFinalizer(ctx, appliance)
+		if err != nil {
 			return
 		}
 	}
 
-	// Always persist status (conditions/phase) even when Deploy/Teardown
-	// returned an error, so the user can see why the appliance is not ready.
 	r.Record(appliance, appliance.Status.Conditions)
 	appliance.Status.ObservedGeneration = appliance.Generation
 	uErr := r.Status().Update(ctx, appliance)
@@ -121,11 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		err = liberr.Wrap(uErr)
 	}
 
-	// The appliance converges over several passes, waiting on vSphere in
-	// between; the phase reached says how soon to look again.
 	result.RequeueAfter = requeueFor(appliance.Status.Phase)
-
-	// Done.
 	return
 }
 
@@ -176,6 +171,34 @@ func (r *Reconciler) RemoveFinalizer(ctx context.Context, appliance *api.CopyApp
 	return
 }
 
+func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAppliance) (ac *ApplianceContext, err error) {
+	providerKey := types.NamespacedName{
+		Namespace: appliance.Spec.Provider.Namespace,
+		Name:      appliance.Spec.Provider.Name,
+	}
+	provider := &api.Provider{}
+	err = r.Client.Get(ctx, providerKey, provider)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	secretKey := types.NamespacedName{
+		Namespace: provider.Spec.Secret.Namespace,
+		Name:      provider.Spec.Secret.Name,
+	}
+	secret := &core.Secret{}
+	err = r.Client.Get(ctx, secretKey, secret)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	ac, err = NewApplianceContext(ctx, appliance, provider, secret, r.Log)
+	if err != nil {
+		return
+	}
+	return
+}
+
 // Deploy drives the appliance VM one step closer to running and returns. Each
 // step that has to wait on vSphere leaves a phase behind and lets the requeue
 // bring us back, rather than blocking the worker on a poll loop.
@@ -183,63 +206,26 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 	appliance.Status.BeginStagingConditions()
 	defer appliance.Status.EndStagingConditions()
 
-	acClient, err := r.applianceClient(ctx, appliance)
+	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
 		r.setFailed(appliance, "ConnectFailed", err)
 		return
 	}
-	defer acClient.Close()
+	defer applianceContext.Close()
 
+	// TODO: this needs to be dealt with but this is the wrong way to do it
 	// A moRef is unique only within one vCenter. If the provider now points
 	// somewhere else, the recorded ID names a stranger's VM.
-	r.forgetForeignVM(appliance, acClient.InstanceUUID())
+	//r.forgetForeignVM(appliance, acClient.InstanceUUID())
 
-	if appliance.Status.VMID == "" {
-		appliance.Status.Phase = api.CopyAppliancePhaseProvisioning
-		var vmID string
-		vmID, err = acClient.EnsureVM(ctx, applianceVMSpec(appliance))
-		if err != nil {
-			r.setFailed(appliance, "ProvisionFailed", err)
-			return
-		}
-		appliance.Status.VMID = vmID
-		appliance.Status.VCenterInstanceUUID = acClient.InstanceUUID()
-		appliance.Status.Phase = api.CopyAppliancePhaseCreated
-		r.setPending(appliance, "Created", "The appliance VM has been created and is not yet running.")
-		return
+	runner := DeployRunner{context: applianceContext}
+	if appliance.Status.Phase == "" {
+		runner.Begin()
 	}
-
-	poweredOn, err := acClient.PoweredOn(ctx, appliance.Status.VMID)
+	err = runner.Run(ctx)
 	if err != nil {
-		if errors.Is(err, vsphere.ErrVMNotFound) {
-			// Deleted out from under us; rebuild rather than fail forever.
-			r.Log.Info("Appliance VM is gone; recreating.", "vm", appliance.Status.VMID)
-			r.forgetVM(appliance)
-			appliance.Status.Phase = api.CopyAppliancePhaseProvisioning
-			r.setPending(appliance, "Recreating", "The appliance VM no longer exists and is being recreated.")
-			return nil
-		}
-		r.setFailed(appliance, "PowerStateFailed", err)
-		return
+		r.setFailed(appliance, "DeployFailed", err)
 	}
-
-	if !poweredOn {
-		if err = acClient.PowerOn(ctx, appliance.Status.VMID); err != nil {
-			r.setFailed(appliance, "PowerOnFailed", err)
-			return
-		}
-		appliance.Status.Phase = api.CopyAppliancePhasePoweringOn
-		r.setPending(appliance, "PoweringOn", "The appliance VM has been asked to power on.")
-		return
-	}
-
-	appliance.Status.Phase = api.CopyAppliancePhaseReady
-	appliance.Status.SetCondition(libcnd.Condition{
-		Type:     libcnd.Ready,
-		Status:   libcnd.True,
-		Category: libcnd.Required,
-		Message:  "The copy appliance VM has been created and is powered on.",
-	})
 	return
 }
 
@@ -268,7 +254,7 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 
 	r.forgetForeignVM(appliance, acClient.InstanceUUID())
 
-	vmID := appliance.Status.VMID
+	vmID := appliance.Status.MoRef
 	if vmID == "" {
 		// The VM may have been created without its moRef ever reaching the
 		// status subresource. Its name is the only way back to it.
@@ -309,11 +295,11 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 // powering on — or destroying — an unrelated VM.
 func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID string) {
 	recorded := appliance.Status.VCenterInstanceUUID
-	if appliance.Status.VMID == "" || recorded == "" || instanceUUID == "" || recorded == instanceUUID {
+	if appliance.Status.MoRef == "" || recorded == "" || instanceUUID == "" || recorded == instanceUUID {
 		return
 	}
 	r.Log.Info("Recorded appliance VM belongs to a different vCenter; ignoring it.",
-		"vm", appliance.Status.VMID,
+		"vm", appliance.Status.MoRef,
 		"recorded", recorded,
 		"connected", instanceUUID)
 	r.forgetVM(appliance)
@@ -322,29 +308,14 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 // forgetVM clears every status field that describes a specific VM. They are
 // only meaningful together, so they are always cleared together.
 func (r *Reconciler) forgetVM(appliance *api.CopyAppliance) {
-	appliance.Status.VMID = ""
+	appliance.Status.MoRef = ""
 	appliance.Status.VCenterInstanceUUID = ""
 }
 
 // applianceClient resolves the referenced provider and its secret and connects
 // to the source provider. The caller owns the returned client and must Close it.
-func (r *Reconciler) applianceClient(ctx context.Context, appliance *api.CopyAppliance) (acClient *vsphere.ApplianceClient, err error) {
-	provider, secret, err := r.providerWithSecret(ctx, appliance)
-	if err != nil {
-		return
-	}
-	acClient, err = vsphere.NewApplianceClient(ctx, provider, secret, r.Log)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	return
-}
-
-// providerWithSecret fetches the provider referenced by the CR along with the
-// secret holding its credentials.
-func (r *Reconciler) providerWithSecret(ctx context.Context, appliance *api.CopyAppliance) (provider *api.Provider, secret *core.Secret, err error) {
-	provider = &api.Provider{}
+func (r *Reconciler) applianceClient(ctx context.Context, appliance *api.CopyAppliance) (acClient *ApplianceClient, err error) {
+	provider := &api.Provider{}
 	err = r.Get(
 		ctx,
 		client.ObjectKey{
@@ -356,8 +327,7 @@ func (r *Reconciler) providerWithSecret(ctx context.Context, appliance *api.Copy
 		err = liberr.Wrap(err)
 		return
 	}
-
-	secret = &core.Secret{}
+	secret := &core.Secret{}
 	err = r.Get(
 		ctx,
 		client.ObjectKey{
@@ -369,40 +339,12 @@ func (r *Reconciler) providerWithSecret(ctx context.Context, appliance *api.Copy
 		err = liberr.Wrap(err)
 		return
 	}
+	acClient, err = NewApplianceClient(ctx, provider, secret, r.Log)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
 	return
-}
-
-// applianceVMSpec builds the vSphere appliance VM spec from the CR.
-func applianceVMSpec(appliance *api.CopyAppliance) vsphere.ApplianceVMSpec {
-	return vsphere.ApplianceVMSpec{
-		Name:            applianceVMName(appliance),
-		GuestId:         appliance.Spec.GuestId,
-		NumCPUs:         appliance.Spec.NumCPUs,
-		MemoryMB:        appliance.Spec.MemoryMB,
-		Datacenter:      appliance.Spec.Datacenter,
-		Datastore:       appliance.Spec.Datastore,
-		ResourcePool:    appliance.Spec.ResourcePool,
-		Host:            appliance.Spec.Host,
-		Folder:          appliance.Spec.Folder,
-		Networks:        applianceNetworks(appliance),
-		RootDiskPath:    appliance.Spec.RootDiskPath,
-		AttachDiskPaths: appliance.Spec.AttachDiskPaths,
-		VMID:            appliance.Status.VMID,
-		Annotation: fmt.Sprintf(
-			"Forklift copy appliance for CopyAppliance %s/%s.",
-			appliance.Namespace, appliance.Name),
-	}
-}
-
-// applianceNetworks returns the networks to attach to the appliance VM, in NIC
-// order. The transfer network is optional, so an appliance may have only the
-// one management NIC.
-func applianceNetworks(appliance *api.CopyAppliance) []string {
-	networks := []string{appliance.Spec.ManagementNetwork}
-	if appliance.Spec.TransferNetwork != "" {
-		networks = append(networks, appliance.Spec.TransferNetwork)
-	}
-	return networks
 }
 
 // setFailed records a failed reconcile as a not-ready condition and phase.
@@ -427,13 +369,4 @@ func (r *Reconciler) setPending(appliance *api.CopyAppliance, reason, message st
 		Category: libcnd.Advisory,
 		Message:  message,
 	})
-}
-
-// applianceVMName returns the name the appliance VM is created and found under.
-// It is derived from the CopyAppliance's UID, so the controller can recompute
-// it rather than remember it, and so a VM can always be traced back to the
-// resource that asked for it. A UID is 36 characters, leaving the result well
-// inside the 80 vSphere allows in a VM name.
-func applianceVMName(appliance *api.CopyAppliance) string {
-	return fmt.Sprintf("forklift-copy-%s", appliance.UID)
 }
