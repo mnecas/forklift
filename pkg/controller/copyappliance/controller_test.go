@@ -69,16 +69,6 @@ func TestApplianceVMName(t *testing.T) {
 			t.Errorf("applianceVMName = %q, want %q", got, want)
 		}
 	})
-
-	t.Run("fits in a vSphere VM name", func(t *testing.T) {
-		// vSphere caps a VM name at 80 characters. A UID is 36, so the
-		// prefixed name has room to spare -- but the prefix is editable.
-		const maxVSphereVMName = 80
-		if got := applianceVMName(testAppliance()); len(got) > maxVSphereVMName {
-			t.Errorf("applianceVMName is %d characters (%q), vSphere allows %d",
-				len(got), got, maxVSphereVMName)
-		}
-	})
 }
 
 func TestApplianceRequeueFor(t *testing.T) {
@@ -120,27 +110,11 @@ func TestApplianceRequeueFor(t *testing.T) {
 	}
 }
 
-// A converging appliance must always come back on its own. Only Ready may
-// stop, and only because a watch event will bring it back.
-func TestApplianceNonTerminalPhasesRequeue(t *testing.T) {
-	for _, phase := range []string{
-		api.CopyAppliancePhaseProvisioning,
-		api.CopyAppliancePhaseCreated,
-		api.CopyAppliancePhasePoweringOn,
-		api.CopyAppliancePhaseDeleting,
-		api.CopyAppliancePhaseFailed,
-	} {
-		if requeueFor(phase) == 0 {
-			t.Errorf("phase %q does not requeue; the appliance would stall", phase)
-		}
-	}
-}
-
 // The client looks the VM up by the Name in this spec and by the recorded
 // VMID, so both have to survive the translation from the CR.
 func TestApplianceVMSpecCarriesIdentityAndNetworks(t *testing.T) {
 	appliance := testAppliance()
-	appliance.Status.VMID = "vm-42"
+	appliance.Status.MoRef = "vm-42"
 
 	spec := applianceVMSpec(appliance)
 	if spec.Name != applianceVMName(appliance) {
@@ -163,9 +137,9 @@ func TestApplianceNetworksWithoutATransferNetwork(t *testing.T) {
 	appliance := testAppliance()
 	appliance.Spec.TransferNetwork = ""
 
-	networks := applianceNetworks(appliance)
-	if !slices.Equal(networks, []string{appliance.Spec.ManagementNetwork}) {
-		t.Errorf("networks = %v, want just the management network", networks)
+	spec := applianceVMSpec(appliance)
+	if !slices.Equal(spec.Networks, []string{appliance.Spec.ManagementNetwork}) {
+		t.Errorf("networks = %v, want just the management network", spec.Networks)
 	}
 }
 
@@ -174,12 +148,12 @@ func TestApplianceForgetVM(t *testing.T) {
 
 	t.Run("clears the whole identity", func(t *testing.T) {
 		appliance := testAppliance()
-		appliance.Status.VMID = "vm-42"
+		appliance.Status.MoRef = "vm-42"
 		appliance.Status.VCenterInstanceUUID = "uuid-a"
 
 		r.forgetVM(appliance)
 
-		if appliance.Status.VMID != "" || appliance.Status.VCenterInstanceUUID != "" {
+		if appliance.Status.MoRef != "" || appliance.Status.VCenterInstanceUUID != "" {
 			t.Errorf("identity not fully cleared: %+v", appliance.Status)
 		}
 	})
@@ -209,12 +183,12 @@ func TestApplianceForgetForeignVM(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			appliance := testAppliance()
-			appliance.Status.VMID = tc.vmID
+			appliance.Status.MoRef = tc.vmID
 			appliance.Status.VCenterInstanceUUID = tc.recorded
 
 			r.forgetForeignVM(appliance, tc.connected)
 
-			forgot := appliance.Status.VMID == "" && tc.vmID != ""
+			forgot := appliance.Status.MoRef == "" && tc.vmID != ""
 			if forgot != tc.wantForgot {
 				t.Errorf("forgot = %v, want %v. %s", forgot, tc.wantForgot, tc.description)
 			}

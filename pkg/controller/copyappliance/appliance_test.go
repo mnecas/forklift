@@ -1,10 +1,11 @@
-package vsphere
+package copyappliance
 
 import (
 	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/kubev2v/forklift/pkg/controller/plan/adapter/vsphere"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/vmware/govmomi/vim25/types"
 )
@@ -163,7 +164,7 @@ func TestParseDatastoreName(t *testing.T) {
 		{"no-brackets.vmdk", ""},
 	}
 	for _, tc := range tests {
-		if got := parseDatastoreName(tc.path); got != tc.want {
+		if got := vsphere.parseDatastoreName(tc.path); got != tc.want {
 			t.Errorf("parseDatastoreName(%q) = %q, want %q", tc.path, got, tc.want)
 		}
 	}
