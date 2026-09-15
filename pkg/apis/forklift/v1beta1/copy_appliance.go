@@ -79,6 +79,7 @@ type CopyApplianceSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
 	// +optional
 	AttachDiskPaths []string `json:"attachDiskPaths,omitempty"`
+	Template        string
 }
 
 // CopyAppliance status.
@@ -90,15 +91,16 @@ type CopyApplianceStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// The managed object reference ID of the created appliance VM.
 	// +optional
-	VMID string `json:"vmID,omitempty"`
+	MoRef string `json:"moREF,omitempty"`
 	// The instance UUID of the vCenter the appliance VM was created in. A
-	// managed object reference is only unique within one vCenter, so VMID
+	// managed object reference is only unique within one vCenter, so MoRef
 	// must not be trusted when this does not match the connected instance.
 	// +optional
 	VCenterInstanceUUID string `json:"vcenterInstanceUUID,omitempty"`
 	// The coarse lifecycle phase of the appliance VM.
 	// +optional
-	Phase string `json:"phase,omitempty"`
+	Phase   string `json:"phase,omitempty"`
+	TaskRef string `json:"taskREF,omitempty"`
 }
 
 // +genclient
