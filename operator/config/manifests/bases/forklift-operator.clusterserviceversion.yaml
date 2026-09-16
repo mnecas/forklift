@@ -96,6 +96,11 @@ spec:
       kind: Conversion
       name: conversions.forklift.konveyor.io
       version: v1beta1
+    - description: vSphere toehold template builder
+      displayName: Toehold Template
+      kind: ToeholdTemplate
+      name: toeholdtemplates.forklift.konveyor.io
+      version: v1beta1
     - description: ForkliftController is the Schema for the forkliftcontrollers API.
       displayName: Forklift Controller
       kind: ForkliftController
