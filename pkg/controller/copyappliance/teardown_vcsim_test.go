@@ -12,11 +12,13 @@ import (
 )
 
 // simulatedVCenter starts a vcsim instance and returns a client connected to
-// it. The server is closed when the test ends.
-func simulatedVCenter(t *testing.T) (ctx context.Context, client *govmomi.Client) {
+// it, along with the model, whose registry is how a test reaches behind the
+// API to set what the simulator would otherwise never report. The server is
+// closed when the test ends.
+func simulatedVCenter(t *testing.T) (ctx context.Context, model *simulator.Model, client *govmomi.Client) {
 	t.Helper()
 	ctx = context.Background()
-	model := simulator.VPX()
+	model = simulator.VPX()
 	err := model.Create()
 	if err != nil {
 		t.Fatalf("create simulator model: %v", err)
@@ -69,7 +71,7 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 // fake would assert those assumptions back at us.
 func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	t.Run("teardown runs to completion and leaves no VM behind", func(t *testing.T) {
-		ctx, client := simulatedVCenter(t)
+		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		runner := TeardownRunner{context: applianceContext}
 
@@ -80,8 +82,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if status.Phase != PhaseTeardownCompleted {
 			t.Fatalf("phase = %q after %v, want %q", status.Phase, phases, PhaseTeardownCompleted)
 		}
-		if status.MoRef != "" || status.TaskRef != "" {
-			t.Errorf("status still names a VM or a task: %+v", status)
+		if status.MoRef != "" || status.TaskRef != "" || status.Addresses != nil {
+			t.Errorf("status still names a VM, a task or an address: %+v", status)
 		}
 		_, err := vm.PowerState(ctx)
 		if err == nil {
@@ -90,7 +92,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	})
 
 	t.Run("an appliance with no recorded VM is torn down in a single pass", func(t *testing.T) {
-		ctx, client := simulatedVCenter(t)
+		ctx, _, client := simulatedVCenter(t)
 		appliance := testAppliance()
 		runner := TeardownRunner{
 			context: &ApplianceContext{Appliance: appliance, VCenter: client, Log: testLog()},
@@ -111,7 +113,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	// as done. If any of these started a task anyway, teardown would wait on a
 	// power off that never happens.
 	t.Run("a step with nothing to do starts no task", func(t *testing.T) {
-		ctx, client := simulatedVCenter(t)
+		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		runner := TeardownRunner{context: applianceContext}
 		status := &applianceContext.Appliance.Status
@@ -153,7 +155,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	// The VM can be destroyed out from under us between one reconcile and the
 	// next. That is the outcome teardown wants, not a failure to report.
 	t.Run("a VM that is already gone completes teardown", func(t *testing.T) {
-		ctx, client := simulatedVCenter(t)
+		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		runner := TeardownRunner{context: applianceContext}
 
@@ -187,7 +189,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	// A moRef recorded against another vCenter names some unrelated VM here.
 	// Teardown must refuse rather than destroy it.
 	t.Run("a VM recorded against another vCenter is not destroyed", func(t *testing.T) {
-		ctx, client := simulatedVCenter(t)
+		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		applianceContext.Appliance.Status.VCenterInstanceUUID = "some-other-vcenter"
 		runner := TeardownRunner{context: applianceContext}

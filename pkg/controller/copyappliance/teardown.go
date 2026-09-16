@@ -112,12 +112,14 @@ func (r *TeardownRunner) ExecutePhase(ctx context.Context) (next string, err err
 		next = PhaseTeardownCompleted
 		fallthrough
 	case PhaseTeardownCompleted:
-		// The VM is gone, so the moRef names nothing. Clearing it makes a
-		// repeated teardown a no-op rather than a second destroy attempt.
+		// The VM is gone, so the moRef names nothing and the addresses reach
+		// nothing. Clearing them makes a repeated teardown a no-op rather than
+		// a second destroy attempt.
 		if r.context.Appliance.Status.MoRef != "" {
 			r.context.Log.Info("Deleted appliance VM.", "vm", r.context.Appliance.Status.MoRef)
 			r.context.Appliance.Status.MoRef = ""
 		}
+		r.context.Appliance.Status.Addresses = nil
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,

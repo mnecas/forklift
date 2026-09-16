@@ -2,7 +2,9 @@ package copyappliance
 
 import (
 	"context"
+	"path"
 
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -131,11 +133,45 @@ func (r *DeployRunner) WaitForClone(ctx context.Context) (done bool, err error) 
 	return
 }
 
-// WaitForExports reports whether the appliance has published the disk exports
-// the migration will read from.
+// WaitForExports reports whether the appliance is ready for the migration to
+// read from, and records the addresses the guest reports itself on.
+//
+// The appliance does not publish its disk exports yet. What it does publish,
+// once the guest has booted far enough for VMware Tools to answer, is an
+// address on each network the VM was built with, and an appliance with no
+// address on a network cannot be reached over it.
 func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
-	// NO-OP: the appliance does not report its exports yet.
+	vm := r.context.VM(r.context.Appliance.Status.MoRef)
+	addresses, err := r.context.GuestAddresses(ctx, vm)
+	if err != nil {
+		return
+	}
+	// Recorded every pass, so a half-configured appliance shows the addresses
+	// it does have while it waits for the rest.
+	r.context.Appliance.Status.Addresses = addresses
+
+	spec := r.context.Appliance.Spec
+	if !reportsNetwork(addresses, spec.ManagementNetwork) {
+		return
+	}
+	if spec.TransferNetwork != "" && !reportsNetwork(addresses, spec.TransferNetwork) {
+		return
+	}
 	done = true
+	return
+}
+
+// reportsNetwork reports whether the guest gave an address on the named
+// network. The spec names a network the way the vSphere finder takes it, which
+// may be an inventory path; the guest reports the portgroup's name alone.
+func reportsNetwork(addresses []api.ApplianceAddress, network string) (ok bool) {
+	name := path.Base(network)
+	for _, address := range addresses {
+		if address.Network == name {
+			ok = true
+			return
+		}
+	}
 	return
 }
 

@@ -2,6 +2,8 @@ package copyappliance
 
 import (
 	"context"
+	"net"
+	"strings"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
@@ -220,6 +222,65 @@ func (r *ApplianceContext) TaskResult(info *types.TaskInfo) (done bool, result a
 		return
 	}
 	result = info.Result
+	return
+}
+
+// GuestAddresses reports the addresses the appliance VM's guest has given
+// vCenter. A guest that is still booting, or that is not running VMware Tools,
+// reports none; that is something to wait for, not a failure.
+func (r *ApplianceContext) GuestAddresses(ctx context.Context, vm *object.VirtualMachine) (addresses []api.ApplianceAddress, err error) {
+	var managedVM mo.VirtualMachine
+	err = vm.Properties(
+		ctx,
+		vm.Reference(),
+		[]string{"guest.net"},
+		&managedVM,
+	)
+	if err != nil {
+		err = liberr.Wrap(err, "vm", vm.Reference().Value)
+		return
+	}
+	if managedVM.Guest == nil {
+		return
+	}
+	addresses = collectAddresses(managedVM.Guest.Net)
+	return
+}
+
+// collectAddresses converts what the guest reported into the addresses worth
+// recording. An adapter is described once per address it holds, the same shape
+// the inventory collector keeps guest networks in.
+func collectAddresses(nics []types.GuestNicInfo) (addresses []api.ApplianceAddress) {
+	for _, nic := range nics {
+		if nic.IpConfig == nil {
+			continue
+		}
+		for _, ip := range nic.IpConfig.IpAddress {
+			if !isRoutable(ip.IpAddress) {
+				continue
+			}
+			addresses = append(addresses, api.ApplianceAddress{
+				Network: nic.Network,
+				MAC:     strings.ToLower(nic.MacAddress),
+				IP:      ip.IpAddress,
+			})
+		}
+	}
+	return
+}
+
+// isRoutable reports whether an address the guest gave is one another host
+// could reach. An interface that has not finished configuring gives itself a
+// link-local address, which is not an address the appliance can be found at.
+func isRoutable(address string) (ok bool) {
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return
+	}
+	ok = !ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() &&
+		!ip.IsLoopback() &&
+		!ip.IsUnspecified()
 	return
 }
 
