@@ -85,12 +85,6 @@ spec:
                   Host on which the appliance VM is placed. When empty, placement is
                   left to DRS.
                 type: string
-              managementNetwork:
-                description: |-
-                  Network the appliance VM is reached on, attached as its first NIC.
-                  Either a standard portgroup or a distributed portgroup.
-                minLength: 1
-                type: string
               memoryMB:
                 description: Memory for the appliance VM, in MiB.
                 format: int64
@@ -155,29 +149,71 @@ spec:
                   VM is built with, or it will not find its boot disk.
                 pattern: ^\[[^\]]+\]\s*.+\.vmdk$
                 type: string
+              sshKey:
+                description: |-
+                  Secret holding the SSH key pair the controller logs in to the appliance
+                  with. The private key is read from the "private-key" data key; the
+                  matching public key is expected to be installed in the appliance image
+                  already.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               template:
                 description: |-
                   Inventory path of the VM template the appliance is cloned from. The
                   template supplies the root disk, so it must support the controller its
-                  disks are attached to.
-                minLength: 1
-                type: string
-              transferNetwork:
-                description: |-
-                  Network the appliance VM moves disk data over, attached as its second
-                  NIC. When empty the appliance is given only a management NIC.
+                  disks are attached to, and the one network the appliance is reached on,
+                  which the clone inherits as-is.
                 minLength: 1
                 type: string
             required:
             - datastore
             - folder
             - guestId
-            - managementNetwork
             - memoryMB
             - numCpus
             - provider
             - resourcePool
             - rootDiskPath
+            - sshKey
             - template
             type: object
           status:
@@ -185,13 +221,14 @@ spec:
             properties:
               addresses:
                 description: |-
-                  The addresses the appliance VM's guest reports, one entry per address
-                  per adapter, in the order the guest reports them. Empty until the guest
+                  The addresses the appliance VM's guest reports on its network, one entry
+                  per address, in the order the guest reports them. Empty until the guest
                   has booted far enough to answer.
                 items:
                   description: |-
-                    ApplianceAddress is an address the appliance VM's guest reports on one of its
-                    network adapters.
+                    ApplianceAddress is an address the appliance VM's guest reports on its
+                    network adapter. The template gives the appliance one network, and an adapter
+                    can hold more than one address on it.
                   properties:
                     ip:
                       description: IP address.

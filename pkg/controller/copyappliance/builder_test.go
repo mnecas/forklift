@@ -312,14 +312,12 @@ func withSettings(t *testing.T, applied settings.CopyAppliance) {
 
 func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
-		GuestId:  "otherGuest64",
-		NumCPUs:  2,
-		MemoryMB: 2048,
-		// Neither is the source VM's network, which is what makes the
-		// appliance's networks visibly a deployment choice.
-		ManagementNetwork: "/DC0/network/Management",
-		TransferNetwork:   "/DC0/network/Transfer",
-		RootDiskPath:      "[datastore1] images/appliance-root.vmdk",
+		GuestId:      "otherGuest64",
+		NumCPUs:      2,
+		MemoryMB:     2048,
+		RootDiskPath: "[datastore1] images/appliance-root.vmdk",
+		SSHKeySecret: "copy-appliance-ssh-key",
+		SSHUser:      "root",
 	}
 }
 
@@ -366,13 +364,10 @@ func TestBuild(t *testing.T) {
 	if spec.RootDiskPath != testSettings().RootDiskPath {
 		t.Errorf("RootDiskPath = %q, want it from settings", spec.RootDiskPath)
 	}
-	// The appliance is attached to the transfer networks, not to whatever the
-	// source VM happens to be plugged into.
-	if spec.ManagementNetwork != testSettings().ManagementNetwork {
-		t.Errorf("ManagementNetwork = %q, want it from settings", spec.ManagementNetwork)
-	}
-	if spec.TransferNetwork != testSettings().TransferNetwork {
-		t.Errorf("TransferNetwork = %q, want it from settings", spec.TransferNetwork)
+	// The key lives with the provider, which is where the appliance's other
+	// credentials already are.
+	if spec.SSHKey.Namespace != "forklift" || spec.SSHKey.Name != testSettings().SSHKeySecret {
+		t.Errorf("SSHKey = %v, want the settings secret in the provider namespace", spec.SSHKey)
 	}
 	if len(spec.AttachDiskPaths) != 0 {
 		t.Errorf("AttachDiskPaths = %v, want none", spec.AttachDiskPaths)
@@ -397,40 +392,20 @@ func TestBuildRejectsAnUnconfiguredRootDisk(t *testing.T) {
 	}
 }
 
-// The transfer network is optional: a deployment that has not set one up gets
-// an appliance with only its management NIC.
-func TestBuildWithoutATransferNetwork(t *testing.T) {
+// Without a key the appliance is cloned and then never configured, and the
+// deploy parks short of Ready with nothing saying why.
+func TestBuildRejectsAnUnconfiguredSSHKeySecret(t *testing.T) {
 	applied := testSettings()
-	applied.TransferNetwork = ""
-	withSettings(t, applied)
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
-
-	appliance, err := build(inventory, testProvider(), testRef)
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	if appliance.Spec.ManagementNetwork != applied.ManagementNetwork {
-		t.Errorf("ManagementNetwork = %q, want it from settings", appliance.Spec.ManagementNetwork)
-	}
-	if appliance.Spec.TransferNetwork != "" {
-		t.Errorf("TransferNetwork = %q, want it unset", appliance.Spec.TransferNetwork)
-	}
-}
-
-// An empty network name is read by the finder as "the default", so it has to
-// fail here rather than silently attach the appliance somewhere else.
-func TestBuildRejectsAnEmptyManagementNetwork(t *testing.T) {
-	applied := testSettings()
-	applied.ManagementNetwork = ""
+	applied.SSHKeySecret = ""
 	withSettings(t, applied)
 	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
 
 	_, err := build(inventory, testProvider(), testRef)
 	if err == nil {
-		t.Fatal("build succeeded without a management network")
+		t.Fatal("build succeeded without an SSH key secret")
 	}
-	if !strings.Contains(err.Error(), settings.CopyApplianceManagementNetwork) {
-		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceManagementNetwork)
+	if !strings.Contains(err.Error(), settings.CopyApplianceSSHKeySecret) {
+		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceSSHKeySecret)
 	}
 }
 
