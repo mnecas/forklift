@@ -64,13 +64,13 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 				settings.CopyApplianceRootDiskPath)
 		return
 	}
-	if Settings.CopyAppliance.ManagementNetwork == "" {
-		// This one has a default, so it is only empty if it was set empty. An
-		// empty network name is not inert: the finder reads it as "the
-		// default", which is some other network in some other place.
+	if Settings.CopyAppliance.SSHKeySecret == "" {
+		// No default, for the same reason as the root disk: it names an object
+		// that only exists in this deployment. Without it the appliance is
+		// cloned and then never configured.
 		err = liberr.New(
-			"the copy appliance management network is not configured; set " +
-				settings.CopyApplianceManagementNetwork)
+			"the copy appliance SSH key secret is not configured; set " +
+				settings.CopyApplianceSSHKeySecret)
 		return
 	}
 
@@ -79,15 +79,17 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			Namespace: provider.Namespace,
 			Name:      provider.Name,
 		},
+		SSHKey: core.ObjectReference{
+			Namespace: provider.Namespace,
+			Name:      Settings.CopyAppliance.SSHKeySecret,
+		},
 		GuestId:  Settings.CopyAppliance.GuestId,
 		NumCPUs:  Settings.CopyAppliance.NumCPUs,
 		MemoryMB: Settings.CopyAppliance.MemoryMB,
-		// The appliance is not attached to the source VM's networks: it needs
-		// to be reachable by the controller and to reach the transfer network,
-		// neither of which follows from where the source VM is plugged in.
-		ManagementNetwork: Settings.CopyAppliance.ManagementNetwork,
-		TransferNetwork:   Settings.CopyAppliance.TransferNetwork,
-		RootDiskPath:      Settings.CopyAppliance.RootDiskPath,
+		// The appliance's network is not configured here and is not the source
+		// VM's: the template carries the one network the appliance is reached
+		// on, and the clone inherits it.
+		RootDiskPath: Settings.CopyAppliance.RootDiskPath,
 	}
 	err = placement(inventory, vmRef, &spec)
 	if err != nil {

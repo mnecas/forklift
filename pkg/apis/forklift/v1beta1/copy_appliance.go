@@ -16,6 +16,11 @@ const CopyApplianceFinalizer = "forklift/copy-appliance"
 type CopyApplianceSpec struct {
 	// Source provider in which the appliance VM is created.
 	Provider core.ObjectReference `json:"provider" ref:"Provider"`
+	// Secret holding the SSH key pair the controller logs in to the appliance
+	// with. The private key is read from the "private-key" data key; the
+	// matching public key is expected to be installed in the appliance image
+	// already.
+	SSHKey core.ObjectReference `json:"sshKey" ref:"Secret"`
 	// Guest OS identifier for the appliance VM (e.g. "otherGuest64").
 	GuestId string `json:"guestId"`
 	// Number of virtual CPUs for the appliance VM.
@@ -37,15 +42,6 @@ type CopyApplianceSpec struct {
 	Host string `json:"host,omitempty"`
 	// Inventory folder in which the appliance VM is created.
 	Folder string `json:"folder"`
-	// Network the appliance VM is reached on, attached as its first NIC.
-	// Either a standard portgroup or a distributed portgroup.
-	// +kubebuilder:validation:MinLength=1
-	ManagementNetwork string `json:"managementNetwork"`
-	// Network the appliance VM moves disk data over, attached as its second
-	// NIC. When empty the appliance is given only a management NIC.
-	// +kubebuilder:validation:MinLength=1
-	// +optional
-	TransferNetwork string `json:"transferNetwork,omitempty"`
 	// Datastore path of the existing root disk image vmdk to boot the
 	// appliance from (e.g. "[datastore1] images/appliance-root.vmdk").
 	// The image must support the paravirtual SCSI controller the appliance
@@ -63,13 +59,15 @@ type CopyApplianceSpec struct {
 	AttachDiskPaths []string `json:"attachDiskPaths,omitempty"`
 	// Inventory path of the VM template the appliance is cloned from. The
 	// template supplies the root disk, so it must support the controller its
-	// disks are attached to.
+	// disks are attached to, and the one network the appliance is reached on,
+	// which the clone inherits as-is.
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
 }
 
-// ApplianceAddress is an address the appliance VM's guest reports on one of its
-// network adapters.
+// ApplianceAddress is an address the appliance VM's guest reports on its
+// network adapter. The template gives the appliance one network, and an adapter
+// can hold more than one address on it.
 type ApplianceAddress struct {
 	// Name of the portgroup the guest reports the adapter is attached to.
 	Network string `json:"network"`
@@ -89,8 +87,8 @@ type CopyApplianceStatus struct {
 	// The managed object reference ID of the created appliance VM.
 	// +optional
 	MoRef string `json:"moREF,omitempty"`
-	// The addresses the appliance VM's guest reports, one entry per address
-	// per adapter, in the order the guest reports them. Empty until the guest
+	// The addresses the appliance VM's guest reports on its network, one entry
+	// per address, in the order the guest reports them. Empty until the guest
 	// has booted far enough to answer.
 	// +optional
 	Addresses []ApplianceAddress `json:"addresses,omitempty"`

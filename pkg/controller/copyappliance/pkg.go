@@ -22,6 +22,8 @@ const (
 	PhaseDeployFailed       = "DeployFailed"
 	PhaseCloneVM            = "CloneVM"
 	PhaseWaitForClone       = "WaitForClone"
+	PhaseWaitForNetwork     = "WaitForNetwork"
+	PhaseConfigure          = "Configure"
 	PhaseWaitForExports     = "WaitForExports"
 	PhasePowerOff           = "PowerOff"
 	PhaseWaitForPowerOff    = "WaitForPowerOff"

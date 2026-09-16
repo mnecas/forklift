@@ -18,19 +18,18 @@ func TestCopyApplianceDefaults(t *testing.T) {
 	if applied.MemoryMB != DefaultCopyApplianceMemoryMB {
 		t.Errorf("MemoryMB = %d, want %d", applied.MemoryMB, DefaultCopyApplianceMemoryMB)
 	}
-	if applied.ManagementNetwork != DefaultCopyApplianceManagementNetwork {
-		t.Errorf("ManagementNetwork = %q, want %q",
-			applied.ManagementNetwork, DefaultCopyApplianceManagementNetwork)
+	if applied.SSHUser != DefaultCopyApplianceSSHUser {
+		t.Errorf("SSHUser = %q, want %q", applied.SSHUser, DefaultCopyApplianceSSHUser)
 	}
 	// There is no default: the path names a file in the deployment's own
 	// datastore, and the builder refuses to run until it is set.
 	if applied.RootDiskPath != "" {
 		t.Errorf("RootDiskPath = %q, want it unset", applied.RootDiskPath)
 	}
-	// Nor here: a deployment without a dedicated transfer network gets an
-	// appliance with only its management NIC.
-	if applied.TransferNetwork != "" {
-		t.Errorf("TransferNetwork = %q, want it unset", applied.TransferNetwork)
+	// Nor here: the secret exists only in the deployment's own cluster, and
+	// the builder refuses to run until it is named.
+	if applied.SSHKeySecret != "" {
+		t.Errorf("SSHKeySecret = %q, want it unset", applied.SSHKeySecret)
 	}
 }
 
@@ -39,8 +38,8 @@ func TestCopyApplianceFromEnvironment(t *testing.T) {
 	t.Setenv(CopyApplianceNumCPUs, "4")
 	t.Setenv(CopyApplianceMemoryMB, "8192")
 	t.Setenv(CopyApplianceRootDiskPath, "[datastore1] images/appliance-root.vmdk")
-	t.Setenv(CopyApplianceManagementNetwork, "/DC0/network/Management")
-	t.Setenv(CopyApplianceTransferNetwork, "/DC0/network/Transfer")
+	t.Setenv(CopyApplianceSSHKeySecret, "copy-appliance-ssh-key")
+	t.Setenv(CopyApplianceSSHUser, "appliance")
 
 	applied := CopyAppliance{}
 	if err := applied.Load(); err != nil {
@@ -58,11 +57,11 @@ func TestCopyApplianceFromEnvironment(t *testing.T) {
 	if applied.RootDiskPath != "[datastore1] images/appliance-root.vmdk" {
 		t.Errorf("RootDiskPath = %q, want the configured path", applied.RootDiskPath)
 	}
-	if applied.ManagementNetwork != "/DC0/network/Management" {
-		t.Errorf("ManagementNetwork = %q, want the configured network", applied.ManagementNetwork)
+	if applied.SSHKeySecret != "copy-appliance-ssh-key" {
+		t.Errorf("SSHKeySecret = %q, want the configured secret", applied.SSHKeySecret)
 	}
-	if applied.TransferNetwork != "/DC0/network/Transfer" {
-		t.Errorf("TransferNetwork = %q, want the configured network", applied.TransferNetwork)
+	if applied.SSHUser != "appliance" {
+		t.Errorf("SSHUser = %q, want the configured user", applied.SSHUser)
 	}
 }
 

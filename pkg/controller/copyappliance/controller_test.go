@@ -46,18 +46,17 @@ func testAppliance() *api.CopyAppliance {
 			UID:       types.UID("11111111-2222-3333-4444-555555555555"),
 		},
 		Spec: api.CopyApplianceSpec{
-			Provider:          core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
-			GuestId:           "otherGuest64",
-			NumCPUs:           2,
-			MemoryMB:          4096,
-			Datacenter:        "DC0",
-			Datastore:         "datastore1",
-			ResourcePool:      "/DC0/host/cluster/Resources",
-			Folder:            "/DC0/vm",
-			ManagementNetwork: "VM Network",
-			TransferNetwork:   "Transfer Network",
-			Template:          "/DC0/vm/appliance-template",
-			RootDiskPath:      "[datastore1] images/appliance-root.vmdk",
+			Provider:     core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
+			SSHKey:       core.ObjectReference{Namespace: "forklift", Name: "appliance-ssh-key"},
+			GuestId:      "otherGuest64",
+			NumCPUs:      2,
+			MemoryMB:     4096,
+			Datacenter:   "DC0",
+			Datastore:    "datastore1",
+			ResourcePool: "/DC0/host/cluster/Resources",
+			Folder:       "/DC0/vm",
+			Template:     "/DC0/vm/appliance-template",
+			RootDiskPath: "[datastore1] images/appliance-root.vmdk",
 			AttachDiskPaths: []string{
 				"[datastore13] vm-a/disk-0.vmdk",
 				"[datastore13] vm-b/disk-0.vmdk",
@@ -76,7 +75,10 @@ func TestApplianceRequeueFor(t *testing.T) {
 		{"an appliance waiting on a clone is polled", PhaseWaitForClone, "slow"},
 		// Waiting on a guest to boot, not on a vSphere task, so it is polled
 		// at the slower cadence.
-		{"an appliance waiting on its exports is polled slowly", PhaseWaitForExports, "long"},
+		{"an appliance waiting on its network is polled slowly", PhaseWaitForNetwork, "long"},
+		// The one action phase that is observable: it stays put while sshd is
+		// still coming up, which is a matter of seconds.
+		{"an appliance waiting to be configured is polled", PhaseConfigure, "slow"},
 		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
 		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
 		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},
@@ -88,6 +90,7 @@ func TestApplianceRequeueFor(t *testing.T) {
 		// The action phases are never observed: ExecutePhase falls through
 		// them within the pass that entered them.
 		{"a clone is passed through", PhaseCloneVM, "none"},
+		{"the export wait is passed through", PhaseWaitForExports, "none"},
 		{"a power off is passed through", PhasePowerOff, "none"},
 		{"a disk detach is passed through", PhaseDetachDisks, "none"},
 		{"a destroy is passed through", PhaseDestroyVM, "none"},

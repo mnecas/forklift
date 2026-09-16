@@ -151,12 +151,19 @@ func requeueFor(phase string) (reQ time.Duration) {
 		PhaseWaitForDetachDisks,
 		PhaseWaitForDestroyVM:
 		reQ = base.SlowReQ
-	case PhaseWaitForExports:
+	case PhaseWaitForNetwork:
 		// Slower than the task waits above. Those are waiting on vSphere,
 		// which settles in seconds; this one is waiting on a guest to boot and
 		// on VMware Tools to start answering, which takes a minute or more.
 		// Polling it at the task cadence buys nothing but vCenter logins.
 		reQ = base.LongReQ
+	case PhaseConfigure:
+		// Unlike the other action phases this one is observable, because a
+		// login that cannot be made yet stays on it. The gap between the guest
+		// reporting an address and sshd answering on it is seconds, so backing
+		// off to LongReQ would add half a minute to a deploy that is nearly
+		// done.
+		reQ = base.SlowReQ
 	case PhaseDeployFailed, PhaseTeardownFailed:
 		// Ended() swallows the error and controller-runtime applies no
 		// backoff of its own, so a failed appliance would otherwise retry
@@ -228,10 +235,48 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 		err = liberr.Wrap(err)
 		return
 	}
-	ac, err = NewApplianceContext(ctx, appliance, provider, secret, r.Log)
+	sshSecret, err := r.sshSecret(ctx, appliance)
 	if err != nil {
 		return
 	}
+	ac, err = NewApplianceContext(ctx, appliance, provider, secret, sshSecret, r.Log)
+	if err != nil {
+		return
+	}
+	return
+}
+
+// sshSecret resolves the SSH key pair the appliance is configured over. A
+// secret that is not there is reported as none rather than as an error: failing
+// here would stop a teardown too, leaving an appliance that cannot be deleted
+// and read locks on the source vmdks with nothing left to release them. Only
+// the configure step needs the key, and it names the secret when it is missing.
+func (r *Reconciler) sshSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
+	ref := appliance.Spec.SSHKey
+	if ref.Name == "" {
+		// An unnamed secret is not something to look up. Get would reject it
+		// as a malformed request rather than as a missing object.
+		return
+	}
+	namespace := ref.Namespace
+	if namespace == "" {
+		namespace = appliance.Namespace
+	}
+	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
+	found := &core.Secret{}
+	err = r.Client.Get(ctx, key, found)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			r.Log.Info("The appliance SSH key secret is not there.",
+				"namespace", key.Namespace,
+				"name", key.Name)
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err)
+		return
+	}
+	secret = found
 	return
 }
 

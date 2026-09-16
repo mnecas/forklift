@@ -2,7 +2,6 @@ package copyappliance
 
 import (
 	"context"
-	"path"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
@@ -58,6 +57,32 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 	case PhaseWaitForClone:
 		var done bool
 		done, err = r.WaitForClone(ctx)
+		if err != nil {
+			next = PhaseDeployFailed
+			break
+		}
+		if !done {
+			next = phase
+			return
+		}
+		next = PhaseWaitForNetwork
+		fallthrough
+	case PhaseWaitForNetwork:
+		var done bool
+		done, err = r.WaitForNetwork(ctx)
+		if err != nil {
+			next = PhaseDeployFailed
+			break
+		}
+		if !done {
+			next = phase
+			return
+		}
+		next = PhaseConfigure
+		fallthrough
+	case PhaseConfigure:
+		var done bool
+		done, err = r.Configure(ctx)
 		if err != nil {
 			next = PhaseDeployFailed
 			break
@@ -133,45 +158,89 @@ func (r *DeployRunner) WaitForClone(ctx context.Context) (done bool, err error) 
 	return
 }
 
-// WaitForExports reports whether the appliance is ready for the migration to
-// read from, and records the addresses the guest reports itself on.
+// WaitForNetwork reports whether the appliance can be reached, and records the
+// addresses the guest reports itself on.
 //
-// The appliance does not publish its disk exports yet. What it does publish,
-// once the guest has booted far enough for VMware Tools to answer, is an
-// address on each network the VM was built with, and an appliance with no
-// address on a network cannot be reached over it.
-func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
+// The template gives the appliance one network, already configured, so there is
+// nothing to match up: the appliance is reachable once the guest has booted far
+// enough for VMware Tools to report an address at all.
+func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error) {
 	vm := r.context.VM(r.context.Appliance.Status.MoRef)
 	addresses, err := r.context.GuestAddresses(ctx, vm)
 	if err != nil {
 		return
 	}
-	// Recorded every pass, so a half-configured appliance shows the addresses
-	// it does have while it waits for the rest.
 	r.context.Appliance.Status.Addresses = addresses
 
-	spec := r.context.Appliance.Spec
-	if !reportsNetwork(addresses, spec.ManagementNetwork) {
+	_, done = applianceAddress(addresses)
+	return
+}
+
+// Configure logs in to the appliance and applies the configuration it needs
+// before it can serve exports. It reports whether the appliance is configured.
+//
+// An appliance that is not accepting connections yet is not a failure: the
+// guest reports its address before sshd is answering on it. A rejected key, or
+// a command the appliance fails, is.
+func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
+	// Recorded by WaitForNetwork on an earlier pass, so this costs no vCenter
+	// round trip.
+	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.context.Appliance.Name)
 		return
 	}
-	if spec.TransferNetwork != "" && !reportsNetwork(addresses, spec.TransferNetwork) {
+	client, answered, err := r.context.SSHLogin(ctx, address)
+	if err != nil {
 		return
 	}
+	if !answered {
+		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+		return
+	}
+	defer func() {
+		_ = client.Close()
+	}()
+
+	err = r.context.RunCommands(client, applianceConfigCommands...)
+	if err != nil {
+		return
+	}
+	r.context.Log.Info("Configured the appliance.", "address", address)
 	done = true
 	return
 }
 
-// reportsNetwork reports whether the guest gave an address on the named
-// network. The spec names a network the way the vSphere finder takes it, which
-// may be an inventory path; the guest reports the portgroup's name alone.
-func reportsNetwork(addresses []api.ApplianceAddress, network string) (ok bool) {
-	name := path.Base(network)
-	for _, address := range addresses {
-		if address.Network == name {
-			ok = true
-			return
-		}
+// applianceConfigCommands are run in order over one login, and the first that
+// fails fails the deploy.
+//
+// The appliance image needs no configuration yet; this is where it goes when it
+// does. Until then the step runs one command that does nothing, so that it
+// proves the account can execute and not merely authenticate: a key restricted
+// with command= in authorized_keys logs in and then refuses everything.
+var applianceConfigCommands = []string{"true"}
+
+// WaitForExports reports whether the appliance has published the disk exports
+// the migration reads from.
+//
+// NO-OP: the appliance does not publish its exports yet.
+func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
+	done = true
+	return
+}
+
+// applianceAddress returns the address to reach the appliance at. The appliance
+// has one network, so the choice is only between the addresses the guest holds
+// on it; the first is the one the guest listed first, and it answers on any of
+// them.
+func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool) {
+	if len(addresses) == 0 {
+		return
 	}
+	address = addresses[0].IP
+	ok = true
 	return
 }
 
@@ -182,6 +251,8 @@ func (r *DeployRunner) Itinerary() *libitr.Itinerary {
 		Pipeline: libitr.Pipeline{
 			{Name: PhaseCloneVM},
 			{Name: PhaseWaitForClone},
+			{Name: PhaseWaitForNetwork},
+			{Name: PhaseConfigure},
 			{Name: PhaseWaitForExports},
 			{Name: PhaseDeployCompleted},
 			{Name: PhaseDeployFailed},
