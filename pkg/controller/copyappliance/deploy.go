@@ -3,11 +3,14 @@ package copyappliance
 import (
 	"context"
 
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
+	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi/vim25/types"
+	"golang.org/x/crypto/ssh"
 )
 
 // DeployRunner drives the appliance VM from nothing to running. It holds no
@@ -41,11 +44,15 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 }
 
 // ExecutePhase runs the current phase and returns the phase to record. Steps
-// that need no wait fall through to the next in the same pass; a step waiting
-// on vSphere returns its own phase and picks up again on the next reconcile.
+// that need no wait fall through to the next in the same pass; a step that is
+// still waiting returns its own phase and picks up again on the next reconcile.
+//
+// A waiting step records the phase of the case it is in and not the phase the
+// pass started on. Those differ whenever a pass has fallen through, and the
+// recorded phase is both what the next pass re-enters at and what an operator
+// reads to see which step an appliance is sitting in.
 func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error) {
-	phase := r.context.Appliance.Status.Phase
-	switch phase {
+	switch r.context.Appliance.Status.Phase {
 	case PhaseCloneVM:
 		err = r.CloneVM(ctx)
 		if err != nil {
@@ -62,7 +69,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			break
 		}
 		if !done {
-			next = phase
+			next = PhaseWaitForClone
 			return
 		}
 		next = PhaseWaitForNetwork
@@ -75,7 +82,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			break
 		}
 		if !done {
-			next = phase
+			next = PhaseWaitForNetwork
 			return
 		}
 		next = PhaseConfigure
@@ -88,7 +95,20 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			break
 		}
 		if !done {
-			next = phase
+			next = PhaseConfigure
+			return
+		}
+		next = PhaseLoadImage
+		fallthrough
+	case PhaseLoadImage:
+		var done bool
+		done, err = r.LoadImage(ctx)
+		if err != nil {
+			next = PhaseDeployFailed
+			break
+		}
+		if !done {
+			next = PhaseLoadImage
 			return
 		}
 		next = PhaseWaitForExports
@@ -101,7 +121,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			break
 		}
 		if !done {
-			next = phase
+			next = PhaseWaitForExports
 			return
 		}
 		next = PhaseDeployCompleted
@@ -123,7 +143,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 		})
 		next = PhaseDeployFailed
 	default:
-		err = liberr.New("unknown phase", "phase", phase)
+		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
 		next = PhaseDeployFailed
 	}
 	return
@@ -222,6 +242,83 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 // with command= in authorized_keys logs in and then refuses everything.
 var applianceConfigCommands = []string{"true"}
 
+// LoadImage puts the appliance's container image into its podman store, and
+// reports whether the image is there.
+//
+// The transfer runs inside the pass and the pass waits for it, which for a few
+// hundred megabytes means one of the controller's reconcile workers is held for
+// minutes. What that buys is a step with no state to keep: it asks the
+// appliance what it already has, so a controller that restarted part way
+// through starts again rather than recovering anything.
+func (r *DeployRunner) LoadImage(ctx context.Context) (done bool, err error) {
+	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.context.Appliance.Name)
+		return
+	}
+	// The transfer runs over this login, so it is opened for as long as a
+	// transfer takes rather than as long as a command takes.
+	client, answered, err := r.context.SSHLoginFor(ctx, address, sshTransferTimeout)
+	if err != nil {
+		return
+	}
+	if !answered {
+		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+		return
+	}
+	defer func() {
+		_ = client.Close()
+	}()
+
+	// Asking the appliance is what makes the step idempotent. Without it a
+	// re-entry sends the whole image again.
+	loaded := r.context.Appliance.Status.LoadedImage
+	if loaded != "" {
+		done, err = r.context.Probe(client, "podman image exists "+loaded)
+		if err != nil || done {
+			return
+		}
+	}
+
+	spec, err := resolveImage(ctx, r.context.Appliance.Spec.ContainerImage)
+	if err != nil {
+		return
+	}
+	registry, err := clusterRegistry(settings.ServiceCAFile, serviceAccountTokenFile)
+	if err != nil {
+		return
+	}
+	return r.loadImage(ctx, client, spec, registry...)
+}
+
+// loadImage is LoadImage from a resolved pull spec, which is everything about
+// the step that does not need a cluster to run.
+func (r *DeployRunner) loadImage(ctx context.Context, client *ssh.Client, spec string, registry ...remote.Option) (done bool, err error) {
+	img, err := registryImage(ctx, spec, registry...)
+	if err != nil {
+		return
+	}
+	ref, err := loadedReference(img)
+	if err != nil {
+		return
+	}
+	// Recorded before the transfer rather than after it. A load that is cut off
+	// can still leave the image in the store, and the next pass has to know
+	// what to ask about.
+	r.context.Appliance.Status.LoadedImage = ref.Name()
+	r.context.Log.Info("Loading the appliance image.", "image", spec, "as", ref.Name())
+
+	err = r.context.streamImage(client, img, ref)
+	if err != nil {
+		return
+	}
+	r.context.Log.Info("Loaded the appliance image.", "image", ref.Name())
+	done = true
+	return
+}
+
 // WaitForExports reports whether the appliance has published the disk exports
 // the migration reads from.
 //
@@ -253,6 +350,7 @@ func (r *DeployRunner) Itinerary() *libitr.Itinerary {
 			{Name: PhaseWaitForClone},
 			{Name: PhaseWaitForNetwork},
 			{Name: PhaseConfigure},
+			{Name: PhaseLoadImage},
 			{Name: PhaseWaitForExports},
 			{Name: PhaseDeployCompleted},
 			{Name: PhaseDeployFailed},

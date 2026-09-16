@@ -46,17 +46,14 @@ func testAppliance() *api.CopyAppliance {
 			UID:       types.UID("11111111-2222-3333-4444-555555555555"),
 		},
 		Spec: api.CopyApplianceSpec{
-			Provider:     core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
-			SSHKey:       core.ObjectReference{Namespace: "forklift", Name: "appliance-ssh-key"},
-			GuestId:      "otherGuest64",
-			NumCPUs:      2,
-			MemoryMB:     4096,
-			Datacenter:   "DC0",
-			Datastore:    "datastore1",
-			ResourcePool: "/DC0/host/cluster/Resources",
-			Folder:       "/DC0/vm",
-			Template:     "/DC0/vm/appliance-template",
-			RootDiskPath: "[datastore1] images/appliance-root.vmdk",
+			Provider:       core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
+			SSHKey:         core.ObjectReference{Namespace: "forklift", Name: "appliance-ssh-key"},
+			ContainerImage: "copy-appliance:latest",
+			Datacenter:     "DC0",
+			Datastore:      "datastore1",
+			ResourcePool:   "/DC0/host/cluster/Resources",
+			Folder:         "/DC0/vm",
+			Template:       "/DC0/vm/appliance-template",
 			AttachDiskPaths: []string{
 				"[datastore13] vm-a/disk-0.vmdk",
 				"[datastore13] vm-b/disk-0.vmdk",
@@ -79,6 +76,10 @@ func TestApplianceRequeueFor(t *testing.T) {
 		// The one action phase that is observable: it stays put while sshd is
 		// still coming up, which is a matter of seconds.
 		{"an appliance waiting to be configured is polled", PhaseConfigure, "slow"},
+		// The load runs to completion inside the pass, so this phase is only
+		// observed when the appliance stopped answering: the same wait, at the
+		// same cadence.
+		{"an appliance waiting to load its image is polled", PhaseLoadImage, "slow"},
 		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
 		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
 		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},

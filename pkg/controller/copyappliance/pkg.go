@@ -24,6 +24,7 @@ const (
 	PhaseWaitForClone       = "WaitForClone"
 	PhaseWaitForNetwork     = "WaitForNetwork"
 	PhaseConfigure          = "Configure"
+	PhaseLoadImage          = "LoadImage"
 	PhaseWaitForExports     = "WaitForExports"
 	PhasePowerOff           = "PowerOff"
 	PhaseWaitForPowerOff    = "WaitForPowerOff"

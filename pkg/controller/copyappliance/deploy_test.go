@@ -1,6 +1,8 @@
 package copyappliance
 
 import (
+	"context"
+	"slices"
 	"testing"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
@@ -39,6 +41,33 @@ func TestApplianceAddress(t *testing.T) {
 					tc.addresses, got, ok, tc.want, tc.wantOK)
 			}
 		})
+	}
+}
+
+// A pass falls through as many steps as it can, so the phase it records is not
+// the phase it started on. Recording the entry phase instead would send the
+// next pass back to a step that is already done, and would tell an operator the
+// appliance is waiting on something it is not.
+func TestExecutePhaseRecordsTheStepItStoppedIn(t *testing.T) {
+	private, public := testKeyPair(t)
+	server := startSSHServer(t, public)
+	// The appliance takes the configure login and then stops listening, which
+	// leaves the load with nothing to answer it.
+	server.stopAfterOne()
+	ac := sshContext(t, private, server.addr)
+	ac.Appliance.Status.Phase = PhaseConfigure
+	runner := DeployRunner{context: ac}
+
+	next, err := runner.ExecutePhase(context.TODO())
+	if err != nil {
+		t.Fatalf("ExecutePhase: %v", err)
+	}
+	if !slices.Equal(server.Ran(), applianceConfigCommands) {
+		t.Fatalf("ran %v, want the appliance configured and nothing more", server.Ran())
+	}
+	if next != PhaseLoadImage {
+		t.Errorf("phase = %q, want %q: the pass configured the appliance and stopped in the load",
+			next, PhaseLoadImage)
 	}
 }
 

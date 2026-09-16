@@ -164,6 +164,11 @@ func requeueFor(phase string) (reQ time.Duration) {
 		// off to LongReQ would add half a minute to a deploy that is nearly
 		// done.
 		reQ = base.SlowReQ
+	case PhaseLoadImage:
+		// Only ever observed when the appliance stopped answering, since the
+		// load itself runs to completion inside the pass. That is the wait
+		// Configure has, at the cadence it has it.
+		reQ = base.SlowReQ
 	case PhaseDeployFailed, PhaseTeardownFailed:
 		// Ended() swallows the error and controller-runtime applies no
 		// backoff of its own, so a failed appliance would otherwise retry
