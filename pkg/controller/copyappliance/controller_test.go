@@ -74,7 +74,9 @@ func TestApplianceRequeueFor(t *testing.T) {
 		want  string
 	}{
 		{"an appliance waiting on a clone is polled", PhaseWaitForClone, "slow"},
-		{"an appliance waiting on its exports is polled", PhaseWaitForExports, "slow"},
+		// Waiting on a guest to boot, not on a vSphere task, so it is polled
+		// at the slower cadence.
+		{"an appliance waiting on its exports is polled slowly", PhaseWaitForExports, "long"},
 		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
 		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
 		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},
@@ -125,6 +127,9 @@ func TestApplianceForgetVM(t *testing.T) {
 		appliance.Status.VCenterInstanceUUID = "uuid-a"
 		appliance.Status.TaskRef = "task-7"
 		appliance.Status.Phase = PhaseWaitForClone
+		appliance.Status.Addresses = []api.ApplianceAddress{
+			{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+		}
 
 		r.forgetVM(appliance)
 
@@ -132,7 +137,8 @@ func TestApplianceForgetVM(t *testing.T) {
 		if status.MoRef != "" ||
 			status.VCenterInstanceUUID != "" ||
 			status.TaskRef != "" ||
-			status.Phase != "" {
+			status.Phase != "" ||
+			status.Addresses != nil {
 			t.Errorf("identity not fully cleared: %+v", status)
 		}
 	})
