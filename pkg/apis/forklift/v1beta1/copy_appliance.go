@@ -8,29 +8,11 @@ import (
 
 const CopyApplianceFinalizer = "forklift/copy-appliance"
 
-// CopyAppliance phases. Status is written once at the end of each reconcile,
-// so every phase here is one the appliance can actually be observed in.
-const (
-	// The appliance VM is being created in the source provider.
-	CopyAppliancePhaseProvisioning = "Provisioning"
-	// The appliance VM has been created but is not yet running.
-	CopyAppliancePhaseCreated = "Created"
-	// The appliance VM has been asked to power on.
-	CopyAppliancePhasePoweringOn = "PoweringOn"
-	// The appliance VM is present and powered on.
-	CopyAppliancePhaseReady = "Ready"
-	// The appliance VM is being deleted.
-	CopyAppliancePhaseDeleting = "Deleting"
-	// The appliance VM could not be provisioned.
-	CopyAppliancePhaseFailed = "Failed"
-)
-
 // CopyAppliance specification.
 //
-// The appliance VM is named "forklift-copy-<uid>" after the CopyAppliance's
-// UID, and that name is how the controller recognizes the VM as its own. There
-// is no override field: a VM whose name did not follow from its CopyAppliance
-// could not be found again.
+// The appliance VM is a clone of Template, named after the CopyAppliance
+// itself, and that name is how an operator recognizes the VM in the vSphere
+// inventory. The controller finds it again by the moRef recorded in the status.
 type CopyApplianceSpec struct {
 	// Source provider in which the appliance VM is created.
 	Provider core.ObjectReference `json:"provider" ref:"Provider"`
@@ -79,7 +61,11 @@ type CopyApplianceSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
 	// +optional
 	AttachDiskPaths []string `json:"attachDiskPaths,omitempty"`
-	Template        string
+	// Inventory path of the VM template the appliance is cloned from. The
+	// template supplies the root disk, so it must support the controller its
+	// disks are attached to.
+	// +kubebuilder:validation:MinLength=1
+	Template string `json:"template"`
 }
 
 // CopyAppliance status.
@@ -97,9 +83,16 @@ type CopyApplianceStatus struct {
 	// must not be trusted when this does not match the connected instance.
 	// +optional
 	VCenterInstanceUUID string `json:"vcenterInstanceUUID,omitempty"`
-	// The coarse lifecycle phase of the appliance VM.
+	// The step of the deploy or teardown itinerary the appliance has reached.
+	// Every phase here is one the appliance can actually be observed in: a
+	// step that need not wait on vSphere is passed through within a single
+	// reconcile. The terminal phases are DeployCompleted, DeployFailed,
+	// TeardownCompleted and TeardownFailed.
 	// +optional
-	Phase   string `json:"phase,omitempty"`
+	Phase string `json:"phase,omitempty"`
+	// The managed object reference ID of the vSphere task the current phase is
+	// waiting on. Empty when the phase has nothing outstanding.
+	// +optional
 	TaskRef string `json:"taskREF,omitempty"`
 }
 

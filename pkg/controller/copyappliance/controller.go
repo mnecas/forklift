@@ -9,7 +9,6 @@ import (
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
-	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,13 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-const (
-	Name = "copy-appliance"
-)
-
-var Settings = &settings.Settings
-var log = logging.WithName(Name)
-
+// Add the controller to the manager and watch CopyAppliance resources.
 func Add(mgr manager.Manager) error {
 	reconciler := &Reconciler{
 		Reconciler: base.Reconciler{
@@ -62,11 +55,15 @@ func Add(mgr manager.Manager) error {
 
 var _ reconcile.Reconciler = &Reconciler{}
 
+// Reconciles a CopyAppliance object.
 type Reconciler struct {
 	base.Reconciler
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, err error) {
+// Reconcile a CopyAppliance CR.
+// Note: Must not a pointer receiver to ensure that the
+// logger and other state is not shared.
+func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, err error) {
 	r.Log = logging.WithName(
 		names.SimpleNameGenerator.GenerateName(Name+"|"),
 		"copy-appliance",
@@ -93,58 +90,83 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		r.Log.V(2).Info("Conditions.", "all", appliance.Status.Conditions)
 	}()
 
-	if appliance.DeletionTimestamp.IsZero() {
+	deleting := !appliance.DeletionTimestamp.IsZero()
+	if !deleting && appliance.Status.Phase == PhaseDeployCompleted {
+		// Nothing left to do. Connecting would cost a vCenter login per watch
+		// event for a pass that cannot change anything.
+		return
+	}
+
+	appliance.Status.BeginStagingConditions()
+
+	switch {
+	case deleting:
+		err = r.Teardown(ctx, appliance)
+	default:
 		err = r.AddFinalizer(ctx, appliance)
 		if err != nil {
 			return
 		}
 		err = r.Deploy(ctx, appliance)
-		if err != nil {
-			return
-		}
-	} else {
-		err = r.Teardown(ctx, appliance)
-		if err != nil {
-			return
-		}
-		err = r.RemoveFinalizer(ctx, appliance)
-		if err != nil {
-			return
-		}
 	}
 
+	appliance.Status.EndStagingConditions()
+
+	// The status is written even when the pass failed. The runner advanced the
+	// phase before it returned, and dropping that means repeating the vSphere
+	// work the pass did manage to do.
 	r.Record(appliance, appliance.Status.Conditions)
 	appliance.Status.ObservedGeneration = appliance.Generation
 	uErr := r.Status().Update(ctx, appliance)
-	if uErr != nil && err == nil {
-		err = liberr.Wrap(uErr)
+	if uErr != nil {
+		r.Log.Error(uErr, "Failed to update status.")
+		if err == nil {
+			err = liberr.Wrap(uErr)
+		}
 	}
 
 	result.RequeueAfter = requeueFor(appliance.Status.Phase)
+
+	// Released after the status update, because releasing it lets the API
+	// server delete the object out from under us.
+	if deleting {
+		fErr := r.RemoveFinalizer(ctx, appliance)
+		if fErr != nil {
+			r.Log.Error(fErr, "Failed to remove finalizer.")
+			if err == nil {
+				err = liberr.Wrap(fErr)
+			}
+		}
+	}
 	return
 }
 
 // requeueFor returns how long to wait before the next pass. Every wait here is
 // on vSphere, so it is deliberately slow: each reconcile opens and closes a
 // vCenter session, and FastReQ would mean two logins per second per CR.
-func requeueFor(phase string) time.Duration {
+func requeueFor(phase string) (reQ time.Duration) {
 	switch phase {
-	case api.CopyAppliancePhaseProvisioning,
-		api.CopyAppliancePhaseCreated,
-		api.CopyAppliancePhasePoweringOn,
-		api.CopyAppliancePhaseDeleting:
-		return base.SlowReQ
-	case api.CopyAppliancePhaseFailed:
+	case PhaseWaitForClone,
+		PhaseWaitForExports,
+		PhaseWaitForPowerOff,
+		PhaseWaitForDetachDisks,
+		PhaseWaitForDestroyVM:
+		reQ = base.SlowReQ
+	case PhaseDeployFailed, PhaseTeardownFailed:
 		// Ended() swallows the error and controller-runtime applies no
 		// backoff of its own, so a failed appliance would otherwise retry
 		// against vCenter forever at the error cadence.
-		return base.LongReQ
+		reQ = base.LongReQ
 	default:
-		// Ready, or nothing to do: wait for a watch event.
-		return 0
+		// An action phase is never observed: ExecutePhase falls through it in
+		// the same pass. So this is a completed appliance, or nothing to do
+		// at all, and either way we wait for a watch event.
 	}
+	return
 }
 
+// AddFinalizer holds the appliance in the cluster until its VM has been torn
+// down.
 func (r *Reconciler) AddFinalizer(ctx context.Context, appliance *api.CopyAppliance) (err error) {
 	patch := client.MergeFrom(appliance.DeepCopy())
 	if controllerutil.AddFinalizer(appliance, api.CopyApplianceFinalizer) {
@@ -158,7 +180,13 @@ func (r *Reconciler) AddFinalizer(ctx context.Context, appliance *api.CopyApplia
 	return
 }
 
+// RemoveFinalizer releases the finalizer once the appliance VM is gone. It must
+// not be released sooner: an appliance left behind holds read locks on the
+// source vmdks with nothing left in the cluster to point at it.
 func (r *Reconciler) RemoveFinalizer(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+	if appliance.Status.Phase != PhaseTeardownCompleted {
+		return
+	}
 	patch := client.MergeFrom(appliance.DeepCopy())
 	if controllerutil.RemoveFinalizer(appliance, api.CopyApplianceFinalizer) {
 		err = r.Patch(ctx, appliance, patch)
@@ -171,6 +199,9 @@ func (r *Reconciler) RemoveFinalizer(ctx context.Context, appliance *api.CopyApp
 	return
 }
 
+// ApplianceContext resolves the referenced provider and its secret and connects
+// to the source provider. The caller owns the returned context and must Close
+// it.
 func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAppliance) (ac *ApplianceContext, err error) {
 	providerKey := types.NamespacedName{
 		Namespace: appliance.Spec.Provider.Namespace,
@@ -203,20 +234,15 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 // step that has to wait on vSphere leaves a phase behind and lets the requeue
 // bring us back, rather than blocking the worker on a poll loop.
 func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (err error) {
-	appliance.Status.BeginStagingConditions()
-	defer appliance.Status.EndStagingConditions()
-
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
-		r.setFailed(appliance, "ConnectFailed", err)
+		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		err = nil
 		return
 	}
 	defer applianceContext.Close()
 
-	// TODO: this needs to be dealt with but this is the wrong way to do it
-	// A moRef is unique only within one vCenter. If the provider now points
-	// somewhere else, the recorded ID names a stranger's VM.
-	//r.forgetForeignVM(appliance, acClient.InstanceUUID())
+	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := DeployRunner{context: applianceContext}
 	if appliance.Status.Phase == "" {
@@ -224,69 +250,48 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 	}
 	err = runner.Run(ctx)
 	if err != nil {
-		r.setFailed(appliance, "DeployFailed", err)
+		r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
+		err = nil
+		return
 	}
+	r.setConverging(appliance, "The copy appliance is being deployed.")
 	return
 }
 
-// Teardown removes the appliance VM. It must not release the finalizer until
-// the VM is genuinely gone: an appliance left behind holds read locks on the
-// source vmdks with nothing left in the cluster to point at it.
+// Teardown drives the appliance VM one step closer to gone and returns. Each
+// step that has to wait on vSphere leaves a phase behind and lets the requeue
+// bring us back, rather than blocking the worker on a poll loop.
 func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance) (err error) {
-	appliance.Status.BeginStagingConditions()
-	defer appliance.Status.EndStagingConditions()
-
-	appliance.Status.Phase = api.CopyAppliancePhaseDeleting
-	r.setPending(appliance, "Deleting", "The appliance VM is being deleted.")
-
-	acClient, err := r.applianceClient(ctx, appliance)
+	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
-		appliance.Status.SetCondition(libcnd.Condition{
-			Type:     libcnd.Ready,
-			Status:   libcnd.False,
-			Reason:   "ConnectFailed",
-			Category: libcnd.Error,
-			Message:  err.Error(),
-		})
+		r.setFailed(appliance, PhaseTeardownFailed, "ConnectFailed", err)
+		err = nil
 		return
 	}
-	defer acClient.Close()
+	defer applianceContext.Close()
 
-	r.forgetForeignVM(appliance, acClient.InstanceUUID())
+	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
-	vmID := appliance.Status.MoRef
-	if vmID == "" {
-		// The VM may have been created without its moRef ever reaching the
-		// status subresource. Its name is the only way back to it.
-		vmID, err = acClient.FindByName(ctx, applianceVMSpec(appliance))
-		if err != nil {
-			appliance.Status.SetCondition(libcnd.Condition{
-				Type:     libcnd.Ready,
-				Status:   libcnd.False,
-				Reason:   "FindFailed",
-				Category: libcnd.Error,
-				Message:  err.Error(),
-			})
-			return
-		}
-		if vmID == "" {
-			// Genuinely gone.
-			return nil
-		}
+	runner := TeardownRunner{context: applianceContext}
+	switch appliance.Status.Phase {
+	case PhasePowerOff, PhaseWaitForPowerOff,
+		PhaseDetachDisks, PhaseWaitForDetachDisks,
+		PhaseDestroyVM, PhaseWaitForDestroyVM,
+		PhaseTeardownCompleted:
+		// Already tearing down; resume where the last pass left off.
+	default:
+		// A deploy phase, an empty phase, or a previous teardown failure.
+		// Giving up means an undeletable CR and source vmdks locked forever,
+		// so a failed teardown restarts rather than parking.
+		runner.Begin()
 	}
-
-	err = acClient.DeleteVM(ctx, vmID)
+	err = runner.Run(ctx)
 	if err != nil {
-		appliance.Status.SetCondition(libcnd.Condition{
-			Type:     libcnd.Ready,
-			Status:   libcnd.False,
-			Reason:   "DeleteFailed",
-			Category: libcnd.Error,
-			Message:  err.Error(),
-		})
+		r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
+		err = nil
 		return
 	}
-	r.forgetVM(appliance)
+	r.setConverging(appliance, "The copy appliance is being torn down.")
 	return
 }
 
@@ -306,50 +311,20 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 }
 
 // forgetVM clears every status field that describes a specific VM. They are
-// only meaningful together, so they are always cleared together.
+// only meaningful together, so they are always cleared together. Clearing the
+// phase restarts the itinerary from the beginning on the next pass.
 func (r *Reconciler) forgetVM(appliance *api.CopyAppliance) {
 	appliance.Status.MoRef = ""
 	appliance.Status.VCenterInstanceUUID = ""
+	appliance.Status.TaskRef = ""
+	appliance.Status.Phase = ""
 }
 
-// applianceClient resolves the referenced provider and its secret and connects
-// to the source provider. The caller owns the returned client and must Close it.
-func (r *Reconciler) applianceClient(ctx context.Context, appliance *api.CopyAppliance) (acClient *ApplianceClient, err error) {
-	provider := &api.Provider{}
-	err = r.Get(
-		ctx,
-		client.ObjectKey{
-			Namespace: appliance.Spec.Provider.Namespace,
-			Name:      appliance.Spec.Provider.Name,
-		},
-		provider)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	secret := &core.Secret{}
-	err = r.Get(
-		ctx,
-		client.ObjectKey{
-			Namespace: provider.Spec.Secret.Namespace,
-			Name:      provider.Spec.Secret.Name,
-		},
-		secret)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	acClient, err = NewApplianceClient(ctx, provider, secret, r.Log)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	return
-}
-
-// setFailed records a failed reconcile as a not-ready condition and phase.
-func (r *Reconciler) setFailed(appliance *api.CopyAppliance, reason string, err error) {
-	appliance.Status.Phase = api.CopyAppliancePhaseFailed
+// setFailed records a failed pass as a not-ready condition and a failed phase.
+// The phase is passed in because a failure during teardown must not be recorded
+// as a deployment failure: they requeue the same way but read very differently.
+func (r *Reconciler) setFailed(appliance *api.CopyAppliance, phase, reason string, err error) {
+	appliance.Status.Phase = phase
 	appliance.Status.SetCondition(libcnd.Condition{
 		Type:     libcnd.Ready,
 		Status:   libcnd.False,
@@ -359,13 +334,21 @@ func (r *Reconciler) setFailed(appliance *api.CopyAppliance, reason string, err 
 	})
 }
 
-// setPending records that the appliance is still converging. This is not an
-// error: it is the normal state between passes, so it is Advisory.
-func (r *Reconciler) setPending(appliance *api.CopyAppliance, reason, message string) {
+// setConverging records that the appliance is still on its way to the phase it
+// is headed for. A terminal phase has already set its own condition, and
+// staging would otherwise leave the appliance with no Ready condition at all
+// between passes. This is not an error, so it is Advisory.
+func (r *Reconciler) setConverging(appliance *api.CopyAppliance, message string) {
+	phase := appliance.Status.Phase
+	switch phase {
+	case PhaseDeployCompleted, PhaseDeployFailed,
+		PhaseTeardownCompleted, PhaseTeardownFailed:
+		return
+	}
 	appliance.Status.SetCondition(libcnd.Condition{
 		Type:     libcnd.Ready,
 		Status:   libcnd.False,
-		Reason:   reason,
+		Reason:   phase,
 		Category: libcnd.Advisory,
 		Message:  message,
 	})
