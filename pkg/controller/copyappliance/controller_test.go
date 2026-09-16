@@ -1,6 +1,7 @@
 package copyappliance
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -9,11 +10,32 @@ import (
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func testLog() logging.LevelLogger {
 	return logging.WithName("copy-appliance-test")
+}
+
+func testReconciler(t *testing.T, objs ...runtime.Object) *Reconciler {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	err := api.SchemeBuilder.AddToScheme(scheme)
+	if err != nil {
+		t.Fatalf("AddToScheme forklift: %v", err)
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRuntimeObjects(objs...).
+		Build()
+	return &Reconciler{
+		Reconciler: base.Reconciler{
+			Client: cl,
+			Log:    testLog(),
+		},
+	}
 }
 
 func testAppliance() *api.CopyAppliance {
@@ -34,6 +56,7 @@ func testAppliance() *api.CopyAppliance {
 			Folder:            "/DC0/vm",
 			ManagementNetwork: "VM Network",
 			TransferNetwork:   "Transfer Network",
+			Template:          "/DC0/vm/appliance-template",
 			RootDiskPath:      "[datastore1] images/appliance-root.vmdk",
 			AttachDiskPaths: []string{
 				"[datastore13] vm-a/disk-0.vmdk",
@@ -43,49 +66,32 @@ func testAppliance() *api.CopyAppliance {
 	}
 }
 
-// The VM name is the only thing tying a vSphere VM back to its CopyAppliance,
-// so it must follow from the CR alone and never from anything the controller
-// has to remember.
-func TestApplianceVMName(t *testing.T) {
-	t.Run("deterministic and UID-scoped", func(t *testing.T) {
-		appliance := testAppliance()
-		first := applianceVMName(appliance)
-		if first != applianceVMName(testAppliance()) {
-			t.Error("name is not deterministic")
-		}
-		appliance.UID = types.UID("99999999-2222-3333-4444-555555555555")
-		if applianceVMName(appliance) == first {
-			t.Error("name does not vary with the CR UID")
-		}
-	})
-
-	t.Run("does not depend on renameable or optional fields", func(t *testing.T) {
-		appliance := testAppliance()
-		want := applianceVMName(appliance)
-		appliance.Namespace = "elsewhere"
-		appliance.Labels = map[string]string{"k": "v"}
-		appliance.Spec.Folder = "/DC0/vm/other"
-		if got := applianceVMName(appliance); got != want {
-			t.Errorf("applianceVMName = %q, want %q", got, want)
-		}
-	})
-}
-
+// Every phase has a row so that a phase added without a case here is visible.
 func TestApplianceRequeueFor(t *testing.T) {
 	tests := []struct {
+		name  string
 		phase string
 		want  string
 	}{
-		{api.CopyAppliancePhaseProvisioning, "slow"},
-		{api.CopyAppliancePhaseCreated, "slow"},
-		{api.CopyAppliancePhasePoweringOn, "slow"},
-		{api.CopyAppliancePhaseDeleting, "slow"},
-		{api.CopyAppliancePhaseFailed, "long"},
-		{api.CopyAppliancePhaseReady, "none"},
-		{"", "none"},
+		{"an appliance waiting on a clone is polled", PhaseWaitForClone, "slow"},
+		{"an appliance waiting on its exports is polled", PhaseWaitForExports, "slow"},
+		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
+		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
+		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},
+		{"a failed deployment backs off", PhaseDeployFailed, "long"},
+		{"a failed teardown backs off", PhaseTeardownFailed, "long"},
+		{"a deployed appliance waits for a watch event", PhaseDeployCompleted, "none"},
+		{"a torn down appliance waits for a watch event", PhaseTeardownCompleted, "none"},
+		{"an unstarted appliance waits for a watch event", "", "none"},
+		// The action phases are never observed: ExecutePhase falls through
+		// them within the pass that entered them.
+		{"a clone is passed through", PhaseCloneVM, "none"},
+		{"a power off is passed through", PhasePowerOff, "none"},
+		{"a disk detach is passed through", PhaseDetachDisks, "none"},
+		{"a destroy is passed through", PhaseDestroyVM, "none"},
 	}
 	for _, tc := range tests {
-		t.Run(tc.phase, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			got := requeueFor(tc.phase)
 			switch tc.want {
 			case "slow":
@@ -110,53 +116,59 @@ func TestApplianceRequeueFor(t *testing.T) {
 	}
 }
 
-// The client looks the VM up by the Name in this spec and by the recorded
-// VMID, so both have to survive the translation from the CR.
-func TestApplianceVMSpecCarriesIdentityAndNetworks(t *testing.T) {
-	appliance := testAppliance()
-	appliance.Status.MoRef = "vm-42"
-
-	spec := applianceVMSpec(appliance)
-	if spec.Name != applianceVMName(appliance) {
-		t.Errorf("spec.Name = %q, want %q", spec.Name, applianceVMName(appliance))
-	}
-	if spec.VMID != "vm-42" {
-		t.Errorf("spec.VMID = %q, want %q", spec.VMID, "vm-42")
-	}
-	// The adapter attaches one NIC per entry, in order, so management has to
-	// come first.
-	want := []string{appliance.Spec.ManagementNetwork, appliance.Spec.TransferNetwork}
-	if !slices.Equal(spec.Networks, want) {
-		t.Errorf("spec.Networks = %v, want %v", spec.Networks, want)
-	}
-}
-
-// A deployment with no transfer network gets an appliance with one NIC, not one
-// with a second card on the finder's default network.
-func TestApplianceNetworksWithoutATransferNetwork(t *testing.T) {
-	appliance := testAppliance()
-	appliance.Spec.TransferNetwork = ""
-
-	spec := applianceVMSpec(appliance)
-	if !slices.Equal(spec.Networks, []string{appliance.Spec.ManagementNetwork}) {
-		t.Errorf("networks = %v, want just the management network", spec.Networks)
-	}
-}
-
 func TestApplianceForgetVM(t *testing.T) {
 	r := &Reconciler{}
 
-	t.Run("clears the whole identity", func(t *testing.T) {
+	t.Run("every field describing the VM is cleared together", func(t *testing.T) {
 		appliance := testAppliance()
 		appliance.Status.MoRef = "vm-42"
 		appliance.Status.VCenterInstanceUUID = "uuid-a"
+		appliance.Status.TaskRef = "task-7"
+		appliance.Status.Phase = PhaseWaitForClone
 
 		r.forgetVM(appliance)
 
-		if appliance.Status.MoRef != "" || appliance.Status.VCenterInstanceUUID != "" {
-			t.Errorf("identity not fully cleared: %+v", appliance.Status)
+		status := appliance.Status
+		if status.MoRef != "" ||
+			status.VCenterInstanceUUID != "" ||
+			status.TaskRef != "" ||
+			status.Phase != "" {
+			t.Errorf("identity not fully cleared: %+v", status)
 		}
 	})
+}
+
+// The finalizer is the only thing keeping the CopyAppliance in the cluster
+// while its VM is still up. Releasing it early leaves an appliance holding read
+// locks on the source vmdks with nothing left to point at it.
+func TestRemoveFinalizer(t *testing.T) {
+	tests := []struct {
+		name     string
+		phase    string
+		wantHeld bool
+	}{
+		{"the finalizer is held while teardown is in flight", PhaseWaitForDestroyVM, true},
+		{"the finalizer is held when teardown has failed", PhaseTeardownFailed, true},
+		{"the finalizer is released once teardown completes", PhaseTeardownCompleted, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			appliance := testAppliance()
+			appliance.Finalizers = []string{api.CopyApplianceFinalizer}
+			appliance.Status.Phase = tc.phase
+			r := testReconciler(t, appliance)
+
+			err := r.RemoveFinalizer(context.TODO(), appliance)
+			if err != nil {
+				t.Fatalf("RemoveFinalizer: %v", err)
+			}
+
+			held := slices.Contains(appliance.Finalizers, api.CopyApplianceFinalizer)
+			if held != tc.wantHeld {
+				t.Errorf("finalizer held = %v, want %v", held, tc.wantHeld)
+			}
+		})
+	}
 }
 
 // A moRef means nothing outside the vCenter it came from. Acting on one from

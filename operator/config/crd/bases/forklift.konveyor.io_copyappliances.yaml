@@ -52,10 +52,9 @@ spec:
             description: |-
               CopyAppliance specification.
 
-              The appliance VM is named "forklift-copy-<uid>" after the CopyAppliance's
-              UID, and that name is how the controller recognizes the VM as its own. There
-              is no override field: a VM whose name did not follow from its CopyAppliance
-              could not be found again.
+              The appliance VM is a clone of Template, named after the CopyAppliance
+              itself, and that name is how an operator recognizes the VM in the vSphere
+              inventory. The controller finds it again by the moRef recorded in the status.
             properties:
               attachDiskPaths:
                 description: |-
@@ -156,6 +155,13 @@ spec:
                   VM is built with, or it will not find its boot disk.
                 pattern: ^\[[^\]]+\]\s*.+\.vmdk$
                 type: string
+              template:
+                description: |-
+                  Inventory path of the VM template the appliance is cloned from. The
+                  template supplies the root disk, so it must support the controller its
+                  disks are attached to.
+                minLength: 1
+                type: string
               transferNetwork:
                 description: |-
                   Network the appliance VM moves disk data over, attached as its second
@@ -172,6 +178,7 @@ spec:
             - provider
             - resourcePool
             - rootDiskPath
+            - template
             type: object
           status:
             description: CopyAppliance status.
@@ -218,22 +225,32 @@ spec:
                   - type
                   type: object
                 type: array
+              moREF:
+                description: The managed object reference ID of the created appliance
+                  VM.
+                type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
               phase:
-                description: The coarse lifecycle phase of the appliance VM.
+                description: |-
+                  The step of the deploy or teardown itinerary the appliance has reached.
+                  Every phase here is one the appliance can actually be observed in: a
+                  step that need not wait on vSphere is passed through within a single
+                  reconcile. The terminal phases are DeployCompleted, DeployFailed,
+                  TeardownCompleted and TeardownFailed.
+                type: string
+              taskREF:
+                description: |-
+                  The managed object reference ID of the vSphere task the current phase is
+                  waiting on. Empty when the phase has nothing outstanding.
                 type: string
               vcenterInstanceUUID:
                 description: |-
                   The instance UUID of the vCenter the appliance VM was created in. A
-                  managed object reference is only unique within one vCenter, so VMID
+                  managed object reference is only unique within one vCenter, so MoRef
                   must not be trusted when this does not match the connected instance.
-                type: string
-              vmID:
-                description: The managed object reference ID of the created appliance
-                  VM.
                 type: string
             type: object
         type: object
