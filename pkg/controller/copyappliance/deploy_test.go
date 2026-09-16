@@ -6,32 +6,37 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
 
-// The spec names the appliance's networks the way the vSphere finder takes
-// them; the guest names them the way it was told. Deploy completes on the two
-// agreeing, so a mismatch here parks the appliance forever.
-func TestReportsNetwork(t *testing.T) {
-	addresses := []api.ApplianceAddress{
-		{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
-		{Network: "Transfer Network", MAC: "00:50:56:04:05:06", IP: "198.51.100.10"},
-	}
+// Both the wait and the login go through this, so an appliance that reports
+// nothing must read as "not yet" and not as an empty address to dial.
+func TestApplianceAddress(t *testing.T) {
 	tests := []struct {
 		name      string
 		addresses []api.ApplianceAddress
-		network   string
-		want      bool
+		want      string
+		wantOK    bool
 	}{
-		{"an address on the network is found", addresses, "VM Network", true},
-		{"a network named by its inventory path matches the name the guest reports",
-			addresses, "/DC0/network/Transfer Network", true},
-		{"a network with no address is not found", addresses, "Storage Network", false},
-		{"no addresses at all", nil, "VM Network", false},
+		{"the address the guest reports",
+			[]api.ApplianceAddress{
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+			},
+			"192.0.2.10", true},
+		// One adapter is reported once per address it holds, and the appliance
+		// answers on any of them.
+		{"an adapter with more than one address gives the first",
+			[]api.ApplianceAddress{
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "2001:db8::1"},
+			},
+			"192.0.2.10", true},
+		{"no addresses at all", nil, "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := reportsNetwork(tc.addresses, tc.network)
+			got, ok := applianceAddress(tc.addresses)
 
-			if got != tc.want {
-				t.Errorf("reportsNetwork(%q) = %v, want %v", tc.network, got, tc.want)
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("applianceAddress(%+v) = (%q, %v), want (%q, %v)",
+					tc.addresses, got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}

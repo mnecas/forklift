@@ -22,10 +22,18 @@ import (
 // holds the CopyAppliance itself, so the runners that drive it read and write
 // their state through the same object the reconciler persists.
 type ApplianceContext struct {
-	Appliance  *api.CopyAppliance
-	Secret     *core.Secret
-	VCenter    *govmomi.Client
-	Log        logging.LevelLogger
+	Appliance *api.CopyAppliance
+	Secret    *core.Secret
+	// SSHSecret holds the key pair the controller logs in to the appliance
+	// with. Nil when the CopyAppliance names a secret that is not there, which
+	// only the configure step cares about.
+	SSHSecret *core.Secret
+	VCenter   *govmomi.Client
+	Log       logging.LevelLogger
+	// sshPort is the port the appliance's sshd answers on. Empty means the
+	// standard port, which is the only one an appliance image is built with;
+	// a test appliance is on whatever it was given.
+	sshPort    string
 	finder     *find.Finder
 	folder     *object.Folder
 	datacenter *object.Datacenter
@@ -34,10 +42,11 @@ type ApplianceContext struct {
 // NewApplianceContext connects to the source vCenter and resolves the
 // appliance's datacenter and inventory folder. The caller owns the returned
 // context and must Close it.
-func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
+func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret, sshSecret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
 	ac = &ApplianceContext{
 		Appliance: appliance,
 		Secret:    secret,
+		SSHSecret: sshSecret,
 		Log:       log,
 	}
 	ac.VCenter, err = base.ConnectGovmomi(
@@ -127,11 +136,6 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 	if err != nil {
 		return
 	}
-	nicChanges, err := r.nicChanges(ctx, template)
-	if err != nil {
-		return
-	}
-	changes = append(changes, nicChanges...)
 	poolRef := pool.Reference()
 	dsRef := ds.Reference()
 	cloneSpec := types.VirtualMachineCloneSpec{
@@ -413,47 +417,6 @@ func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.Vir
 			Operation:     types.VirtualDeviceConfigSpecOperationAdd,
 			FileOperation: "",
 			Device:        disk,
-		}
-		changes = append(changes, change)
-	}
-	return
-}
-
-func (r *ApplianceContext) nicChanges(ctx context.Context, template *object.VirtualMachine) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
-	networks := []string{r.Appliance.Spec.ManagementNetwork}
-	if r.Appliance.Spec.TransferNetwork != "" {
-		networks = append(networks, r.Appliance.Spec.TransferNetwork)
-	}
-
-	devices, err := template.Device(ctx)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	for _, network := range networks {
-		net, fErr := r.finder.Network(ctx, network)
-		if fErr != nil {
-			err = liberr.Wrap(fErr, "network", network)
-			return
-		}
-		backing, bErr := net.EthernetCardBackingInfo(ctx)
-		if bErr != nil {
-			err = liberr.Wrap(bErr, "network", network)
-			return
-		}
-		nic, nErr := devices.CreateEthernetCard("vmxnet3", backing)
-		if nErr != nil {
-			err = liberr.Wrap(nErr, "network", network)
-			return
-		}
-		nic.GetVirtualDevice().Connectable = &types.VirtualDeviceConnectInfo{
-			StartConnected:    true,
-			Connected:         true,
-			AllowGuestControl: true,
-		}
-		change := &types.VirtualDeviceConfigSpec{
-			Device:    nic,
-			Operation: types.VirtualDeviceConfigSpecOperationAdd,
 		}
 		changes = append(changes, change)
 	}
