@@ -14,6 +14,22 @@ import (
 	core "k8s.io/api/core/v1"
 )
 
+// VsphereConnectionSecret returns a secret suitable for GovmomiClientFromSecret.
+func VsphereConnectionSecret(url string, creds *core.Secret, fingerprint string) *core.Secret {
+	data := map[string][]byte{
+		"url":      []byte(url),
+		"user":     creds.Data["user"],
+		"password": creds.Data["password"],
+	}
+	if fingerprint != "" {
+		data["fingerprint"] = []byte(fingerprint)
+	}
+	if insecure, ok := creds.Data["insecureSkipVerify"]; ok {
+		data["insecureSkipVerify"] = insecure
+	}
+	return &core.Secret{Data: data}
+}
+
 // GovmomiClientFromSecret builds a logged-in govmomi client using credentials
 // and connection parameters stored entirely in secret.Data.
 // Required keys: "url", "user", "password".

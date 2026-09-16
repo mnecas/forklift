@@ -135,6 +135,7 @@ OVA_PROXY_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/forklift-ova-proxy:$(REGISTRY_TAG
 CLI_DOWNLOAD_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/forklift-cli-download:$(REGISTRY_TAG)
 VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/vsphere-copy-offload-populator:$(REGISTRY_TAG)
 DEEP_INSPECTION_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/forklift-deep-inspection:$(REGISTRY_TAG)
+TOEHOLD_BUILDER_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/toehold-builder:$(REGISTRY_TAG)
 
 ### OLM
 OPERATOR_BUNDLE_IMAGE ?= $(REGISTRY)/$(REGISTRY_ORG)/forklift-operator-bundle:$(REGISTRY_TAG)
@@ -393,7 +394,8 @@ build-operator-bundle-image: check_container_runtime
 		--build-arg HYPERV_PROVIDER_SERVER_IMAGE=$(HYPERV_PROVIDER_SERVER_IMAGE)$(PLATFORM_SUFFIX) \
 		--build-arg OVA_PROXY_IMAGE=$(OVA_PROXY_IMAGE)$(PLATFORM_SUFFIX) \
 		--build-arg VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE=$(VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE)$(PLATFORM_SUFFIX) \
-		--build-arg VIRT_V2V_IMAGE_RHEL9=$(VIRT_V2V_IMAGE_RHEL9)$(PLATFORM_SUFFIX)
+		--build-arg VIRT_V2V_IMAGE_RHEL9=$(VIRT_V2V_IMAGE_RHEL9)$(PLATFORM_SUFFIX) \
+		--build-arg TOEHOLD_BUILDER_IMAGE=$(TOEHOLD_BUILDER_IMAGE)$(PLATFORM_SUFFIX)
 
 push-operator-bundle-image: build-operator-bundle-image
 	$(CONTAINER_CMD) push $(OPERATOR_BUNDLE_IMAGE)$(PLATFORM_SUFFIX)
@@ -456,6 +458,12 @@ build-vsphere-copy-offload-populator-image: check_container_runtime
 push-vsphere-copy-offload-populator-image: build-vsphere-copy-offload-populator-image
 	$(CONTAINER_CMD) push $(VSPHERE_COPY_OFFLOAD_POPULATOR_IMAGE)$(PLATFORM_SUFFIX)
 
+build-toehold-builder-image: check_container_runtime
+	$(CONTAINER_CMD) build $(PLATFORM_FLAG) $(BUILD_LABEL_ARGS) -t $(TOEHOLD_BUILDER_IMAGE)$(PLATFORM_SUFFIX) -f build/toehold/Containerfile.builder .
+
+push-toehold-builder-image: build-toehold-builder-image
+	$(CONTAINER_CMD) push $(TOEHOLD_BUILDER_IMAGE)$(PLATFORM_SUFFIX)
+
 build-ova-provider-server-image: check_container_runtime
 	$(CONTAINER_CMD) build $(PLATFORM_FLAG) $(BUILD_LABEL_ARGS) -t $(OVA_PROVIDER_SERVER_IMAGE)$(PLATFORM_SUFFIX) -f build/ova-provider-server/Containerfile .
 
@@ -509,6 +517,7 @@ build-all-images: build-api-image \
                   build-ovirt-populator-image \
                   build-openstack-populator-image\
                   build-vsphere-copy-offload-populator-image\
+                  build-toehold-builder-image \
                   build-ova-provider-server-image \
                   build-hyperv-provider-server-image \
                   build-cli-download-image \
@@ -528,6 +537,7 @@ push-all-images:  push-api-image \
                   push-ovirt-populator-image \
                   push-openstack-populator-image\
                   push-vsphere-copy-offload-populator-image\
+                  push-toehold-builder-image \
                   push-ova-provider-server-image \
                   push-hyperv-provider-server-image \
                   push-cli-download-image \

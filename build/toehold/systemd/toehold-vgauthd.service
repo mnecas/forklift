@@ -1,0 +1,12 @@
+[Unit]
+Description=VGAuth from toehold appliance installroot
+Before=toehold-vmtoolsd.service
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=/opt/toehold/appliance-root/usr/lib64:/opt/toehold/appliance-root/usr/lib
+ExecStart=/opt/toehold/appliance-root/usr/bin/VGAuthService -s
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
