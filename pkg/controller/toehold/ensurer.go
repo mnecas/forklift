@@ -1,0 +1,270 @@
+package toehold
+
+import (
+	"context"
+	"fmt"
+
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
+	"github.com/kubev2v/forklift/pkg/controller/base"
+	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/settings"
+	"github.com/kubev2v/forklift/pkg/toehold/version"
+	core "k8s.io/api/core/v1"
+	k8serr "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+)
+
+const (
+	credsSecretSuffix = "-vcenter-creds"
+	labelToehold      = "forklift.konveyor.io/toehold"
+	saName            = "toehold-builder"
+)
+
+func credsSecretName(toehold *api.ToeholdTemplate) string {
+	return toehold.Name + credsSecretSuffix
+}
+
+func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) error {
+	if r.Scheme == nil {
+		return liberr.New("controller scheme is not configured")
+	}
+	return controllerutil.SetControllerReference(toehold, obj, r.Scheme)
+}
+
+func (r Reconciler) ensureControllerOwner(ctx context.Context, toehold *api.ToeholdTemplate, obj client.Object) error {
+	if toehold.UID == "" || toehold.Namespace != obj.GetNamespace() {
+		return nil
+	}
+	if meta.IsControlledBy(obj, toehold) {
+		return nil
+	}
+	if err := r.setOwner(toehold, obj); err != nil {
+		return liberr.Wrap(err)
+	}
+	return liberr.Wrap(r.Update(ctx, obj))
+}
+
+func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.ToeholdTemplate) error {
+	sa := &core.ServiceAccount{
+		ObjectMeta: meta.ObjectMeta{
+			Name:      saName,
+			Namespace: toehold.TargetNS(),
+		},
+	}
+	err := r.Create(ctx, sa)
+	if err != nil && !k8serr.IsAlreadyExists(err) {
+		return liberr.Wrap(err)
+	}
+	return nil
+}
+
+func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdTemplate, pctx *providerContext) error {
+	name := credsSecretName(toehold)
+	ns := toehold.TargetNS()
+	data := map[string]string{
+		settings.VCenterURL:                 pctx.Provider.Spec.URL,
+		settings.VCenterUser:                string(pctx.Secret.Data["user"]),
+		settings.VCenterPassword:            string(pctx.Secret.Data["password"]),
+		settings.VCenterInsecure:            fmt.Sprint(base.GetInsecureSkipVerifyFlag(pctx.Secret)),
+		settings.VCenterThumbprint:          pctx.Provider.Status.Fingerprint,
+		settings.ToeholdTemplateContentHash: version.DiskHash(toehold.Spec),
+		settings.ToeholdBaseContainerImage:  toehold.Spec.BaseDisk.ContainerImage,
+	}
+	secret := &core.Secret{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, secret)
+	if k8serr.IsNotFound(err) {
+		secret = &core.Secret{
+			ObjectMeta: meta.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+			},
+			Type:       core.SecretTypeOpaque,
+			StringData: data,
+		}
+		if err = r.setOwner(toehold, secret); err != nil {
+			return liberr.Wrap(err)
+		}
+		return liberr.Wrap(r.Create(ctx, secret))
+	}
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	secret.StringData = data
+	if err = r.setOwner(toehold, secret); err != nil {
+		return liberr.Wrap(err)
+	}
+	return liberr.Wrap(r.Update(ctx, secret))
+}
+
+func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) (*core.Pod, error) {
+	podList := &core.PodList{}
+	if err := r.List(ctx, podList, &client.ListOptions{
+		Namespace:     toehold.TargetNS(),
+		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
+	}); err != nil {
+		return nil, liberr.Wrap(err)
+	}
+
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		switch pod.Status.Phase {
+		case core.PodFailed:
+			if err := r.Delete(ctx, pod); err != nil && !k8serr.IsNotFound(err) {
+				return nil, liberr.Wrap(err)
+			}
+			continue
+		case core.PodPending, core.PodRunning, core.PodSucceeded:
+			if err := r.ensureControllerOwner(ctx, toehold, pod); err != nil {
+				return nil, err
+			}
+			return pod, nil
+		}
+	}
+
+	pod := r.buildPod(toehold, credsSecretName(toehold))
+	if err := r.setOwner(toehold, pod); err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	if err := r.Create(ctx, pod); err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	return pod, nil
+}
+
+func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) error {
+	podList := &core.PodList{}
+	err := r.List(ctx, podList, &client.ListOptions{
+		Namespace:     toehold.TargetNS(),
+		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
+	})
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	for i := range podList.Items {
+		if err = r.Delete(ctx, &podList.Items[i]); err != nil && !k8serr.IsNotFound(err) {
+			return liberr.Wrap(err)
+		}
+	}
+	return nil
+}
+
+func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName string) *core.Pod {
+	builderImage := Settings.Toehold.BuilderImage
+	if toehold.Spec.Images.ToeholdBuilder != "" {
+		builderImage = toehold.Spec.Images.ToeholdBuilder
+	}
+	activeDeadline := int64(7200)
+	nodeSelector := map[string]string{"node-role.kubernetes.io/worker": ""}
+	for k, v := range toehold.Spec.NodeSelector {
+		nodeSelector[k] = v
+	}
+	nodeSelector["kubevirt.io/schedulable"] = "true"
+
+	workDir := core.EmptyDirVolumeSource{}
+	if giB := toehold.Spec.BaseDisk.WorkGiB; giB > 0 {
+		workDir.SizeLimit = resource.NewQuantity(giB*1024*1024*1024, resource.BinarySI)
+	}
+
+	buildEnv := []core.EnvVar{
+		{Name: settings.ToeholdTemplateName, Value: toehold.Spec.TemplateName},
+		{Name: settings.ToeholdDatastore, Value: toehold.Spec.Datastore},
+		{Name: settings.ToeholdFolder, Value: toehold.Spec.Folder},
+		{Name: settings.ToeholdNetwork, Value: toehold.Spec.Network},
+		{Name: settings.ToeholdBuildPodCPUs, Value: fmt.Sprint(cpuCount(toehold))},
+		{Name: settings.ToeholdBuildPodMemoryMiB, Value: fmt.Sprint(memoryMiB(toehold))},
+		{Name: settings.ToeholdTemplateContentHash, Value: version.DiskHash(toehold.Spec)},
+		{Name: settings.ToeholdTemplateConfigHash, Value: version.ConfigHash(toehold.Spec)},
+		{Name: settings.ToeholdBaseContainerImage, Value: toehold.Spec.BaseDisk.ContainerImage},
+	}
+	if password := toehold.Spec.Customize.RootPassword; password != "" {
+		buildEnv = append(buildEnv, core.EnvVar{Name: "TOEHOLD_ROOT_PASSWORD", Value: password})
+	}
+
+	buildResources := core.ResourceRequirements{
+		Requests: core.ResourceList{
+			core.ResourceCPU:    resource.MustParse("500m"),
+			core.ResourceMemory: resource.MustParse("2Gi"),
+			core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
+		},
+		Limits: core.ResourceList{
+			core.ResourceCPU:    resource.MustParse("4"),
+			core.ResourceMemory: resource.MustParse("8Gi"),
+			core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
+		},
+	}
+
+	podSpec := core.PodSpec{
+		RestartPolicy:         core.RestartPolicyNever,
+		ServiceAccountName:    saName,
+		NodeSelector:          nodeSelector,
+		ActiveDeadlineSeconds: &activeDeadline,
+		SecurityContext:       &core.PodSecurityContext{SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
+		Volumes: []core.Volume{
+			{
+				Name: "base-disk",
+				VolumeSource: core.VolumeSource{
+					Image: &core.ImageVolumeSource{
+						Reference:  toehold.Spec.BaseDisk.ContainerImage,
+						PullPolicy: core.PullIfNotPresent,
+					},
+				},
+			},
+			{
+				Name:         "work",
+				VolumeSource: core.VolumeSource{EmptyDir: &workDir},
+			},
+		},
+		Containers: []core.Container{
+			{
+				Name:            "build",
+				Image:           builderImage,
+				ImagePullPolicy: core.PullAlways,
+				SecurityContext: &core.SecurityContext{Privileged: boolPtr(true), RunAsUser: int64Ptr(0), SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
+				EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
+					LocalObjectReference: core.LocalObjectReference{Name: secretName},
+				}}},
+				Env: buildEnv,
+				VolumeMounts: []core.VolumeMount{
+					{Name: "base-disk", MountPath: "/disk", ReadOnly: true},
+					{Name: "work", MountPath: "/work"},
+				},
+				Resources: buildResources,
+			},
+		},
+	}
+	if toehold.Spec.BaseDisk.ImagePullSecret != nil {
+		podSpec.ImagePullSecrets = []core.LocalObjectReference{*toehold.Spec.BaseDisk.ImagePullSecret}
+	}
+
+	return &core.Pod{
+		ObjectMeta: meta.ObjectMeta{
+			GenerateName: toehold.Name + "-build-",
+			Namespace:    toehold.TargetNS(),
+			Labels: map[string]string{
+				labelToehold: toehold.Name,
+			},
+		},
+		Spec: podSpec,
+	}
+}
+
+func cpuCount(toehold *api.ToeholdTemplate) int32 {
+	if toehold.Spec.Resources.CPU > 0 {
+		return toehold.Spec.Resources.CPU
+	}
+	return 2
+}
+
+func memoryMiB(toehold *api.ToeholdTemplate) int32 {
+	if toehold.Spec.Resources.MemoryMiB > 0 {
+		return toehold.Spec.Resources.MemoryMiB
+	}
+	return 4096
+}
+
+func boolPtr(v bool) *bool    { return &v }
+func int64Ptr(v int64) *int64 { return &v }
