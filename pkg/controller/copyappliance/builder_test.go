@@ -138,7 +138,8 @@ func TestPlacementFollowsTheSourceVM(t *testing.T) {
 	}{
 		{"Folder", spec.Folder, "/DC0/vm/apps"},
 		{"Datacenter", spec.Datacenter, "/DC0"},
-		{"Host", spec.Host, "/DC0/host/Cluster0/esx1.example.com"},
+		// The appliance is not placed on the source VM's host; the host is
+		// only how its compute resource, and so the pool below, is found.
 		{"ResourcePool", spec.ResourcePool, "/DC0/host/Cluster0/Resources"},
 		{"Datastore", spec.Datastore, "/DC0/datastore/datastore1"},
 	}
@@ -226,6 +227,9 @@ func TestPlacementErrors(t *testing.T) {
 			want:  "no disks",
 		},
 		{
+			// Nothing is placed on the host, but the resource pool is found
+			// through it, so a VM without one still has nowhere to put the
+			// appliance.
 			name:  "no host",
 			setup: func(i *fakeInventory) { i.vm.Host = "" },
 			want:  "no host",
@@ -312,12 +316,9 @@ func withSettings(t *testing.T, applied settings.CopyAppliance) {
 
 func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
-		GuestId:      "otherGuest64",
-		NumCPUs:      2,
-		MemoryMB:     2048,
-		RootDiskPath: "[datastore1] images/appliance-root.vmdk",
-		SSHKeySecret: "copy-appliance-ssh-key",
-		SSHUser:      "root",
+		SSHKeySecret:   "copy-appliance-ssh-key",
+		SSHUser:        "root",
+		ContainerImage: "copy-appliance:latest",
 	}
 }
 
@@ -357,12 +358,8 @@ func TestBuild(t *testing.T) {
 	if spec.Provider.Namespace != "forklift" || spec.Provider.Name != "vcenter" {
 		t.Errorf("Provider = %v, want forklift/vcenter", spec.Provider)
 	}
-	if spec.GuestId != "otherGuest64" || spec.NumCPUs != 2 || spec.MemoryMB != 2048 {
-		t.Errorf("appliance shape = (%q, %d, %d), want it from settings",
-			spec.GuestId, spec.NumCPUs, spec.MemoryMB)
-	}
-	if spec.RootDiskPath != testSettings().RootDiskPath {
-		t.Errorf("RootDiskPath = %q, want it from settings", spec.RootDiskPath)
+	if spec.ContainerImage != testSettings().ContainerImage {
+		t.Errorf("ContainerImage = %q, want it from settings", spec.ContainerImage)
 	}
 	// The key lives with the provider, which is where the appliance's other
 	// credentials already are.
@@ -372,23 +369,8 @@ func TestBuild(t *testing.T) {
 	if len(spec.AttachDiskPaths) != 0 {
 		t.Errorf("AttachDiskPaths = %v, want none", spec.AttachDiskPaths)
 	}
-	if spec.Folder != "/DC0/vm/apps" || spec.Host != "/DC0/host/Cluster0/esx1.example.com" {
-		t.Errorf("placement = (%q, %q), want the source VM's", spec.Folder, spec.Host)
-	}
-}
-
-func TestBuildRejectsAnUnconfiguredRootDisk(t *testing.T) {
-	applied := testSettings()
-	applied.RootDiskPath = ""
-	withSettings(t, applied)
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
-
-	_, err := build(inventory, testProvider(), testRef)
-	if err == nil {
-		t.Fatal("build succeeded without a root disk")
-	}
-	if !strings.Contains(err.Error(), settings.CopyApplianceRootDiskPath) {
-		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceRootDiskPath)
+	if spec.Folder != "/DC0/vm/apps" || spec.Datastore != "/DC0/datastore/datastore1" {
+		t.Errorf("placement = (%q, %q), want the source VM's", spec.Folder, spec.Datastore)
 	}
 }
 
@@ -406,6 +388,23 @@ func TestBuildRejectsAnUnconfiguredSSHKeySecret(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), settings.CopyApplianceSSHKeySecret) {
 		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceSSHKeySecret)
+	}
+}
+
+// Without an image the appliance is cloned, configured, and then has nothing
+// to serve exports with.
+func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
+	applied := testSettings()
+	applied.ContainerImage = ""
+	withSettings(t, applied)
+	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+
+	_, err := build(inventory, testProvider(), testRef)
+	if err == nil {
+		t.Fatal("build succeeded without a container image")
+	}
+	if !strings.Contains(err.Error(), settings.CopyApplianceContainerImage) {
+		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceContainerImage)
 	}
 }
 

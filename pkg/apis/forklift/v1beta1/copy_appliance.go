@@ -21,14 +21,13 @@ type CopyApplianceSpec struct {
 	// matching public key is expected to be installed in the appliance image
 	// already.
 	SSHKey core.ObjectReference `json:"sshKey" ref:"Secret"`
-	// Guest OS identifier for the appliance VM (e.g. "otherGuest64").
-	GuestId string `json:"guestId"`
-	// Number of virtual CPUs for the appliance VM.
-	// +kubebuilder:validation:Minimum=1
-	NumCPUs int32 `json:"numCpus"`
-	// Memory for the appliance VM, in MiB.
-	// +kubebuilder:validation:Minimum=1
-	MemoryMB int64 `json:"memoryMB"`
+	// ImageStreamTag naming the container image loaded into the appliance's
+	// podman store, resolved in the controller's own namespace. The controller
+	// reads the image from the cluster's internal registry and streams it to
+	// the appliance over SSH, so the appliance needs no registry access of its
+	// own.
+	// +kubebuilder:validation:MinLength=1
+	ContainerImage string `json:"containerImage"`
 	// Datacenter in which the appliance VM is created.
 	// +optional
 	Datacenter string `json:"datacenter,omitempty"`
@@ -36,18 +35,8 @@ type CopyApplianceSpec struct {
 	Datastore string `json:"datastore"`
 	// Resource pool in which the appliance VM is created.
 	ResourcePool string `json:"resourcePool"`
-	// Host on which the appliance VM is placed. When empty, placement is
-	// left to DRS.
-	// +optional
-	Host string `json:"host,omitempty"`
 	// Inventory folder in which the appliance VM is created.
 	Folder string `json:"folder"`
-	// Datastore path of the existing root disk image vmdk to boot the
-	// appliance from (e.g. "[datastore1] images/appliance-root.vmdk").
-	// The image must support the paravirtual SCSI controller the appliance
-	// VM is built with, or it will not find its boot disk.
-	// +kubebuilder:validation:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
-	RootDiskPath string `json:"rootDiskPath"`
 	// Datastore paths of existing vmdks (belonging to other VMs) to attach
 	// to the appliance VM (e.g. "[datastore13] some-vm/disk-0.vmdk").
 	// Capped so that the root disk plus the attached disks fit within the
@@ -86,7 +75,7 @@ type CopyApplianceStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// The managed object reference ID of the created appliance VM.
 	// +optional
-	MoRef string `json:"moREF,omitempty"`
+	MoRef string `json:"moRef,omitempty"`
 	// The addresses the appliance VM's guest reports on its network, one entry
 	// per address, in the order the guest reports them. Empty until the guest
 	// has booted far enough to answer.
@@ -97,6 +86,11 @@ type CopyApplianceStatus struct {
 	// must not be trusted when this does not match the connected instance.
 	// +optional
 	VCenterInstanceUUID string `json:"vcenterInstanceUUID,omitempty"`
+	// The reference the container image is loaded under in the appliance's
+	// podman store. It carries the digest of the image that was loaded, so an
+	// appliance holding an earlier build of the same tag does not match.
+	// +optional
+	LoadedImage string `json:"loadedImage,omitempty"`
 	// The step of the deploy or teardown itinerary the appliance has reached.
 	// Every phase here is one the appliance can actually be observed in: a
 	// step that need not wait on vSphere is passed through within a single
@@ -107,7 +101,7 @@ type CopyApplianceStatus struct {
 	// The managed object reference ID of the vSphere task the current phase is
 	// waiting on. Empty when the phase has nothing outstanding.
 	// +optional
-	TaskRef string `json:"taskREF,omitempty"`
+	TaskRef string `json:"taskRef,omitempty"`
 }
 
 // +genclient
