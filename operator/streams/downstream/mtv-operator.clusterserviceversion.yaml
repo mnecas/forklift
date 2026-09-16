@@ -807,4 +807,10 @@ spec:
         kind: Conversion
         name: conversions.forklift.konveyor.io
         version: v1beta1
-
+      - description: vSphere toehold template builder
+        displayName: Toehold Template
+        kind: ToeholdTemplate
+        name: toeholdtemplates.forklift.konveyor.io
+  relatedImages:
+    - name: toehold_builder
+      image: "${TOEHOLD_BUILDER_IMAGE}"
