@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
@@ -29,10 +30,12 @@ import (
 // production code already assumes.
 type sshServer struct {
 	addr string
-	// failing names the commands the appliance refuses to run.
-	failing map[string]bool
-	mutex   sync.Mutex
-	ran     []sshCommand
+	// failing names the commands the appliance refuses to run, and dropping
+	// the ones it drops the whole connection on rather than answering.
+	failing  map[string]bool
+	dropping map[string]bool
+	mutex    sync.Mutex
+	ran      []sshCommand
 	// once stops the appliance listening after one connection.
 	once bool
 }
@@ -53,7 +56,10 @@ const commandFailureOutput = "no such file or directory"
 // them, which is the appliance that was built with somebody else's.
 func startSSHServer(t *testing.T, authorized ssh.PublicKey, failing ...string) *sshServer {
 	t.Helper()
-	server := &sshServer{failing: map[string]bool{}}
+	server := &sshServer{
+		failing:  map[string]bool{},
+		dropping: map[string]bool{},
+	}
 	for _, command := range failing {
 		server.failing[command] = true
 	}
@@ -98,6 +104,14 @@ func (r *sshServer) stopAfterOne() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.once = true
+}
+
+// dropOn makes the appliance drop the connection when it is asked to run this
+// command, which is the network going away part way through a transfer.
+func (r *sshServer) dropOn(command string) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.dropping[command] = true
 }
 
 func (r *sshServer) stopping() bool {
@@ -149,13 +163,13 @@ func (r *sshServer) serve(conn net.Conn, config *ssh.ServerConfig) {
 		if aErr != nil {
 			return
 		}
-		go r.session(channel, requests)
+		go r.session(channel, requests, func() { _ = conn.Close() })
 	}
 }
 
 // session answers one exec request and closes, which is what one command over
 // its own session looks like from the appliance's side.
-func (r *sshServer) session(channel ssh.Channel, requests <-chan *ssh.Request) {
+func (r *sshServer) session(channel ssh.Channel, requests <-chan *ssh.Request, drop func()) {
 	defer func() { _ = channel.Close() }()
 	for request := range requests {
 		if request.Type != "exec" {
@@ -169,7 +183,11 @@ func (r *sshServer) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 		if request.WantReply {
 			_ = request.Reply(true, nil)
 		}
-		status := r.run(payload.Command, channel)
+		status, dropped := r.run(payload.Command, channel)
+		if dropped {
+			drop()
+			return
+		}
 		_, _ = channel.SendRequest(
 			"exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 		return
@@ -179,12 +197,16 @@ func (r *sshServer) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 // run reads the command's standard input to the end and then answers. Draining
 // first is what a real command does, and a server that replied without draining
 // would hang any client sending more than fits in the channel's window.
-func (r *sshServer) run(command string, channel ssh.Channel) (status uint32) {
+func (r *sshServer) run(command string, channel ssh.Channel) (status uint32, dropped bool) {
 	stdin, _ := io.ReadAll(channel)
 	r.mutex.Lock()
 	r.ran = append(r.ran, sshCommand{command: command, stdin: stdin})
 	refused := r.failing[command]
+	dropped = r.dropping[command]
 	r.mutex.Unlock()
+	if dropped {
+		return
+	}
 	if refused {
 		// On stderr, where a failing command writes. CombinedOutput merges the
 		// two, so a caller that reads either still sees it.
@@ -245,6 +267,14 @@ func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 		Appliance: appliance,
 		Log:       testLog(),
 		sshPort:   port,
+		TLSSecret: &core.Secret{
+			ObjectMeta: meta.ObjectMeta{
+				Namespace: appliance.Spec.TLSSecret.Namespace,
+				Name:      appliance.Spec.TLSSecret.Name,
+			},
+			Data: applianceTLS().data,
+		},
+		orchestratorPath: writeOrchestrator(t),
 	}
 	if private != nil {
 		ac.SSHSecret = &core.Secret{
@@ -373,6 +403,70 @@ func TestSSHLogin(t *testing.T) {
 			t.Errorf("error = %q, want it to name the secret", err)
 		}
 	})
+}
+
+// The timeout SSHLoginFor is given is what the caller is prepared to spend on
+// the transfer the login is for, and LoadImage asks for thirty minutes of it.
+// The reconcile's own context has to be able to end it sooner: otherwise one
+// appliance that accepts connections and then says nothing holds a reconcile
+// worker for the whole half hour.
+func TestSSHLoginForHonoursTheContextDeadline(t *testing.T) {
+	private, _ := testKeyPair(t)
+	ac := sshContext(t, private, silentAddr(t))
+	ctx, cancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
+	defer cancel()
+
+	type result struct {
+		client   *ssh.Client
+		answered bool
+		err      error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		client, answered, err := ac.SSHLoginFor(ctx, "127.0.0.1", sshTransferTimeout)
+		finished <- result{client, answered, err}
+	}()
+
+	select {
+	case got := <-finished:
+		if got.err == nil {
+			t.Fatal("SSHLoginFor succeeded against an appliance that never said anything")
+		}
+		if got.answered || got.client != nil {
+			t.Errorf("answered = %v, client = %v, want neither", got.answered, got.client)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("SSHLoginFor is still waiting: the login is bounded by its own timeout only")
+	}
+}
+
+// silentAddr accepts connections and then says nothing, which is the appliance
+// that costs the most: the dial succeeds, so there is no refusal to read as
+// "still starting", and the handshake waits for a banner that never comes.
+func silentAddr(t *testing.T) (addr string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(done)
+		_ = listener.Close()
+	})
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				<-done
+				_ = conn.Close()
+			}()
+		}
+	}()
+	return listener.Addr().String()
 }
 
 func TestRunCommands(t *testing.T) {
@@ -551,10 +645,23 @@ func TestProbe(t *testing.T) {
 }
 
 func TestConfigure(t *testing.T) {
-	t.Run("an appliance that answers is configured", func(t *testing.T) {
+	// configureContext is an appliance that has been through LoadImage, which
+	// is what Configure renders its unit around.
+	configureContext := func(t *testing.T, private []byte, addr string) *ApplianceContext {
+		t.Helper()
+		ac := sshContext(t, private, addr)
+		ac.Appliance.Status.LoadedImage = testLoadedImage
+		return ac
+	}
+
+	// The install pushes the whole orchestrator binary and restarts the
+	// service, which tears down every export it was supervising. Doing that on
+	// an appliance already running the right thing would mean doing it on every
+	// pass, for as long as the appliance lives.
+	t.Run("an appliance already running the supervisor is configured untouched", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)
-		runner := DeployRunner{context: sshContext(t, private, server.addr)}
+		runner := DeployRunner{context: configureContext(t, private, server.addr)}
 
 		done, err := runner.Configure(context.TODO())
 		if err != nil {
@@ -563,8 +670,93 @@ func TestConfigure(t *testing.T) {
 		if !done {
 			t.Error("done = false, want the appliance configured")
 		}
-		if !slices.Equal(server.Ran(), applianceConfigCommands) {
-			t.Errorf("ran %v, want %v", server.Ran(), applianceConfigCommands)
+		for _, unwanted := range []string{
+			installBinaryCommand(),
+			"systemctl restart " + orchestratorUnit,
+		} {
+			if slices.Contains(server.Ran(), unwanted) {
+				t.Errorf("%q was run against an appliance that was already installed", unwanted)
+			}
+		}
+	})
+
+	t.Run("an appliance without the supervisor has it installed and enabled", func(t *testing.T) {
+		private, public := testKeyPair(t)
+		server := startSSHServer(t, public, installedProbe(t))
+		runner := DeployRunner{context: configureContext(t, private, server.addr)}
+
+		done, err := runner.Configure(context.TODO())
+
+		if err != nil {
+			t.Fatalf("Configure: %v", err)
+		}
+		// Whether it stays up is a question for the next pass. Asked now it
+		// would only catch a process that had not yet got round to failing.
+		if done {
+			t.Error("done = true, want the supervisor checked on a later pass")
+		}
+		for _, want := range []string{
+			installBinaryCommand(),
+			"systemctl enable " + orchestratorUnit,
+			"systemctl restart " + orchestratorUnit,
+		} {
+			if !slices.Contains(server.Ran(), want) {
+				t.Errorf("%q was not run; ran %v", want, server.Ran())
+			}
+		}
+	})
+
+	// The install pushes the whole binary, so there is a window of megabytes in
+	// which the link can go away. Reconciler.Deploy turns any error the runner
+	// returns into PhaseDeployFailed, which is absorbing, so treating one i/o
+	// timeout as a failure would wedge the CopyAppliance for good over something
+	// that would have worked on the next pass.
+	t.Run("a connection lost part way through the install is not a failure", func(t *testing.T) {
+		private, public := testKeyPair(t)
+		server := startSSHServer(t, public, installedProbe(t))
+		server.dropOn(writeCommand(applianceCertsDir+"/"+tlsCACert, "077"))
+		runner := DeployRunner{context: configureContext(t, private, server.addr)}
+
+		done, err := runner.Configure(context.TODO())
+
+		if err != nil {
+			t.Fatalf("Configure: %v, want a lost connection to be something to retry", err)
+		}
+		if done {
+			t.Error("done = true, want an install that did not finish reported as unfinished")
+		}
+	})
+
+	// A unit that is installed but down is worth one more start, and is not
+	// worth failing the deploy over: PhaseDeployFailed has no way back, and
+	// this is the kind of thing that comes right on its own.
+	t.Run("an appliance whose supervisor is down is started and not configured", func(t *testing.T) {
+		private, public := testKeyPair(t)
+		isActive := "systemctl is-active --quiet " + orchestratorUnit
+		server := startSSHServer(t, public, isActive)
+		runner := DeployRunner{context: configureContext(t, private, server.addr)}
+
+		done, err := runner.Configure(context.TODO())
+
+		if err != nil {
+			t.Fatalf("Configure: %v", err)
+		}
+		if done {
+			t.Error("done = true, want an appliance whose supervisor is down left alone")
+		}
+		for _, want := range []string{
+			// reset-failed first, or a unit that tripped systemd's start limit
+			// refuses to start at all.
+			"systemctl reset-failed " + orchestratorUnit,
+			"systemctl start " + orchestratorUnit,
+		} {
+			if !slices.Contains(server.Ran(), want) {
+				t.Errorf("%q was not run; ran %v", want, server.Ran())
+			}
+		}
+		// Starting is not reinstalling. The binary is already there.
+		if slices.Contains(server.Ran(), installBinaryCommand()) {
+			t.Error("the binary was sent again to an appliance that already had it")
 		}
 	})
 
@@ -572,7 +764,7 @@ func TestConfigure(t *testing.T) {
 	// is answering on it. Failing here would fail a deploy that is on track.
 	t.Run("an appliance that is not answering yet is not configured and is not a failure", func(t *testing.T) {
 		private, _ := testKeyPair(t)
-		runner := DeployRunner{context: sshContext(t, private, closedAddr(t))}
+		runner := DeployRunner{context: configureContext(t, private, closedAddr(t))}
 
 		done, err := runner.Configure(context.TODO())
 		if err != nil {
@@ -589,7 +781,7 @@ func TestConfigure(t *testing.T) {
 		private, _ := testKeyPair(t)
 		_, installed := testKeyPair(t)
 		server := startSSHServer(t, installed)
-		runner := DeployRunner{context: sshContext(t, private, server.addr)}
+		runner := DeployRunner{context: configureContext(t, private, server.addr)}
 
 		done, err := runner.Configure(context.TODO())
 		if err == nil {
@@ -605,7 +797,7 @@ func TestConfigure(t *testing.T) {
 	t.Run("an appliance reporting no address fails", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)
-		ac := sshContext(t, private, server.addr)
+		ac := configureContext(t, private, server.addr)
 		ac.Appliance.Status.Addresses = nil
 		runner := DeployRunner{context: ac}
 
@@ -618,6 +810,29 @@ func TestConfigure(t *testing.T) {
 		}
 		if !errorMentions(t, err, ac.Appliance.Name) {
 			t.Errorf("error = %q, want it to name the appliance", err)
+		}
+	})
+
+	// Without the certificates the appliance cannot serve anything, and the
+	// controller cannot read what it serves. Sending everything else first and
+	// discovering it afterwards would leave a half-installed appliance.
+	t.Run("an appliance whose TLS secret is missing fails before logging in", func(t *testing.T) {
+		private, public := testKeyPair(t)
+		server := startSSHServer(t, public)
+		ac := configureContext(t, private, server.addr)
+		ac.TLSSecret = nil
+		runner := DeployRunner{context: ac}
+
+		done, err := runner.Configure(context.TODO())
+
+		if err == nil {
+			t.Fatal("Configure succeeded with no TLS material to install")
+		}
+		if done {
+			t.Error("done = true, want it not configured")
+		}
+		if ran := server.Ran(); len(ran) != 0 {
+			t.Errorf("ran %v, want nothing sent to the appliance", ran)
 		}
 	})
 }

@@ -21,6 +21,17 @@ type CopyApplianceSpec struct {
 	// matching public key is expected to be installed in the appliance image
 	// already.
 	SSHKey core.ObjectReference `json:"sshKey" ref:"Secret"`
+	// Secret holding the mutual-TLS material the appliance serves its exports
+	// with. The controller installs the CA and the server half on the appliance
+	// and keeps the client half to query the exports with. The data keys are the
+	// file names the appliance expects: "ca-cert.pem", "server-cert.pem",
+	// "server-key.pem", "client-cert.pem" and "client-key.pem".
+	//
+	// The server certificate must be issued for the logical name "nbd-server"
+	// rather than for an address. The appliance is cloned on demand and its
+	// address is not known when the certificate is issued, so the client
+	// verifies the name instead of where it reached it.
+	TLSSecret core.ObjectReference `json:"tlsSecret" ref:"Secret"`
 	// ImageStreamTag naming the container image loaded into the appliance's
 	// podman store, resolved in the controller's own namespace. The controller
 	// reads the image from the cluster's internal registry and streams it to
@@ -66,6 +77,17 @@ type ApplianceAddress struct {
 	IP string `json:"ip"`
 }
 
+// ApplianceExport is one disk the appliance publishes over NBD.
+type ApplianceExport struct {
+	// Stable identifier the appliance's guest resolved for the disk. It falls
+	// back to the device path when the guest can report nothing better.
+	WWID string `json:"wwid"`
+	// Port on the appliance the export is served on.
+	Port int32 `json:"port"`
+	// Device node the export reads, as the appliance's guest sees it.
+	Device string `json:"device"`
+}
+
 // CopyAppliance status.
 type CopyApplianceStatus struct {
 	// Conditions.
@@ -91,6 +113,10 @@ type CopyApplianceStatus struct {
 	// appliance holding an earlier build of the same tag does not match.
 	// +optional
 	LoadedImage string `json:"loadedImage,omitempty"`
+	// The disk exports the appliance publishes, one per attached disk. Empty
+	// until the appliance is serving all of them.
+	// +optional
+	Exports []ApplianceExport `json:"exports,omitempty"`
 	// The step of the deploy or teardown itinerary the appliance has reached.
 	// Every phase here is one the appliance can actually be observed in: a
 	// step that need not wait on vSphere is passed through within a single

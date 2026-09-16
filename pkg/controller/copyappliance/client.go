@@ -28,25 +28,35 @@ type ApplianceContext struct {
 	// with. Nil when the CopyAppliance names a secret that is not there, which
 	// only the configure step cares about.
 	SSHSecret *core.Secret
+	// TLSSecret holds the mutual-TLS material the appliance serves its exports
+	// with. Nil when the CopyAppliance names a secret that is not there, which
+	// only the configure and export steps care about.
+	TLSSecret *core.Secret
 	VCenter   *govmomi.Client
 	Log       logging.LevelLogger
 	// sshPort is the port the appliance's sshd answers on. Empty means the
 	// standard port, which is the only one an appliance image is built with;
 	// a test appliance is on whatever it was given.
-	sshPort    string
-	finder     *find.Finder
-	folder     *object.Folder
-	datacenter *object.Datacenter
+	sshPort string
+	// announcePortOverride and orchestratorPath are the same idea for the
+	// export endpoint and for the binary shipped to the appliance: empty means
+	// the real one, and a test supplies its own.
+	announcePortOverride string
+	orchestratorPath     string
+	finder               *find.Finder
+	folder               *object.Folder
+	datacenter           *object.Datacenter
 }
 
 // NewApplianceContext connects to the source vCenter and resolves the
 // appliance's datacenter and inventory folder. The caller owns the returned
 // context and must Close it.
-func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret, sshSecret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
+func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret, sshSecret, tlsSecret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
 	ac = &ApplianceContext{
 		Appliance: appliance,
 		Secret:    secret,
 		SSHSecret: sshSecret,
+		TLSSecret: tlsSecret,
 		Log:       log,
 	}
 	ac.VCenter, err = base.ConnectGovmomi(

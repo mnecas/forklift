@@ -2,12 +2,16 @@ package copyappliance
 
 import (
 	"context"
+	"errors"
+	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
+	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi/vim25/types"
 	"golang.org/x/crypto/ssh"
@@ -85,19 +89,6 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			next = PhaseWaitForNetwork
 			return
 		}
-		next = PhaseConfigure
-		fallthrough
-	case PhaseConfigure:
-		var done bool
-		done, err = r.Configure(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseConfigure
-			return
-		}
 		next = PhaseLoadImage
 		fallthrough
 	case PhaseLoadImage:
@@ -109,6 +100,28 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 		}
 		if !done {
 			next = PhaseLoadImage
+			return
+		}
+		next = PhaseConfigure
+		fallthrough
+	case PhaseConfigure:
+		// LoadImage used to run after this step and now runs before it. An
+		// appliance an older controller left sitting here has therefore not
+		// loaded its image, and the fallthrough chain only ever moves forward,
+		// so it cannot reach a case above this one. Send it back, rather than
+		// install a supervisor with no image to run.
+		if r.context.Appliance.Status.LoadedImage == "" {
+			next = PhaseLoadImage
+			return
+		}
+		var done bool
+		done, err = r.Configure(ctx)
+		if err != nil {
+			next = PhaseDeployFailed
+			break
+		}
+		if !done {
+			next = PhaseConfigure
 			return
 		}
 		next = PhaseWaitForExports
@@ -196,12 +209,18 @@ func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error
 	return
 }
 
-// Configure logs in to the appliance and applies the configuration it needs
-// before it can serve exports. It reports whether the appliance is configured.
+// Configure installs the NBD orchestrator on the appliance and makes sure it is
+// running. It reports whether the appliance is configured.
+//
+// The orchestrator is what turns the loaded image into exports: it finds the
+// attached disks, runs one container per disk, and announces the result. It is
+// installed as a systemd unit, and enabled, so that the appliance comes back
+// supervising its disks after a reboot rather than idle.
 //
 // An appliance that is not accepting connections yet is not a failure: the
-// guest reports its address before sshd is answering on it. A rejected key, or
-// a command the appliance fails, is.
+// guest reports its address before sshd is answering on it. Neither is a
+// supervisor that is not up yet, which is only observable one moment after
+// being asked to start. A rejected key, or a command the appliance answers, is.
 func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 	// Recorded by WaitForNetwork on an earlier pass, so this costs no vCenter
 	// round trip.
@@ -212,7 +231,20 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 			"appliance", r.context.Appliance.Name)
 		return
 	}
-	client, answered, err := r.context.SSHLogin(ctx, address)
+	// Both are read before logging in: neither depends on the appliance, and a
+	// misconfigured secret should be reported without holding a connection.
+	unit, err := r.context.renderUnit()
+	if err != nil {
+		return
+	}
+	certs, err := r.context.ServerTLS()
+	if err != nil {
+		return
+	}
+
+	// The orchestrator binary goes over this login, so it is opened for as long
+	// as a transfer takes rather than as long as a command takes.
+	client, answered, err := r.context.SSHLoginFor(ctx, address, sshTransferTimeout)
 	if err != nil {
 		return
 	}
@@ -224,23 +256,59 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		_ = client.Close()
 	}()
 
-	err = r.context.RunCommands(client, applianceConfigCommands...)
+	// Asking first is what keeps a supervisor that cannot start from costing a
+	// whole reinstall every few seconds, and from having its exports torn down
+	// by the restart at the end of every one of them.
+	installed, err := r.context.OrchestratorInstalled(client, unit, certs)
 	if err != nil {
 		return
 	}
+	if !installed {
+		err = r.context.InstallOrchestrator(client, unit, certs)
+		if err != nil {
+			if !r.context.Alive(client) {
+				// The link went away part way through. Nothing is known to be
+				// wrong with the appliance, and a deploy that fails here cannot
+				// be restarted, so this is a wait rather than a failure.
+				r.context.Log.Info(
+					"Lost the connection to the appliance while installing the supervisor.",
+					"address", address,
+					"error", err.Error())
+				err = nil
+			}
+			return
+		}
+		r.context.Log.Info("Installed the appliance supervisor.",
+			"address", address, "image", r.context.Appliance.Status.LoadedImage)
+		// It was just restarted. Whether it stays up is a question for the next
+		// pass; asked now it would only catch a process that had not yet got
+		// round to failing.
+		return
+	}
+
+	active, err := r.context.OrchestratorActive(client)
+	if err != nil {
+		return
+	}
+	if !active {
+		// Installed but down. Starting it is all that is left to try, and if
+		// that does not take either, the journal is the only thing that will
+		// say why.
+		sErr := r.context.StartOrchestrator(client)
+		if sErr != nil {
+			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
+				"address", address)
+		}
+		r.context.Log.Info("The appliance supervisor is not running.",
+			"address", address,
+			"journal", r.context.OrchestratorLog(client))
+		return
+	}
+
 	r.context.Log.Info("Configured the appliance.", "address", address)
 	done = true
 	return
 }
-
-// applianceConfigCommands are run in order over one login, and the first that
-// fails fails the deploy.
-//
-// The appliance image needs no configuration yet; this is where it goes when it
-// does. Until then the step runs one command that does nothing, so that it
-// proves the account can execute and not merely authenticate: a key restricted
-// with command= in authorized_keys logs in and then refuses everything.
-var applianceConfigCommands = []string{"true"}
 
 // LoadImage puts the appliance's container image into its podman store, and
 // reports whether the image is there.
@@ -320,11 +388,90 @@ func (r *DeployRunner) loadImage(ctx context.Context, client *ssh.Client, spec s
 }
 
 // WaitForExports reports whether the appliance has published the disk exports
-// the migration reads from.
+// the migration reads from, and records them.
 //
-// NO-OP: the appliance does not publish its exports yet.
+// This is the step that actually proves the appliance works. Everything before
+// it establishes that the pieces are in place; this asks the appliance itself
+// what it is serving, over the same mutual TLS a migration will use, and holds
+// the deploy until there is one export for every disk attached to the VM.
 func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
+	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.context.Appliance.Name)
+		return
+	}
+	ca, certificate, key, err := r.context.ClientTLS()
+	if err != nil {
+		return
+	}
+	client, err := announce.NewClient(ca, certificate, key)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+
+	exports, err := client.Disks(ctx, r.context.announceAddr(address))
+	if err != nil {
+		if exportsNotReady(err) {
+			r.context.Log.Info("The appliance is not announcing its exports yet.",
+				"address", address)
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "address", address)
+		return
+	}
+
+	// One export per disk attached to the VM. The appliance's own root disk is
+	// mounted and so is never exported, which is what makes the two counts
+	// comparable.
+	attached := len(r.context.Appliance.Spec.AttachDiskPaths)
+	if len(exports) < attached {
+		r.context.Log.Info("The appliance has not exported every disk yet.",
+			"address", address,
+			"exported", len(exports),
+			"attached", attached)
+		return
+	}
+	r.context.Appliance.Status.Exports = applianceExports(exports)
+	r.context.Log.Info("The appliance is exporting its disks.",
+		"address", address, "exports", len(exports))
 	done = true
+	return
+}
+
+// applianceExports converts what the appliance announced into what the status
+// records.
+func applianceExports(exports []runner.Export) (converted []api.ApplianceExport) {
+	converted = make([]api.ApplianceExport, 0, len(exports))
+	for _, export := range exports {
+		converted = append(converted, api.ApplianceExport{
+			WWID: export.WWID,
+			// The appliance publishes host ports, so this is always in range;
+			// the conversion is only because the API types a port the way
+			// Kubernetes does and the announce wire format does not.
+			Port:   int32(export.Port), // #nosec G115
+			Device: export.Device,
+		})
+	}
+	return
+}
+
+// exportsNotReady reports whether a failed query means the appliance is not
+// serving yet rather than that something is wrong with what it serves. The
+// announce endpoint comes up after sshd does, so for a while there is nothing
+// listening; and like sshd it accepts a connection slightly before it can talk
+// over it, which ends the handshake with no reply rather than with a refusal.
+//
+// A certificate that does not verify is deliberately not in here. That does not
+// improve by waiting.
+func exportsNotReady(err error) (notReady bool) {
+	var timeout interface{ Timeout() bool }
+	notReady = isStarting(err) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		(errors.As(err, &timeout) && timeout.Timeout())
 	return
 }
 
@@ -349,8 +496,8 @@ func (r *DeployRunner) Itinerary() *libitr.Itinerary {
 			{Name: PhaseCloneVM},
 			{Name: PhaseWaitForClone},
 			{Name: PhaseWaitForNetwork},
-			{Name: PhaseConfigure},
 			{Name: PhaseLoadImage},
+			{Name: PhaseConfigure},
 			{Name: PhaseWaitForExports},
 			{Name: PhaseDeployCompleted},
 			{Name: PhaseDeployFailed},

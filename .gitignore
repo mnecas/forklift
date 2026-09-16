@@ -44,6 +44,12 @@ vendor/**/Dockerfile.govc
 cmd/vsphere-copy-offload-populator/vmkfstools-wrapper/vmkfstools-wrapper.vib
 cmd/vsphere-copy-offload-populator/vmkfstools-wrapper/.passwords/
 
+# nbd-container local developer workflow: the orchestrator binary `make build` drops
+# here, the certs `make certs` generates, and the state file connect-disks.sh records.
+pkg/nbd-container/nbd-orchestrator
+pkg/nbd-container/certs/
+pkg/nbd-container/hack/.nbd-connections
+
 .github/workflows/build-push-images-hal.yml
 __pycache__
 

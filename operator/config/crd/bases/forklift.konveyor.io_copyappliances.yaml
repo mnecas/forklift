@@ -68,6 +68,15 @@ spec:
                   type: string
                 maxItems: 59
                 type: array
+              containerImage:
+                description: |-
+                  ImageStreamTag naming the container image loaded into the appliance's
+                  podman store, resolved in the controller's own namespace. The controller
+                  reads the image from the cluster's internal registry and streams it to
+                  the appliance over SSH, so the appliance needs no registry access of its
+                  own.
+                minLength: 1
+                type: string
               datacenter:
                 description: Datacenter in which the appliance VM is created.
                 type: string
@@ -77,24 +86,6 @@ spec:
               folder:
                 description: Inventory folder in which the appliance VM is created.
                 type: string
-              guestId:
-                description: Guest OS identifier for the appliance VM (e.g. "otherGuest64").
-                type: string
-              host:
-                description: |-
-                  Host on which the appliance VM is placed. When empty, placement is
-                  left to DRS.
-                type: string
-              memoryMB:
-                description: Memory for the appliance VM, in MiB.
-                format: int64
-                minimum: 1
-                type: integer
-              numCpus:
-                description: Number of virtual CPUs for the appliance VM.
-                format: int32
-                minimum: 1
-                type: integer
               provider:
                 description: Source provider in which the appliance VM is created.
                 properties:
@@ -140,14 +131,6 @@ spec:
                 x-kubernetes-map-type: atomic
               resourcePool:
                 description: Resource pool in which the appliance VM is created.
-                type: string
-              rootDiskPath:
-                description: |-
-                  Datastore path of the existing root disk image vmdk to boot the
-                  appliance from (e.g. "[datastore1] images/appliance-root.vmdk").
-                  The image must support the paravirtual SCSI controller the appliance
-                  VM is built with, or it will not find its boot disk.
-                pattern: ^\[[^\]]+\]\s*.+\.vmdk$
                 type: string
               sshKey:
                 description: |-
@@ -204,17 +187,68 @@ spec:
                   which the clone inherits as-is.
                 minLength: 1
                 type: string
+              tlsSecret:
+                description: |-
+                  Secret holding the mutual-TLS material the appliance serves its exports
+                  with. The controller installs the CA and the server half on the appliance
+                  and keeps the client half to query the exports with. The data keys are the
+                  file names the appliance expects: "ca-cert.pem", "server-cert.pem",
+                  "server-key.pem", "client-cert.pem" and "client-key.pem".
+
+                  The server certificate must be issued for the logical name "nbd-server"
+                  rather than for an address. The appliance is cloned on demand and its
+                  address is not known when the certificate is issued, so the client
+                  verifies the name instead of where it reached it.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
             required:
+            - containerImage
             - datastore
             - folder
-            - guestId
-            - memoryMB
-            - numCpus
             - provider
             - resourcePool
-            - rootDiskPath
             - sshKey
             - template
+            - tlsSecret
             type: object
           status:
             description: CopyAppliance status.
@@ -288,7 +322,40 @@ spec:
                   - type
                   type: object
                 type: array
-              moREF:
+              exports:
+                description: |-
+                  The disk exports the appliance publishes, one per attached disk. Empty
+                  until the appliance is serving all of them.
+                items:
+                  description: ApplianceExport is one disk the appliance publishes
+                    over NBD.
+                  properties:
+                    device:
+                      description: Device node the export reads, as the appliance's
+                        guest sees it.
+                      type: string
+                    port:
+                      description: Port on the appliance the export is served on.
+                      format: int32
+                      type: integer
+                    wwid:
+                      description: |-
+                        Stable identifier the appliance's guest resolved for the disk. It falls
+                        back to the device path when the guest can report nothing better.
+                      type: string
+                  required:
+                  - device
+                  - port
+                  - wwid
+                  type: object
+                type: array
+              loadedImage:
+                description: |-
+                  The reference the container image is loaded under in the appliance's
+                  podman store. It carries the digest of the image that was loaded, so an
+                  appliance holding an earlier build of the same tag does not match.
+                type: string
+              moRef:
                 description: The managed object reference ID of the created appliance
                   VM.
                 type: string
@@ -304,7 +371,7 @@ spec:
                   reconcile. The terminal phases are DeployCompleted, DeployFailed,
                   TeardownCompleted and TeardownFailed.
                 type: string
-              taskREF:
+              taskRef:
                 description: |-
                   The managed object reference ID of the vSphere task the current phase is
                   waiting on. Empty when the phase has nothing outstanding.

@@ -5,6 +5,7 @@ const (
 	CopyApplianceSSHKeySecret   = "COPY_APPLIANCE_SSH_KEY_SECRET"
 	CopyApplianceSSHUser        = "COPY_APPLIANCE_SSH_USER"
 	CopyApplianceContainerImage = "COPY_APPLIANCE_CONTAINER_IMAGE"
+	CopyApplianceTLSSecret      = "COPY_APPLIANCE_TLS_SECRET"
 )
 
 // Defaults.
@@ -29,6 +30,10 @@ type CopyAppliance struct {
 	// from (e.g. "copy-appliance:latest"). There is no default: it names an
 	// image stream that only exists in the deployment's own cluster.
 	ContainerImage string
+	// Name of the secret holding the mutual-TLS material the appliance serves
+	// its exports with. There is no default, for the same reason as the SSH
+	// key: the certificates are the deployment's own.
+	TLSSecret string
 }
 
 // Load settings.
@@ -36,6 +41,7 @@ func (r *CopyAppliance) Load() error {
 	r.SSHKeySecret = Lookup(CopyApplianceSSHKeySecret, "")
 	r.SSHUser = Lookup(CopyApplianceSSHUser, DefaultCopyApplianceSSHUser)
 	r.ContainerImage = Lookup(CopyApplianceContainerImage, "")
+	r.TLSSecret = Lookup(CopyApplianceTLSSecret, "")
 
 	return nil
 }
