@@ -382,6 +382,13 @@ spec:
                 - "true"
                 - "false"
                 type: string
+              feature_toehold:
+                default: "false"
+                description: Provision toehold templates for vSphere providers.
+                enum:
+                - "true"
+                - "false"
+                type: string
               feature_ui_plugin:
                 default: "true"
                 description: Enable UI plugin.
@@ -707,6 +714,30 @@ spec:
               populator_vsphere_copy_offload_image_fqin:
                 description: vSphere xcopy populator image. Optional. If left empty,
                   the operator automatically sets this from the release payload.
+                type: string
+              toehold_base_disk_container_image:
+                description: Base containerdisk image for toehold templates.
+                type: string
+              toehold_builder_image_fqin:
+                description: Toehold builder image. Optional. If left empty, the operator
+                  automatically sets this from the release payload.
+                type: string
+              toehold_datastore:
+                description: Default vCenter datastore for toehold templates.
+                type: string
+              toehold_folder:
+                description: Default vCenter folder for toehold templates.
+                type: string
+              toehold_network:
+                description: Default port group for toehold templates.
+                type: string
+              toehold_template_cpu:
+                default: "2"
+                description: Default OVF CPU count for toehold templates.
+                type: string
+              toehold_template_memory_mib:
+                default: "4096"
+                description: Default OVF memory in MiB for toehold templates.
                 type: string
               ui_plugin_container_limits_cpu:
                 default: 100m
