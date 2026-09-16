@@ -109,6 +109,12 @@ type ForkliftControllerSpec struct {
 	// +kubebuilder:validation:Enum="true";"false"
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:radio:true","urn:alm:descriptor:com.tectonic.ui:radio:false"}
 	FeatureUseConversionCR string `json:"feature_use_conversion_cr,omitempty"`
+	// Provision toehold templates for vSphere providers.
+	// +optional
+	// +kubebuilder:default="false"
+	// +kubebuilder:validation:Enum="true";"false"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:radio:true","urn:alm:descriptor:com.tectonic.ui:radio:false"}
+	FeatureToehold string `json:"feature_toehold,omitempty"`
 
 	// Container Images
 
@@ -184,6 +190,39 @@ type ForkliftControllerSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	OVAProxyFQIN string `json:"ova_proxy_fqin,omitempty"`
+	// Toehold builder image. Optional. If left empty, the operator automatically sets this from the release payload.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdBuilderImageFQIN string `json:"toehold_builder_image_fqin,omitempty"`
+
+	// Toehold template defaults
+
+	// Base containerdisk image for toehold templates.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdBaseDiskContainerImage string `json:"toehold_base_disk_container_image,omitempty"`
+	// Default OVF CPU count for toehold templates.
+	// +optional
+	// +kubebuilder:default="2"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdTemplateCPU string `json:"toehold_template_cpu,omitempty"`
+	// Default OVF memory in MiB for toehold templates.
+	// +optional
+	// +kubebuilder:default="4096"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdTemplateMemoryMiB string `json:"toehold_template_memory_mib,omitempty"`
+	// Default vCenter datastore for toehold templates.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdDatastore string `json:"toehold_datastore,omitempty"`
+	// Default vCenter folder for toehold templates.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdFolder string `json:"toehold_folder,omitempty"`
+	// Default port group for toehold templates.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	ToeholdNetwork string `json:"toehold_network,omitempty"`
 
 	// Controller Resource Configuration
 
