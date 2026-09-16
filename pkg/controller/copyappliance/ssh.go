@@ -46,7 +46,11 @@ func (r *ApplianceContext) SSHLogin(ctx context.Context, address string) (client
 //
 // The timeout is set on the connection, not on the handshake, so it bounds the
 // login and everything run over it together. A caller that means to move real
-// data over the client has to ask for enough for all of it.
+// data over the client has to ask for enough for all of it. The dial is bounded
+// separately, at sshTimeout: an address that answers nothing at all -- a dropped
+// packet rather than a refusal -- is a wait like any other, and must not hold a
+// reconcile worker for however long the caller was prepared to spend on the
+// transfer that would have followed.
 //
 // The appliance's host key is not checked. The VM is cloned fresh for each
 // CopyAppliance, so there is no key recorded in advance to check it against;
@@ -63,20 +67,29 @@ func (r *ApplianceContext) SSHLoginFor(ctx context.Context, address string, time
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	loginCtx, cancel := context.WithTimeout(ctx, timeout)
+	dialTimeout := timeout
+	if dialTimeout > sshTimeout {
+		dialTimeout = sshTimeout
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 	addr := r.sshAddr(address)
 	dialer := &net.Dialer{}
-	netConn, err := dialer.DialContext(loginCtx, "tcp", addr)
+	netConn, err := dialer.DialContext(dialCtx, "tcp", addr)
 	if err != nil {
-		// Nothing is listening yet. The guest reports its address as soon as
-		// it has one, which is before sshd is accepting connections.
+		// Nothing is listening yet, or nothing answered. The guest reports its
+		// address as soon as it has one, which is before sshd is accepting
+		// connections.
 		err = nil
 		return
 	}
-	if deadline, ok := loginCtx.Deadline(); ok {
-		_ = netConn.SetDeadline(deadline)
+	// Set on the connection so that it outlives dialCtx, which is cancelled
+	// when this returns.
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
 	}
+	_ = netConn.SetDeadline(deadline)
 
 	cc, chans, reqs, err := ssh.NewClientConn(netConn, addr, config)
 	if err != nil {
@@ -198,6 +211,18 @@ func (r *ApplianceContext) Probe(client *ssh.Client, command string) (ok bool, e
 	// The command never ran, or the connection went away while it did. That is
 	// not an answer to the question.
 	err = liberr.Wrap(rErr, "command", command, "output", string(output))
+	return
+}
+
+// Alive reports whether the login is still usable. It answers the question a
+// failed command leaves open: the appliance said no, or the connection went
+// away while it was being asked. Those read the same in the error -- the exit
+// status and a dropped session both come back as a command that failed -- and
+// they mean opposite things, because only one of them is the appliance's
+// answer. A connection that has gone is gone for good; ssh does not reconnect.
+func (r *ApplianceContext) Alive(client *ssh.Client) (alive bool) {
+	ok, err := r.Probe(client, "true")
+	alive = ok && err == nil
 	return
 }
 

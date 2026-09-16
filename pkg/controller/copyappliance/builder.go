@@ -75,6 +75,15 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 				settings.CopyApplianceContainerImage)
 		return
 	}
+	if Settings.CopyAppliance.TLSSecret == "" {
+		// The certificates are this deployment's own, so there is nothing to
+		// default to. Without them the appliance has nothing to serve its
+		// exports over and the controller has nothing to read them with.
+		err = liberr.New(
+			"the copy appliance TLS secret is not configured; set " +
+				settings.CopyApplianceTLSSecret)
+		return
+	}
 
 	spec := api.CopyApplianceSpec{
 		Provider: core.ObjectReference{
@@ -84,6 +93,10 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		SSHKey: core.ObjectReference{
 			Namespace: provider.Namespace,
 			Name:      Settings.CopyAppliance.SSHKeySecret,
+		},
+		TLSSecret: core.ObjectReference{
+			Namespace: provider.Namespace,
+			Name:      Settings.CopyAppliance.TLSSecret,
 		},
 		ContainerImage: Settings.CopyAppliance.ContainerImage,
 		// The appliance's shape, root disk and network are not configured here,

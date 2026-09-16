@@ -48,6 +48,7 @@ func testAppliance() *api.CopyAppliance {
 		Spec: api.CopyApplianceSpec{
 			Provider:       core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
 			SSHKey:         core.ObjectReference{Namespace: "forklift", Name: "appliance-ssh-key"},
+			TLSSecret:      core.ObjectReference{Namespace: "forklift", Name: "appliance-tls"},
 			ContainerImage: "copy-appliance:latest",
 			Datacenter:     "DC0",
 			Datastore:      "datastore1",
@@ -73,13 +74,17 @@ func TestApplianceRequeueFor(t *testing.T) {
 		// Waiting on a guest to boot, not on a vSphere task, so it is polled
 		// at the slower cadence.
 		{"an appliance waiting on its network is polled slowly", PhaseWaitForNetwork, "long"},
-		// The one action phase that is observable: it stays put while sshd is
-		// still coming up, which is a matter of seconds.
-		{"an appliance waiting to be configured is polled", PhaseConfigure, "slow"},
-		// The load runs to completion inside the pass, so this phase is only
-		// observed when the appliance stopped answering: the same wait, at the
-		// same cadence.
+		// The first step to log in, so this is where an appliance sits while
+		// sshd is still coming up, which is a matter of seconds. The load
+		// itself runs to completion inside the pass.
 		{"an appliance waiting to load its image is polled", PhaseLoadImage, "slow"},
+		// Observable while sshd is coming up and again while the supervisor
+		// is. A pass that finds the install already in place is two short
+		// commands, which is what makes this cadence affordable.
+		{"an appliance waiting to be configured is polled", PhaseConfigure, "slow"},
+		// Waiting on the guest to enumerate its disks and start a container
+		// for each, which is tens of seconds.
+		{"an appliance waiting on its exports is polled slowly", PhaseWaitForExports, "long"},
 		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
 		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
 		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},
@@ -91,7 +96,6 @@ func TestApplianceRequeueFor(t *testing.T) {
 		// The action phases are never observed: ExecutePhase falls through
 		// them within the pass that entered them.
 		{"a clone is passed through", PhaseCloneVM, "none"},
-		{"the export wait is passed through", PhaseWaitForExports, "none"},
 		{"a power off is passed through", PhasePowerOff, "none"},
 		{"a disk detach is passed through", PhaseDetachDisks, "none"},
 		{"a destroy is passed through", PhaseDestroyVM, "none"},
@@ -134,6 +138,11 @@ func TestApplianceForgetVM(t *testing.T) {
 		appliance.Status.Addresses = []api.ApplianceAddress{
 			{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
 		}
+		// Exports name ports on the VM being forgotten, so they describe it as
+		// surely as its address does.
+		appliance.Status.Exports = []api.ApplianceExport{
+			{WWID: "wwn-abc", Port: 10809, Device: "/dev/sdb"},
+		}
 
 		r.forgetVM(appliance)
 
@@ -142,7 +151,8 @@ func TestApplianceForgetVM(t *testing.T) {
 			status.VCenterInstanceUUID != "" ||
 			status.TaskRef != "" ||
 			status.Phase != "" ||
-			status.Addresses != nil {
+			status.Addresses != nil ||
+			status.Exports != nil {
 			t.Errorf("identity not fully cleared: %+v", status)
 		}
 	})

@@ -157,18 +157,25 @@ func requeueFor(phase string) (reQ time.Duration) {
 		// on VMware Tools to start answering, which takes a minute or more.
 		// Polling it at the task cadence buys nothing but vCenter logins.
 		reQ = base.LongReQ
-	case PhaseConfigure:
-		// Unlike the other action phases this one is observable, because a
-		// login that cannot be made yet stays on it. The gap between the guest
-		// reporting an address and sshd answering on it is seconds, so backing
-		// off to LongReQ would add half a minute to a deploy that is nearly
-		// done.
-		reQ = base.SlowReQ
 	case PhaseLoadImage:
-		// Only ever observed when the appliance stopped answering, since the
-		// load itself runs to completion inside the pass. That is the wait
-		// Configure has, at the cadence it has it.
+		// The first step to log in, so this is the phase an appliance sits in
+		// between the guest reporting an address and sshd answering on it. That
+		// gap is seconds, so backing off to LongReQ would add half a minute to
+		// a deploy that is nearly done. The load itself runs to completion
+		// inside the pass and is never waited on here.
 		reQ = base.SlowReQ
+	case PhaseConfigure:
+		// Observable in two ways: the appliance not answering yet, which is the
+		// wait above at the cadence above, and a supervisor that will not come
+		// up. The second one repeats forever, which is only affordable because
+		// the step asks whether the install is already in place before it does
+		// anything: a pass that finds it is two short commands.
+		reQ = base.SlowReQ
+	case PhaseWaitForExports:
+		// Waiting on the guest to enumerate its disks and bring up a container
+		// for each, which is tens of seconds. Same reasoning as
+		// PhaseWaitForNetwork: polling faster buys nothing but vCenter logins.
+		reQ = base.LongReQ
 	case PhaseDeployFailed, PhaseTeardownFailed:
 		// Ended() swallows the error and controller-runtime applies no
 		// backoff of its own, so a failed appliance would otherwise retry
@@ -244,7 +251,11 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 	if err != nil {
 		return
 	}
-	ac, err = NewApplianceContext(ctx, appliance, provider, secret, sshSecret, r.Log)
+	tlsSecret, err := r.tlsSecret(ctx, appliance)
+	if err != nil {
+		return
+	}
+	ac, err = NewApplianceContext(ctx, appliance, provider, secret, sshSecret, tlsSecret, r.Log)
 	if err != nil {
 		return
 	}
@@ -273,6 +284,38 @@ func (r *Reconciler) sshSecret(ctx context.Context, appliance *api.CopyAppliance
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			r.Log.Info("The appliance SSH key secret is not there.",
+				"namespace", key.Namespace,
+				"name", key.Name)
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err)
+		return
+	}
+	secret = found
+	return
+}
+
+// tlsSecret resolves the mutual-TLS material the appliance serves its exports
+// with. Missing is reported as none rather than as an error, for the same
+// reason as the SSH key: a teardown must not be blocked by a secret someone
+// deleted. Only the steps that install and then query the exports need it, and
+// they name the secret when it is missing.
+func (r *Reconciler) tlsSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
+	ref := appliance.Spec.TLSSecret
+	if ref.Name == "" {
+		return
+	}
+	namespace := ref.Namespace
+	if namespace == "" {
+		namespace = appliance.Namespace
+	}
+	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
+	found := &core.Secret{}
+	err = r.Client.Get(ctx, key, found)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			r.Log.Info("The appliance TLS secret is not there.",
 				"namespace", key.Namespace,
 				"name", key.Name)
 			err = nil
@@ -371,6 +414,7 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 func (r *Reconciler) forgetVM(appliance *api.CopyAppliance) {
 	appliance.Status.MoRef = ""
 	appliance.Status.Addresses = nil
+	appliance.Status.Exports = nil
 	appliance.Status.VCenterInstanceUUID = ""
 	appliance.Status.TaskRef = ""
 	appliance.Status.Phase = ""
