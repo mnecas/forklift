@@ -1,0 +1,12 @@
+[Unit]
+Description=Forklift copy appliance NBD orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart={{.Binary}} -certs-dir={{.CertsDir}} -image={{.Image}} -listen=:{{.AnnouncePort}} -base-port={{.BasePort}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
