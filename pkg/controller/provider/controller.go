@@ -19,6 +19,7 @@ package provider
 import (
 	"context"
 	"crypto/rand"
+	"reflect"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -49,6 +50,7 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -88,6 +90,7 @@ func Add(mgr manager.Manager) error {
 			Client:        mgr.GetClient(),
 			Log:           log,
 		},
+		scheme:    mgr.GetScheme(),
 		catalog:   &Catalog{},
 		container: container,
 		web:       web,
@@ -147,6 +150,7 @@ var _ reconcile.Reconciler = &Reconciler{}
 // Reconciles an provider object.
 type Reconciler struct {
 	base.Reconciler
+	scheme    *runtime.Scheme
 	catalog   *Catalog
 	container *libcontainer.Container
 	web       *libweb.WebServer
@@ -263,6 +267,13 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		if err != nil {
 			r.Log.Error(err, "failed to ensure SSH keys for vSphere provider")
 			return
+		}
+		if Settings.Features.Toehold {
+			err = r.ensureToeholdTemplate(ctx, provider)
+			if err != nil {
+				r.Log.Error(err, "failed to reconcile toehold template for vSphere provider")
+				return
+			}
 		}
 	}
 
@@ -665,4 +676,56 @@ func (r *Reconciler) cleanupProviderServer(ctx context.Context, provider *api.Pr
 	}
 
 	return nil
+}
+
+func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Provider) error {
+	if provider.Status.HasBlockerCondition() ||
+		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
+		return nil
+	}
+	if Settings.Toehold.BaseDiskContainerImage == "" ||
+		Settings.Toehold.Datastore == "" ||
+		Settings.Toehold.Folder == "" ||
+		Settings.Toehold.Network == "" {
+		return nil
+	}
+
+	name := provider.Name + "-toehold"
+	desired := api.ToeholdTemplateSpec{
+		Provider:     v1.ObjectReference{Name: provider.Name, Namespace: provider.Namespace},
+		TemplateName: name,
+		BaseDisk:     api.ToeholdBaseDisk{ContainerImage: Settings.Toehold.BaseDiskContainerImage},
+		Resources: api.ToeholdResources{
+			CPU:       Settings.Toehold.TemplateCPU,
+			MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
+		},
+		Datastore: Settings.Toehold.Datastore,
+		Folder:    Settings.Toehold.Folder,
+		Network:   Settings.Toehold.Network,
+		Images:    api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage},
+	}
+
+	existing := &api.ToeholdTemplate{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, existing)
+	if k8serr.IsNotFound(err) {
+		template := &api.ToeholdTemplate{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: provider.Namespace},
+			Spec:       desired,
+		}
+		if err = k8sutil.SetControllerReference(provider, template, r.scheme); err != nil {
+			return err
+		}
+		return r.Create(ctx, template)
+	}
+	if err != nil {
+		return err
+	}
+	if reflect.DeepEqual(existing.Spec, desired) && metav1.IsControlledBy(existing, provider) {
+		return nil
+	}
+	existing.Spec = desired
+	if err = k8sutil.SetControllerReference(provider, existing, r.scheme); err != nil {
+		return err
+	}
+	return r.Update(ctx, existing)
 }
