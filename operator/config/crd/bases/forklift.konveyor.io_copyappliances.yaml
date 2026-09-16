@@ -183,6 +183,32 @@ spec:
           status:
             description: CopyAppliance status.
             properties:
+              addresses:
+                description: |-
+                  The addresses the appliance VM's guest reports, one entry per address
+                  per adapter, in the order the guest reports them. Empty until the guest
+                  has booted far enough to answer.
+                items:
+                  description: |-
+                    ApplianceAddress is an address the appliance VM's guest reports on one of its
+                    network adapters.
+                  properties:
+                    ip:
+                      description: IP address.
+                      type: string
+                    mac:
+                      description: MAC address of the adapter.
+                      type: string
+                    network:
+                      description: Name of the portgroup the guest reports the adapter
+                        is attached to.
+                      type: string
+                  required:
+                  - ip
+                  - mac
+                  - network
+                  type: object
+                type: array
               conditions:
                 description: List of conditions.
                 items:

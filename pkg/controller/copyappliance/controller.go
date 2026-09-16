@@ -147,11 +147,16 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 func requeueFor(phase string) (reQ time.Duration) {
 	switch phase {
 	case PhaseWaitForClone,
-		PhaseWaitForExports,
 		PhaseWaitForPowerOff,
 		PhaseWaitForDetachDisks,
 		PhaseWaitForDestroyVM:
 		reQ = base.SlowReQ
+	case PhaseWaitForExports:
+		// Slower than the task waits above. Those are waiting on vSphere,
+		// which settles in seconds; this one is waiting on a guest to boot and
+		// on VMware Tools to start answering, which takes a minute or more.
+		// Polling it at the task cadence buys nothing but vCenter logins.
+		reQ = base.LongReQ
 	case PhaseDeployFailed, PhaseTeardownFailed:
 		// Ended() swallows the error and controller-runtime applies no
 		// backoff of its own, so a failed appliance would otherwise retry
@@ -315,6 +320,7 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 // phase restarts the itinerary from the beginning on the next pass.
 func (r *Reconciler) forgetVM(appliance *api.CopyAppliance) {
 	appliance.Status.MoRef = ""
+	appliance.Status.Addresses = nil
 	appliance.Status.VCenterInstanceUUID = ""
 	appliance.Status.TaskRef = ""
 	appliance.Status.Phase = ""

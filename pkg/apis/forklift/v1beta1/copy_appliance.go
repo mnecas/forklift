@@ -68,6 +68,17 @@ type CopyApplianceSpec struct {
 	Template string `json:"template"`
 }
 
+// ApplianceAddress is an address the appliance VM's guest reports on one of its
+// network adapters.
+type ApplianceAddress struct {
+	// Name of the portgroup the guest reports the adapter is attached to.
+	Network string `json:"network"`
+	// MAC address of the adapter.
+	MAC string `json:"mac"`
+	// IP address.
+	IP string `json:"ip"`
+}
+
 // CopyAppliance status.
 type CopyApplianceStatus struct {
 	// Conditions.
@@ -78,6 +89,11 @@ type CopyApplianceStatus struct {
 	// The managed object reference ID of the created appliance VM.
 	// +optional
 	MoRef string `json:"moREF,omitempty"`
+	// The addresses the appliance VM's guest reports, one entry per address
+	// per adapter, in the order the guest reports them. Empty until the guest
+	// has booted far enough to answer.
+	// +optional
+	Addresses []ApplianceAddress `json:"addresses,omitempty"`
 	// The instance UUID of the vCenter the appliance VM was created in. A
 	// managed object reference is only unique within one vCenter, so MoRef
 	// must not be trusted when this does not match the connected instance.
