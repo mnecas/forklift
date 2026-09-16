@@ -35,10 +35,10 @@ const folderWalkLimit = 100
 
 // Build returns a CopyAppliance for an appliance VM that will read the given
 // source VM's disks. The appliance is placed where the source VM already is:
-// the same folder, host and datastore. The shape of the appliance itself, and
-// the networks it is attached to, come from the controller settings. The
-// returned resource has not been created; the caller creates it and the
-// reconciler builds the VM from it.
+// the same folder, datacenter and datastore. The shape of the appliance itself,
+// its root disk and the networks it is attached to come from the template it is
+// cloned from. The returned resource has not been created; the caller creates
+// it and the reconciler builds the VM from it.
 func Build(provider *api.Provider, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
 	inventory, err := web.NewClient(provider)
 	if err != nil {
@@ -56,21 +56,23 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			provider.Name, provider.Type()))
 		return
 	}
-	if Settings.CopyAppliance.RootDiskPath == "" {
-		// In the message rather than a key/value pair: liberr renders only the
-		// message, and this is the one thing the operator has to go fix.
-		err = liberr.New(
-			"the copy appliance root disk is not configured; set " +
-				settings.CopyApplianceRootDiskPath)
-		return
-	}
 	if Settings.CopyAppliance.SSHKeySecret == "" {
-		// No default, for the same reason as the root disk: it names an object
-		// that only exists in this deployment. Without it the appliance is
-		// cloned and then never configured.
+		// No default: it names an object that only exists in this deployment.
+		// Without it the appliance is cloned and then never configured. In the
+		// message rather than a key/value pair, because liberr renders only the
+		// message and this is the one thing the operator has to go fix.
 		err = liberr.New(
 			"the copy appliance SSH key secret is not configured; set " +
 				settings.CopyApplianceSSHKeySecret)
+		return
+	}
+	if Settings.CopyAppliance.ContainerImage == "" {
+		// Also deployment-specific: it names an image stream built into this
+		// cluster's registry. Without it the appliance boots with nothing to
+		// serve exports with.
+		err = liberr.New(
+			"the copy appliance container image is not configured; set " +
+				settings.CopyApplianceContainerImage)
 		return
 	}
 
@@ -83,13 +85,10 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			Namespace: provider.Namespace,
 			Name:      Settings.CopyAppliance.SSHKeySecret,
 		},
-		GuestId:  Settings.CopyAppliance.GuestId,
-		NumCPUs:  Settings.CopyAppliance.NumCPUs,
-		MemoryMB: Settings.CopyAppliance.MemoryMB,
-		// The appliance's network is not configured here and is not the source
-		// VM's: the template carries the one network the appliance is reached
-		// on, and the clone inherits it.
-		RootDiskPath: Settings.CopyAppliance.RootDiskPath,
+		ContainerImage: Settings.CopyAppliance.ContainerImage,
+		// The appliance's shape, root disk and network are not configured here,
+		// and the network is not the source VM's: the template carries all of
+		// them, and the clone inherits them.
 	}
 	err = placement(inventory, vmRef, &spec)
 	if err != nil {
@@ -134,12 +133,13 @@ func placement(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec)
 	}
 	spec.Datacenter = datacenter.Path
 
+	// The host is not placed on directly; it is how the compute resource the
+	// appliance's pool belongs to is found.
 	host := &model.Host{}
 	err = get(inventory, host, &host.Path, vm.Host, "host")
 	if err != nil {
 		return
 	}
-	spec.Host = host.Path
 
 	// The inventory does not model resource pools, so the source VM's own pool
 	// is unknowable. Its compute resource's root pool is the closest answer.
