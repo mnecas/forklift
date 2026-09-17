@@ -42,7 +42,7 @@ const loadedImageTagLength = 12
 
 // applianceLoadCommand reads a docker archive on its standard input and adds
 // what it finds to the appliance's podman store.
-const applianceLoadCommand = "podman load"
+const applianceLoadCommand = "/usr/local/bin/toehold-podman load"
 
 // resolveImage returns the pull spec of an ImageStreamTag in the controller's
 // own namespace, which is where the appliance image is built.

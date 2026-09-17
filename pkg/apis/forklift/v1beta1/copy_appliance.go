@@ -8,6 +8,22 @@ import (
 
 const CopyApplianceFinalizer = "forklift/copy-appliance"
 
+// Export targets for CopyApplianceSpec.ExportRequest.
+const (
+	ExportTargetExport  = "Export"
+	ExportTargetRelease = "Release"
+)
+
+// ExportRequest asks the controller to converge disk attachment and NBD exports.
+// Increment generation on every change; the controller copies it to status when done.
+type ExportRequest struct {
+	// Export attaches disks and publishes exports. Release detaches disks and clears exports.
+	// +kubebuilder:validation:Enum=Export;Release
+	Target string `json:"target"`
+	// Monotonic counter bumped by the consumer on every target change.
+	Generation int64 `json:"generation"`
+}
+
 // CopyAppliance specification.
 //
 // The appliance VM is a clone of Template, named after the CopyAppliance
@@ -44,15 +60,22 @@ type CopyApplianceSpec struct {
 	Datacenter string `json:"datacenter,omitempty"`
 	// Datastore that holds the appliance VM home directory.
 	Datastore string `json:"datastore"`
-	// Resource pool in which the appliance VM is created.
-	ResourcePool string `json:"resourcePool"`
+	// Resource pool in which the appliance VM is created. When omitted, the
+	// controller uses ForkliftController.spec.copy_appliance_resource_pool.
+	// +optional
+	ResourcePool string `json:"resourcePool,omitempty"`
 	// Inventory folder in which the appliance VM is created.
 	Folder string `json:"folder"`
-	// Datastore paths of existing vmdks (belonging to other VMs) to attach
-	// to the appliance VM (e.g. "[datastore13] some-vm/disk-0.vmdk").
+	// Disks to attach to the appliance VM for export. Each entry names an
+	// existing VMDK and carries the VMware identifiers needed to correlate
+	// guest exports with source inventory.
 	// Capped so that the root disk plus the attached disks fit within the
 	// four SCSI controllers vSphere permits per VM (4 x 15 addressable
 	// units = 60 disks).
+	// +kubebuilder:validation:MaxItems=59
+	// +optional
+	AttachDisks []AttachedDisk `json:"attachDisks,omitempty"`
+	// Deprecated: use attachDisks instead.
 	// +kubebuilder:validation:MaxItems=59
 	// +kubebuilder:validation:items:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
 	// +optional
@@ -63,6 +86,39 @@ type CopyApplianceSpec struct {
 	// which the clone inherits as-is.
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+	// ExportRequest asks the controller to attach or release source disks and
+	// refresh NBD exports on an already-deployed appliance.
+	// +optional
+	ExportRequest *ExportRequest `json:"exportRequest,omitempty"`
+}
+
+// AttachedDisk is an existing VMDK to attach to the copy appliance.
+type AttachedDisk struct {
+	// Datastore path of the VMDK (e.g. "[datastore13] some-vm/disk-0.vmdk").
+	// +kubebuilder:validation:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
+	VMDKPath string `json:"vmdkPath"`
+	// VMware virtual device key from inventory.
+	// +optional
+	DiskKey int32 `json:"diskKey,omitempty"`
+	// backing.Uuid from inventory. Used to match guest exports.
+	// +optional
+	Serial string `json:"serial,omitempty"`
+	// Disk capacity in bytes. Used as a secondary match key when serial is empty.
+	// +optional
+	Capacity int64 `json:"capacity,omitempty"`
+}
+
+// AttachedDisks returns the disks to attach, synthesizing attachDisks entries
+// from the deprecated attachDiskPaths field when needed.
+func (s CopyApplianceSpec) AttachedDisks() []AttachedDisk {
+	if len(s.AttachDisks) > 0 {
+		return s.AttachDisks
+	}
+	disks := make([]AttachedDisk, 0, len(s.AttachDiskPaths))
+	for _, path := range s.AttachDiskPaths {
+		disks = append(disks, AttachedDisk{VMDKPath: path})
+	}
+	return disks
 }
 
 // ApplianceAddress is an address the appliance VM's guest reports on its
@@ -86,6 +142,15 @@ type ApplianceExport struct {
 	Port int32 `json:"port"`
 	// Device node the export reads, as the appliance's guest sees it.
 	Device string `json:"device"`
+	// VMware virtual device key of the attached source disk.
+	// +optional
+	DiskKey int32 `json:"diskKey,omitempty"`
+	// Datastore path of the attached source VMDK.
+	// +optional
+	VMDKPath string `json:"vmdkPath,omitempty"`
+	// backing.Uuid of the attached source disk from inventory.
+	// +optional
+	SourceSerial string `json:"sourceSerial,omitempty"`
 }
 
 // CopyAppliance status.
@@ -128,6 +193,9 @@ type CopyApplianceStatus struct {
 	// waiting on. Empty when the phase has nothing outstanding.
 	// +optional
 	TaskRef string `json:"taskRef,omitempty"`
+	// ExportRequest the controller has converged to.
+	// +optional
+	ObservedExportRequest *ExportRequest `json:"observedExportRequest,omitempty"`
 }
 
 // +genclient

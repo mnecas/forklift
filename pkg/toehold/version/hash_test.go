@@ -14,15 +14,19 @@ func TestDiskHashStable(t *testing.T) {
 		Network:   "VM Network",
 		Resources: api.ToeholdResources{CPU: 2, MemoryMiB: 4096},
 	}
-	h1 := DiskHash(spec)
-	h2 := DiskHash(spec)
+	h1 := DiskHash(spec, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB")
+	h2 := DiskHash(spec, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB")
 	if h1 != h2 {
 		t.Fatalf("expected stable hash, got %q vs %q", h1, h2)
 	}
 	spec.BaseDisk.ContainerImage = "registry.example/rhel-guest-image:9.9"
-	h3 := DiskHash(spec)
+	h3 := DiskHash(spec, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB")
 	if h3 == h1 {
 		t.Fatal("expected disk hash to change when base container image changes")
+	}
+	h4 := DiskHash(spec, "ssh-rsa other-key")
+	if h4 == h3 {
+		t.Fatal("expected disk hash to change when SSH public key changes")
 	}
 }
 

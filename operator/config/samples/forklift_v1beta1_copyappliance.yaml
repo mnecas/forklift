@@ -1,0 +1,32 @@
+---
+# Manual CopyAppliance for integration testing. Placement and attachDiskPaths must
+# match your vSphere inventory. sshKey names the toehold private secret for the
+# provider (auto-generated as toehold-ssh-keys-<provider>-private).
+apiVersion: forklift.konveyor.io/v1beta1
+kind: CopyAppliance
+metadata:
+  name: test-copy-appliance
+  namespace: openshift-mtv
+spec:
+  provider:
+    name: vcenter
+    namespace: openshift-mtv
+  sshKey:
+    name: toehold-ssh-keys-vcenter-private
+    namespace: openshift-mtv
+  tlsSecret:
+    name: copy-appliance-tls
+    namespace: openshift-mtv
+  containerImage: copy-appliance:latest
+  template: /Datacenter/vm/vcenter-toehold
+  datastore: datastore1
+  folder: /Datacenter/vm
+  attachDisks:
+    - vmdkPath: "[datastore1] source-vm/disk-0.vmdk"
+      diskKey: 2000
+      serial: "6000C297-7d53-fad7-e8b4-5194193802f7"
+      capacity: 17179869184
+  # Optional for T2; initial deploy sets generation 1 when created by a plan.
+  # exportRequest:
+  #   target: Export
+  #   generation: 1

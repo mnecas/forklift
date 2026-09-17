@@ -27,5 +27,8 @@ func ValidateDescriptor(content, name string) error {
 	if name != "" && !strings.Contains(content, name) {
 		return fmt.Errorf("ovf missing name %q", name)
 	}
+	if !strings.Contains(content, `xmlns="http://schemas.dmtf.org/ovf/envelope/1"`) {
+		return fmt.Errorf("ovf missing envelope namespace")
+	}
 	return nil
 }

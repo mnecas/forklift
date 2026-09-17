@@ -124,8 +124,22 @@ func TestWaitForExports(t *testing.T) {
 			t.Error("done = false, want the appliance exporting its disks")
 		}
 		want := []api.ApplianceExport{
-			{WWID: "wwn-abc", Port: 10809, Device: "/dev/sdb"},
-			{WWID: "wwn-def", Port: 10810, Device: "/dev/sdc"},
+			{
+				WWID:         "wwn-abc",
+				Port:         10809,
+				Device:       "/dev/sdb",
+				DiskKey:      2000,
+				VMDKPath:     "[datastore13] vm-a/disk-0.vmdk",
+				SourceSerial: "wwn-abc",
+			},
+			{
+				WWID:         "wwn-def",
+				Port:         10810,
+				Device:       "/dev/sdc",
+				DiskKey:      2001,
+				VMDKPath:     "[datastore13] vm-b/disk-0.vmdk",
+				SourceSerial: "wwn-def",
+			},
 		}
 		if !slices.Equal(ac.Appliance.Status.Exports, want) {
 			t.Errorf("exports = %+v, want %+v", ac.Appliance.Status.Exports, want)

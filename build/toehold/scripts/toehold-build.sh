@@ -17,7 +17,16 @@ fi
 
 qemu-img create -f qcow2 -b "${disks[0]}" -F qcow2 "${OVERLAY}"
 
-args=(-a "${OVERLAY}" --copy-in "${TARBALL}:/root/" --run /usr/local/bin/extract-appliance-root)
+args=(-a "${OVERLAY}")
+if [[ -n "${TOEHOLD_SSH_PUBLIC_KEY_FILE:-}" && -f "${TOEHOLD_SSH_PUBLIC_KEY_FILE}" ]]; then
+  echo "toehold-build: installing SSH public key from ${TOEHOLD_SSH_PUBLIC_KEY_FILE}"
+  # virt-customize --copy-in requires a guest directory, not a file path.
+  args+=(--copy-in "${TOEHOLD_SSH_PUBLIC_KEY_FILE}:/root/")
+  args+=(--ssh-inject "root:file:${TOEHOLD_SSH_PUBLIC_KEY_FILE}")
+elif [[ -n "${TOEHOLD_SSH_PUBLIC_KEY_FILE:-}" ]]; then
+  echo "toehold-build: SSH public key file missing at ${TOEHOLD_SSH_PUBLIC_KEY_FILE}" >&2
+fi
+args+=(--copy-in "${TARBALL}:/root/" --run /usr/local/bin/extract-appliance-root)
 
 [[ -n "${TOEHOLD_ROOT_PASSWORD:-}" ]] && args+=(--root-password "password:${TOEHOLD_ROOT_PASSWORD}")
 

@@ -11,7 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,6 +28,8 @@ type Device struct {
 	Path string
 	// Size is the device size in bytes.
 	Size uint64
+	// ScsiAddr is the H:C:T:L address used to order exports deterministically.
+	ScsiAddr string
 }
 
 // lsblkNode mirrors the JSON emitted by `lsblk -J -b -o NAME,TYPE,RO,SIZE,MOUNTPOINT`.
@@ -118,13 +123,16 @@ func parse(r io.Reader, resolve wwidResolver) ([]Device, error) {
 		// from the kernel name. Top-level candidates are always real disks (sda,
 		// nvme0n1, ...), for which /dev/<name> is the canonical path.
 		path := "/dev/" + node.Name
-		wwid := resolve(context.Background(), path)
+		ctx := context.Background()
+		wwid := resolve(ctx, path)
 		devices = append(devices, Device{
-			WWID: wwid,
-			Path: path,
-			Size: uint64(node.Size),
+			WWID:     wwid,
+			Path:     path,
+			Size:     uint64(node.Size),
+			ScsiAddr: scsiAddress(path),
 		})
 	}
+	sortDevices(devices)
 	return devices, nil
 }
 
@@ -160,9 +168,12 @@ func hasMountpoint(n lsblkNode) bool {
 	return false
 }
 
-// resolveWWID asks udevadm for a stable identifier, preferring the WWN and falling
-// back through serial numbers to the kernel device path.
+// resolveWWID prefers scsi_id output because it matches VMware backing.Uuid
+// when disk.EnableUUID is enabled, then falls back to udev properties.
 func resolveWWID(ctx context.Context, path string) string {
+	if id := scsiID(ctx, path); id != "" {
+		return id
+	}
 	out, err := exec.CommandContext(ctx, "udevadm", "info",
 		"--query=property", "--name", path).Output()
 	if err != nil {
@@ -175,6 +186,43 @@ func resolveWWID(ctx context.Context, path string) string {
 		}
 	}
 	return path
+}
+
+func scsiID(ctx context.Context, path string) string {
+	for _, bin := range []string{"/usr/lib/udev/scsi_id", "/lib/udev/scsi_id"} {
+		out, err := exec.CommandContext(ctx, bin,
+			"--whitelisted", "--replace-whitespace", "--device="+path).Output()
+		if err != nil {
+			continue
+		}
+		if id := strings.TrimSpace(string(out)); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func scsiAddress(path string) string {
+	name := strings.TrimPrefix(path, "/dev/")
+	dir := filepath.Join("/sys/block", name, "device", "scsi_disk")
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return path
+	}
+	return entries[0].Name()
+}
+
+func sortDevices(devices []Device) {
+	slices.SortFunc(devices, func(a, b Device) int {
+		switch {
+		case a.ScsiAddr < b.ScsiAddr:
+			return -1
+		case a.ScsiAddr > b.ScsiAddr:
+			return 1
+		default:
+			return strings.Compare(a.Path, b.Path)
+		}
+	})
 }
 
 // parseUdevProps parses `udevadm info --query=property` KEY=VALUE lines.

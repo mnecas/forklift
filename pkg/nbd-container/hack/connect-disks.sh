@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 #
 # Query the nbd-orchestrator announce endpoint for the exported disks, then attach each
-# one to a local /dev/nbdN device with the reference NBD client (mutual TLS).
+# one to a local /dev/nbdN device with the reference NBD client (plain TCP).
 #
-# Discovery is delegated to hack/query-disks.sh, which speaks the same mutual-TLS HTTPS
-# to the announce server and returns a JSON array of {wwid, port, device}. For each
-# export we run nbd-client against the server's real host/IP but verify its certificate
-# against the fixed logical name (nbd-server) via -tlshostname -- the on-demand nbdkit
-# servers come up on unpredictable addresses but all present a cert for that stable
-# name (see hack/gen-certs.sh and the README). The server requires a client cert signed
-# by the shared CA, which we present from CERTS_DIR.
+# Discovery is delegated to hack/query-disks.sh, which speaks mutual-TLS HTTPS to the
+# announce server and returns a JSON array of {wwid, port, device}. Each nbdkit export
+# is then reached over plain NBD on the advertised host port.
 #
 # Each successful attach is appended to a state file (.nbd-connections in this
 # directory) recording the nbd device, host, port, source device and WWID.
@@ -27,8 +23,8 @@
 #   HOST           supervisor host or IP             (required; or positional arg 1)
 #   PORT           announce server port              (default: 8443)
 #   CERTS_DIR      dir with ca-cert/client cert+key  (default: ./certs)
-#   TLS_NAME       logical name in the server certs  (default: nbd-server)
-#   EXPORT_NAME    NBD export name to request        (default: "" -- nbdkit's default)
+#   TLS_NAME       logical name in the announce certs (default: nbd-server)
+#   EXPORT_NAME    NBD export name to request         (default: "" -- nbdkit's default)
 
 set -euo pipefail
 
@@ -86,15 +82,10 @@ printf '%s' "$json" | jq -r '.[] | "\(.port)\t\(.device)\t\(.wwid)"' |
 	while IFS=$'\t' read -r port device wwid; do
 		nbddev="$(find_free_nbd)" || die "no free /dev/nbdN device available (raise nbd.nbds_max)"
 
-		# Connect to the real HOST:port but verify the cert against TLS_NAME, presenting
-		# our client cert/key. Only pass -N when a non-default export name is requested;
-		# the empty default matches both nbdkit and nbd-client, and some nbd-client
-		# builds reject an explicit empty -N.
-		args=("$HOST" "$port" "$nbddev"
-			-cacertfile "$CERTS_DIR/ca-cert.pem"
-			-certfile "$CERTS_DIR/client-cert.pem"
-			-keyfile "$CERTS_DIR/client-key.pem"
-			-tlshostname "$TLS_NAME")
+		# Only pass -N when a non-default export name is requested; the empty default
+		# matches both nbdkit and nbd-client, and some nbd-client builds reject an
+		# explicit empty -N.
+		args=("$HOST" "$port" "$nbddev")
 		[ -n "$EXPORT_NAME" ] && args+=(-N "$EXPORT_NAME")
 
 		if out="$(nbd-client "${args[@]}" 2>&1)"; then
