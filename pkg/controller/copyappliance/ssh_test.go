@@ -263,27 +263,27 @@ func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 	appliance.Status.Addresses = []api.ApplianceAddress{
 		{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: host},
 	}
+	// One secret carries both halves, so an appliance without a key still has
+	// the certificates the steps ahead of the login read.
+	data := make(map[string][]byte, len(applianceTLS().data)+1)
+	for key, value := range applianceTLS().data {
+		data[key] = value
+	}
+	if private != nil {
+		data[sshPrivateKeyData] = private
+	}
 	ac := &ApplianceContext{
 		Appliance: appliance,
 		Log:       testLog(),
 		sshPort:   port,
-		TLSSecret: &core.Secret{
+		ApplianceSecret: &core.Secret{
 			ObjectMeta: meta.ObjectMeta{
-				Namespace: appliance.Spec.TLSSecret.Namespace,
-				Name:      appliance.Spec.TLSSecret.Name,
+				Namespace: appliance.Spec.Secret.Namespace,
+				Name:      appliance.Spec.Secret.Name,
 			},
-			Data: applianceTLS().data,
+			Data: data,
 		},
 		orchestratorPath: writeOrchestrator(t),
-	}
-	if private != nil {
-		ac.SSHSecret = &core.Secret{
-			ObjectMeta: meta.ObjectMeta{
-				Namespace: appliance.Spec.SSHKey.Namespace,
-				Name:      appliance.Spec.SSHKey.Name,
-			},
-			Data: map[string][]byte{sshPrivateKeyData: private},
-		}
 	}
 	return ac
 }
@@ -376,8 +376,8 @@ func TestSSHLogin(t *testing.T) {
 		_, public := testKeyPair(t)
 		server := startSSHServer(t, public)
 		ac := sshContext(t, nil, server.addr)
-		ac.SSHSecret = &core.Secret{
-			ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "appliance-ssh-key"},
+		ac.ApplianceSecret = &core.Secret{
+			ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "appliance-secret"},
 			Data:       map[string][]byte{"public-key": []byte("ssh-ed25519 AAAA")},
 		}
 
@@ -394,12 +394,13 @@ func TestSSHLogin(t *testing.T) {
 	// this is where an operator finds out which one to create.
 	t.Run("a missing secret fails by name", func(t *testing.T) {
 		ac := sshContext(t, nil, closedAddr(t))
+		ac.ApplianceSecret = nil
 
 		_, _, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
 		if err == nil {
 			t.Fatal("SSHLogin succeeded with no secret at all")
 		}
-		if !errorMentions(t, err, ac.Appliance.Spec.SSHKey.Name) {
+		if !errorMentions(t, err, ac.Appliance.Spec.Secret.Name) {
 			t.Errorf("error = %q, want it to name the secret", err)
 		}
 	})
@@ -816,11 +817,11 @@ func TestConfigure(t *testing.T) {
 	// Without the certificates the appliance cannot serve anything, and the
 	// controller cannot read what it serves. Sending everything else first and
 	// discovering it afterwards would leave a half-installed appliance.
-	t.Run("an appliance whose TLS secret is missing fails before logging in", func(t *testing.T) {
+	t.Run("an appliance whose secret is missing fails before logging in", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)
 		ac := configureContext(t, private, server.addr)
-		ac.TLSSecret = nil
+		ac.ApplianceSecret = nil
 		runner := DeployRunner{context: ac}
 
 		done, err := runner.Configure(context.TODO())

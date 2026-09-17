@@ -548,12 +548,12 @@ func (r *Reconciler) ensureSSHKeys(provider *api.Provider) error {
 	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
 
 	// Store SSH keys in secrets
-	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, "private-key", privateKeyBytes, provider, "ssh-keys")
+	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, map[string][]byte{"private-key": privateKeyBytes}, provider, "ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store private key: %w", err)
 	}
 
-	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, "public-key", publicKeyBytes, provider, "ssh-keys")
+	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, map[string][]byte{"public-key": publicKeyBytes}, provider, "ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store public key: %w", err)
 	}
@@ -581,10 +581,13 @@ func (r *Reconciler) ensureToeholdSSHKeys(provider *api.Provider) error {
 		return fmt.Errorf("failed to generate toehold SSH public secret name: %w", err)
 	}
 
-	_, err = r.getSSHKeySecret(provider.Namespace, privateSecretName)
+	existing, err := r.getSSHKeySecret(provider.Namespace, privateSecretName)
 	if err == nil {
 		r.Log.V(1).Info("Toehold SSH keys already exist for provider", "provider", provider.Name)
-		return nil
+		// A secret predating the merge of the two appliance secrets holds only
+		// the SSH key. Fill in the TLS material rather than regenerating the key
+		// pair, whose public half is already built into the toehold template.
+		return r.ensureToeholdTLS(existing)
 	}
 	if !k8serr.IsNotFound(err) {
 		return fmt.Errorf("failed to check for existing toehold SSH private key secret: %w", err)
@@ -608,11 +611,20 @@ func (r *Reconciler) ensureToeholdSSHKeys(provider *api.Provider) error {
 	}
 	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
 
-	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, "private-key", privateKeyBytes, provider, "toehold-ssh-keys")
+	// The TLS material goes in with the key rather than in a later update: the
+	// reconciler reads through the informer cache, where a secret just created
+	// is not there to be read back yet.
+	privateData, err := toeholdTLS()
+	if err != nil {
+		return fmt.Errorf("failed to generate toehold TLS material: %w", err)
+	}
+	privateData["private-key"] = privateKeyBytes
+
+	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, privateData, provider, "toehold-ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store toehold private key: %w", err)
 	}
-	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, "public-key", publicKeyBytes, provider, "toehold-ssh-keys")
+	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, map[string][]byte{"public-key": publicKeyBytes}, provider, "toehold-ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store toehold public key: %w", err)
 	}
@@ -633,7 +645,7 @@ func (r *Reconciler) getSSHKeySecret(namespace, secretName string) (*v1.Secret, 
 }
 
 // storeSSHKeySecret creates or updates an SSH key secret
-func (r *Reconciler) storeSSHKeySecret(namespace, secretName, keyName string, keyData []byte, provider *api.Provider, component string) error {
+func (r *Reconciler) storeSSHKeySecret(namespace, secretName string, data map[string][]byte, provider *api.Provider, component string) error {
 	providerLabel, err := util.SanitizeProviderName(provider.Name)
 	if err != nil {
 		return fmt.Errorf("failed to sanitize provider name for secret label: %w", err)
@@ -661,9 +673,7 @@ func (r *Reconciler) storeSSHKeySecret(namespace, secretName, keyName string, ke
 			},
 		},
 		Type: v1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			keyName: keyData,
-		},
+		Data: data,
 	}
 
 	err = r.Create(context.TODO(), secret)

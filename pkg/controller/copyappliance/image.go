@@ -179,7 +179,7 @@ func (r *ApplianceContext) streamImage(client *ssh.Client, img v1.Image, ref nam
 	reader, writer := io.Pipe()
 	go func() {
 		// A failure part way through arrives at the load side as a read error,
-		// rather than as a truncated archive that podman would reject for the
+		// rather than as a truncated archive that podman would reject for ther
 		// wrong reason.
 		_ = writer.CloseWithError(tarball.Write(ref, img, writer))
 	}()

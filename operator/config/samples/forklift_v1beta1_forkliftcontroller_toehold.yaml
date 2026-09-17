@@ -13,5 +13,4 @@ spec:
   toehold_folder: /Datacenter/vm
   toehold_network: "VM Network"
   copy_appliance_container_image: copy-appliance:latest
-  copy_appliance_tls_secret: copy-appliance-tls
   copy_appliance_resource_pool: /Datacenter/host/my-cluster/Resources

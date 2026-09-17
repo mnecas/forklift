@@ -260,28 +260,26 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 		err = liberr.Wrap(err)
 		return
 	}
-	sshSecret, err := r.sshSecret(ctx, appliance)
+	applianceSecret, err := r.applianceSecret(ctx, appliance)
 	if err != nil {
 		return
 	}
-	tlsSecret, err := r.tlsSecret(ctx, appliance)
-	if err != nil {
-		return
-	}
-	ac, err = NewApplianceContext(ctx, appliance, provider, secret, sshSecret, tlsSecret, r.Log)
+	ac, err = NewApplianceContext(ctx, appliance, provider, secret, applianceSecret, r.Log)
 	if err != nil {
 		return
 	}
 	return
 }
 
-// sshSecret resolves the SSH key pair the appliance is configured over. A
-// secret that is not there is reported as none rather than as an error: failing
-// here would stop a teardown too, leaving an appliance that cannot be deleted
-// and read locks on the source vmdks with nothing left to release them. Only
-// the configure step needs the key, and it names the secret when it is missing.
-func (r *Reconciler) sshSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
-	ref := appliance.Spec.SSHKey
+// applianceSecret resolves the secret the appliance is reached with: the SSH
+// key pair it is configured over and the mutual-TLS material it serves its
+// exports with. A secret that is not there is reported as none rather than as
+// an error: failing here would stop a teardown too, leaving an appliance that
+// cannot be deleted and read locks on the source vmdks with nothing left to
+// release them. Only the configure and export steps need it, and they name the
+// secret when it is missing.
+func (r *Reconciler) applianceSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
+	ref := appliance.Spec.Secret
 	if ref.Name == "" {
 		// An unnamed secret is not something to look up. Get would reject it
 		// as a malformed request rather than as a missing object.
@@ -296,39 +294,7 @@ func (r *Reconciler) sshSecret(ctx context.Context, appliance *api.CopyAppliance
 	err = r.Client.Get(ctx, key, found)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.Log.Info("The appliance SSH key secret is not there.",
-				"namespace", key.Namespace,
-				"name", key.Name)
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err)
-		return
-	}
-	secret = found
-	return
-}
-
-// tlsSecret resolves the mutual-TLS material the appliance serves its exports
-// with. Missing is reported as none rather than as an error, for the same
-// reason as the SSH key: a teardown must not be blocked by a secret someone
-// deleted. Only the steps that install and then query the exports need it, and
-// they name the secret when it is missing.
-func (r *Reconciler) tlsSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
-	ref := appliance.Spec.TLSSecret
-	if ref.Name == "" {
-		return
-	}
-	namespace := ref.Namespace
-	if namespace == "" {
-		namespace = appliance.Namespace
-	}
-	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
-	found := &core.Secret{}
-	err = r.Client.Get(ctx, key, found)
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			r.Log.Info("The appliance TLS secret is not there.",
+			r.Log.Info("The appliance secret is not there.",
 				"namespace", key.Namespace,
 				"name", key.Name)
 			err = nil

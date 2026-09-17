@@ -47,8 +47,7 @@ func testAppliance() *api.CopyAppliance {
 		},
 		Spec: api.CopyApplianceSpec{
 			Provider:       core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
-			SSHKey:         core.ObjectReference{Namespace: "forklift", Name: "appliance-ssh-key"},
-			TLSSecret:      core.ObjectReference{Namespace: "forklift", Name: "appliance-tls"},
+			Secret:         core.ObjectReference{Namespace: "forklift", Name: "appliance-secret"},
 			ContainerImage: "copy-appliance:latest",
 			Datacenter:     "DC0",
 			Datastore:      "datastore1",
