@@ -256,6 +256,14 @@ func (r *ApplianceContext) StartOrchestrator(client *ssh.Client) (err error) {
 		"systemctl start "+orchestratorUnit)
 }
 
+// RestartOrchestrator restarts the supervisor so it rediscovers block devices
+// after disks are hot-attached to the appliance VM.
+func (r *ApplianceContext) RestartOrchestrator(client *ssh.Client) (err error) {
+	return r.RunCommands(client,
+		"systemctl reset-failed "+orchestratorUnit,
+		"systemctl restart "+orchestratorUnit)
+}
+
 // OrchestratorLog is the tail of the supervisor's journal, for logging when it
 // will not come up. Best effort: this runs on the path where something is
 // already wrong, and failing to collect the evidence must not replace the

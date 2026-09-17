@@ -57,15 +57,45 @@ spec:
               inventory. The controller finds it again by the moRef recorded in the status.
             properties:
               attachDiskPaths:
+                description: 'Deprecated: use attachDisks instead.'
+                items:
+                  pattern: ^\[[^\]]+\]\s*.+\.vmdk$
+                  type: string
+                maxItems: 59
+                type: array
+              attachDisks:
                 description: |-
-                  Datastore paths of existing vmdks (belonging to other VMs) to attach
-                  to the appliance VM (e.g. "[datastore13] some-vm/disk-0.vmdk").
+                  Disks to attach to the appliance VM for export. Each entry names an
+                  existing VMDK and carries the VMware identifiers needed to correlate
+                  guest exports with source inventory.
                   Capped so that the root disk plus the attached disks fit within the
                   four SCSI controllers vSphere permits per VM (4 x 15 addressable
                   units = 60 disks).
                 items:
-                  pattern: ^\[[^\]]+\]\s*.+\.vmdk$
-                  type: string
+                  description: AttachedDisk is an existing VMDK to attach to the copy
+                    appliance.
+                  properties:
+                    capacity:
+                      description: Disk capacity in bytes. Used as a secondary match
+                        key when serial is empty.
+                      format: int64
+                      type: integer
+                    diskKey:
+                      description: VMware virtual device key from inventory.
+                      format: int32
+                      type: integer
+                    serial:
+                      description: backing.Uuid from inventory. Used to match guest
+                        exports.
+                      type: string
+                    vmdkPath:
+                      description: Datastore path of the VMDK (e.g. "[datastore13]
+                        some-vm/disk-0.vmdk").
+                      pattern: ^\[[^\]]+\]\s*.+\.vmdk$
+                      type: string
+                  required:
+                  - vmdkPath
+                  type: object
                 maxItems: 59
                 type: array
               containerImage:
@@ -83,6 +113,27 @@ spec:
               datastore:
                 description: Datastore that holds the appliance VM home directory.
                 type: string
+              exportRequest:
+                description: |-
+                  ExportRequest asks the controller to attach or release source disks and
+                  refresh NBD exports on an already-deployed appliance.
+                properties:
+                  generation:
+                    description: Monotonic counter bumped by the consumer on every
+                      target change.
+                    format: int64
+                    type: integer
+                  target:
+                    description: Export attaches disks and publishes exports. Release
+                      detaches disks and clears exports.
+                    enum:
+                    - Export
+                    - Release
+                    type: string
+                required:
+                - generation
+                - target
+                type: object
               folder:
                 description: Inventory folder in which the appliance VM is created.
                 type: string
@@ -130,7 +181,9 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               resourcePool:
-                description: Resource pool in which the appliance VM is created.
+                description: |-
+                  Resource pool in which the appliance VM is created. When omitted, the
+                  controller uses ForkliftController.spec.copy_appliance_resource_pool.
                 type: string
               sshKey:
                 description: |-
@@ -245,7 +298,6 @@ spec:
             - datastore
             - folder
             - provider
-            - resourcePool
             - sshKey
             - template
             - tlsSecret
@@ -334,10 +386,21 @@ spec:
                       description: Device node the export reads, as the appliance's
                         guest sees it.
                       type: string
+                    diskKey:
+                      description: VMware virtual device key of the attached source
+                        disk.
+                      format: int32
+                      type: integer
                     port:
                       description: Port on the appliance the export is served on.
                       format: int32
                       type: integer
+                    sourceSerial:
+                      description: backing.Uuid of the attached source disk from inventory.
+                      type: string
+                    vmdkPath:
+                      description: Datastore path of the attached source VMDK.
+                      type: string
                     wwid:
                       description: |-
                         Stable identifier the appliance's guest resolved for the disk. It falls
@@ -359,6 +422,25 @@ spec:
                 description: The managed object reference ID of the created appliance
                   VM.
                 type: string
+              observedExportRequest:
+                description: ExportRequest the controller has converged to.
+                properties:
+                  generation:
+                    description: Monotonic counter bumped by the consumer on every
+                      target change.
+                    format: int64
+                    type: integer
+                  target:
+                    description: Export attaches disks and publishes exports. Release
+                      detaches disks and clears exports.
+                    enum:
+                    - Export
+                    - Release
+                    type: string
+                required:
+                - generation
+                - target
+                type: object
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64

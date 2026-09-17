@@ -26,7 +26,7 @@ func TestBuildPod(t *testing.T) {
 	th.Name = "test"
 	th.Namespace = "default"
 	Settings.Toehold.BuilderImage = "builder:latest"
-	pod := r.buildPod(th, "creds")
+	pod := r.buildPod(th, "creds", "toehold-ssh-keys-provider-public", "ssh-rsa AAAAB3NzaC1yc2E")
 	if pod == nil {
 		t.Fatal("expected pod")
 	}
@@ -43,6 +43,15 @@ func TestBuildPod(t *testing.T) {
 	if _, ok := build.Resources.Limits[core.ResourceName("devices.kubevirt.io/kvm")]; !ok {
 		t.Fatal("expected KVM resource limit on build container")
 	}
+	foundSSH := false
+	for _, env := range build.Env {
+		if env.Name == "TOEHOLD_SSH_PUBLIC_KEY_FILE" {
+			foundSSH = true
+		}
+	}
+	if !foundSSH {
+		t.Fatal("expected TOEHOLD_SSH_PUBLIC_KEY_FILE env")
+	}
 }
 
 func TestBuildPodRootPassword(t *testing.T) {
@@ -53,7 +62,7 @@ func TestBuildPodRootPassword(t *testing.T) {
 	th := &api.ToeholdTemplate{Spec: spec}
 	th.Name = "test"
 	Settings.Toehold.BuilderImage = "builder:latest"
-	pod := r.buildPod(th, "creds")
+	pod := r.buildPod(th, "creds", "toehold-ssh-keys-provider-public", "ssh-rsa AAAAB3NzaC1yc2E")
 	for _, env := range pod.Spec.Containers[0].Env {
 		if env.Name == "TOEHOLD_ROOT_PASSWORD" && env.Value == "qum5net" {
 			return
@@ -70,7 +79,7 @@ func TestBuildPodImagePullSecret(t *testing.T) {
 	th.Name = "test"
 	th.Namespace = "default"
 	Settings.Toehold.BuilderImage = "builder:latest"
-	pod := r.buildPod(th, "creds")
+	pod := r.buildPod(th, "creds", "toehold-ssh-keys-provider-public", "ssh-rsa AAAAB3NzaC1yc2E")
 	if len(pod.Spec.ImagePullSecrets) != 1 || pod.Spec.ImagePullSecrets[0].Name != "pull" {
 		t.Fatal("expected imagePullSecrets")
 	}

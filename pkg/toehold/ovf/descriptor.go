@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	govmovi "github.com/vmware/govmomi/ovf"
-	"github.com/vmware/govmomi/vim25/xml"
+	"text/template"
 )
 
 // DescriptorOptions configures OVF generation.
@@ -29,6 +27,102 @@ type DescriptorOptions struct {
 	// When set, used as the OVF diskId suffix; otherwise "disk-0".
 	DiskHash string
 }
+
+type descriptorData struct {
+	Name      string
+	Network   string
+	VMDKName  string
+	Size      int64
+	Capacity  int64
+	DiskID    string
+	CPUs      int32
+	MemoryMiB int32
+}
+
+// vCenter rejects OVF from govmomi's xml.Encoder because the Envelope lacks
+// the DMTF/VMware namespace declarations. Match govmomi/vmdk's template shape.
+const descriptorTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:cim="http://schemas.dmtf.org/wbem/wscim/1/common"
+          xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
+          xmlns:vmw="http://www.vmware.com/schema/ovf"
+          xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <References>
+    <File ovf:href="{{ .VMDKName }}" ovf:id="file1" ovf:size="{{ .Size }}"/>
+  </References>
+  <DiskSection>
+    <Info>Virtual disk information</Info>
+    <Disk ovf:capacity="{{ .Capacity }}" ovf:capacityAllocationUnits="byte" ovf:diskId="{{ .DiskID }}" ovf:fileRef="file1" ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized" ovf:populatedSize="0"/>
+  </DiskSection>
+  <NetworkSection>
+    <Info>Logical networks</Info>
+    <Network ovf:name="{{ .Network }}">
+      <Description>{{ .Network }}</Description>
+    </Network>
+  </NetworkSection>
+  <VirtualSystem ovf:id="{{ .Name }}">
+    <Info>{{ .Name }}</Info>
+    <Name>{{ .Name }}</Name>
+    <OperatingSystemSection ovf:id="109" ovf:version="9" vmw:osType="rhel9_64Guest">
+      <Info>Guest OS</Info>
+      <Description>Red Hat Enterprise Linux 9 (64-bit)</Description>
+    </OperatingSystemSection>
+    <VirtualHardwareSection>
+      <Info>Virtual hardware</Info>
+      <System>
+        <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
+        <vssd:InstanceID>0</vssd:InstanceID>
+        <vssd:VirtualSystemIdentifier>{{ .Name }}</vssd:VirtualSystemIdentifier>
+        <vssd:VirtualSystemType>vmx-17</vssd:VirtualSystemType>
+      </System>
+      <Item>
+        <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
+        <rasd:Description>Number of Virtual CPUs</rasd:Description>
+        <rasd:ElementName>{{ .CPUs }} virtual CPU(s)</rasd:ElementName>
+        <rasd:InstanceID>1</rasd:InstanceID>
+        <rasd:ResourceType>3</rasd:ResourceType>
+        <rasd:VirtualQuantity>{{ .CPUs }}</rasd:VirtualQuantity>
+      </Item>
+      <Item>
+        <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
+        <rasd:Description>Memory Size</rasd:Description>
+        <rasd:ElementName>{{ .MemoryMiB }} MB of memory</rasd:ElementName>
+        <rasd:InstanceID>2</rasd:InstanceID>
+        <rasd:ResourceType>4</rasd:ResourceType>
+        <rasd:VirtualQuantity>{{ .MemoryMiB }}</rasd:VirtualQuantity>
+      </Item>
+      <Item>
+        <rasd:Address>0</rasd:Address>
+        <rasd:Description>SCSI Controller</rasd:Description>
+        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+        <rasd:InstanceID>3</rasd:InstanceID>
+        <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
+        <rasd:ResourceType>6</rasd:ResourceType>
+      </Item>
+      <Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:ElementName>Hard disk 1</rasd:ElementName>
+        <rasd:HostResource>ovf:/disk/{{ .DiskID }}</rasd:HostResource>
+        <rasd:InstanceID>4</rasd:InstanceID>
+        <rasd:Parent>3</rasd:Parent>
+        <rasd:ResourceType>17</rasd:ResourceType>
+      </Item>
+      <Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
+        <rasd:Connection>{{ .Network }}</rasd:Connection>
+        <rasd:ElementName>Network adapter 1</rasd:ElementName>
+        <rasd:InstanceID>5</rasd:InstanceID>
+        <rasd:ResourceSubType>vmxnet3</rasd:ResourceSubType>
+        <rasd:ResourceType>10</rasd:ResourceType>
+      </Item>
+    </VirtualHardwareSection>
+  </VirtualSystem>
+</Envelope>`
+
+var parsedDescriptorTemplate = template.Must(template.New("toehold-ovf").Parse(descriptorTemplate))
 
 // Descriptor generates a minimal OVF envelope for a stream-optimized VMDK.
 func Descriptor(opts DescriptorOptions) (string, error) {
@@ -81,154 +175,22 @@ func Descriptor(opts DescriptorOptions) (string, error) {
 		vmdkName = "disk-0.vmdk"
 	}
 
-	envelope := streamOptimizedEnvelope(opts, vmdkName, diskID(opts), size, capacity)
+	data := descriptorData{
+		Name:      opts.Name,
+		Network:   opts.Network,
+		VMDKName:  vmdkName,
+		Size:      size,
+		Capacity:  capacity,
+		DiskID:    diskID(opts),
+		CPUs:      opts.CPUs,
+		MemoryMiB: opts.MemoryMiB,
+	}
 	var buf bytes.Buffer
-	buf.WriteString(xml.Header)
-	if err := envelope.Write(&buf); err != nil {
+	if err := parsedDescriptorTemplate.Execute(&buf, data); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
 }
-
-func streamOptimizedEnvelope(opts DescriptorOptions, vmdkName, diskID string, size, capacity int64) govmovi.Envelope {
-	name := opts.Name
-	network := opts.Network
-	fileRef := "file1"
-	capUnits := "byte"
-	format := "http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
-	capacityStr := fmt.Sprintf("%d", capacity)
-
-	return govmovi.Envelope{
-		References: []govmovi.File{{
-			ID:   fileRef,
-			Href: vmdkName,
-			Size: uint(size),
-		}},
-		Disk: &govmovi.DiskSection{
-			Section: govmovi.Section{Info: "Virtual disk information"},
-			Disks: []govmovi.VirtualDiskDesc{{
-				DiskID:                  diskID,
-				FileRef:                 &fileRef,
-				Capacity:                capacityStr,
-				CapacityAllocationUnits: &capUnits,
-				Format:                  &format,
-			}},
-		},
-		Network: &govmovi.NetworkSection{
-			Section: govmovi.Section{Info: "Logical networks"},
-			Networks: []govmovi.Network{{
-				Name:        network,
-				Description: network,
-			}},
-		},
-		VirtualSystem: &govmovi.VirtualSystem{
-			Content: govmovi.Content{
-				ID:   name,
-				Info: name,
-				Name: &name,
-			},
-			OperatingSystem: &govmovi.OperatingSystemSection{
-				Section:     govmovi.Section{Info: "Guest OS"},
-				ID:          109,
-				Version:     strPtr("9"),
-				OSType:      strPtr("rhel9_64Guest"),
-				Description: strPtr("Red Hat Enterprise Linux 9 (64-bit)"),
-			},
-			VirtualHardware: []govmovi.VirtualHardwareSection{{
-				Section: govmovi.Section{Info: "Virtual hardware"},
-				System: &govmovi.VirtualSystemSettingData{
-					CIMVirtualSystemSettingData: govmovi.CIMVirtualSystemSettingData{
-						ElementName:             "Virtual Hardware Family",
-						InstanceID:              "0",
-						VirtualSystemIdentifier: &name,
-						VirtualSystemType:       strPtr("vmx-17"),
-					},
-				},
-				Item: []govmovi.ResourceAllocationSettingData{
-					cpuItem(opts.CPUs),
-					memoryItem(opts.MemoryMiB),
-					scsiControllerItem(),
-					diskItem(diskID),
-					networkItem(network),
-				},
-			}},
-		},
-	}
-}
-
-func cpuItem(cpus int32) govmovi.ResourceAllocationSettingData {
-	return govmovi.ResourceAllocationSettingData{
-		CIMResourceAllocationSettingData: govmovi.CIMResourceAllocationSettingData{
-			AllocationUnits:   strPtr("hertz * 10^6"),
-			Description:     strPtr("Number of Virtual CPUs"),
-			ElementName:     fmt.Sprintf("%d virtual CPU(s)", cpus),
-			InstanceID:      "1",
-			ResourceType:    resourceType(govmovi.Processor),
-			VirtualQuantity: uintPtr(uint(cpus)),
-		},
-	}
-}
-
-func memoryItem(memoryMiB int32) govmovi.ResourceAllocationSettingData {
-	return govmovi.ResourceAllocationSettingData{
-		CIMResourceAllocationSettingData: govmovi.CIMResourceAllocationSettingData{
-			AllocationUnits:   strPtr("byte * 2^20"),
-			Description:     strPtr("Memory Size"),
-			ElementName:     fmt.Sprintf("%d MB of memory", memoryMiB),
-			InstanceID:      "2",
-			ResourceType:    resourceType(govmovi.Memory),
-			VirtualQuantity: uintPtr(uint(memoryMiB)),
-		},
-	}
-}
-
-func scsiControllerItem() govmovi.ResourceAllocationSettingData {
-	return govmovi.ResourceAllocationSettingData{
-		CIMResourceAllocationSettingData: govmovi.CIMResourceAllocationSettingData{
-			Address:         strPtr("0"),
-			Description:     strPtr("SCSI Controller"),
-			ElementName:     "SCSI Controller 0",
-			InstanceID:      "3",
-			ResourceSubType: strPtr("lsilogic"),
-			ResourceType:    resourceType(govmovi.ParallelScsiHba),
-		},
-	}
-}
-
-func diskItem(diskID string) govmovi.ResourceAllocationSettingData {
-	return govmovi.ResourceAllocationSettingData{
-		CIMResourceAllocationSettingData: govmovi.CIMResourceAllocationSettingData{
-			AddressOnParent: strPtr("0"),
-			ElementName:     "Hard disk 1",
-			HostResource:    []string{"ovf:/disk/" + diskID},
-			InstanceID:      "4",
-			Parent:          strPtr("3"),
-			ResourceType:    resourceType(govmovi.DiskDrive),
-		},
-	}
-}
-
-func networkItem(network string) govmovi.ResourceAllocationSettingData {
-	return govmovi.ResourceAllocationSettingData{
-		CIMResourceAllocationSettingData: govmovi.CIMResourceAllocationSettingData{
-			AddressOnParent:     strPtr("0"),
-			AutomaticAllocation: boolPtr(true),
-			Connection:          []string{network},
-			ElementName:         "Network adapter 1",
-			InstanceID:          "5",
-			ResourceSubType:     strPtr("vmxnet3"),
-			ResourceType:        resourceType(govmovi.EthernetAdapter),
-		},
-	}
-}
-
-func strPtr(s string) *string { return &s }
-
-func boolPtr(v bool) *bool { return &v }
-
-func uintPtr(v uint) *uint { return &v }
-
-func resourceType(t govmovi.CIMResourceType) *govmovi.CIMResourceType { return &t }
 
 func fileSize(path string) (int64, error) {
 	info, err := os.Stat(path)

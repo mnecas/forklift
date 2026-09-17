@@ -1,5 +1,5 @@
 // Command nbd-orchestrator discovers non-root block devices on the host, starts one
-// nbdkit container per device (read-only, mutual TLS), and serves a mutual-TLS HTTPS
+// plain-TCP nbdkit container per device (read-only), and serves a mutual-TLS HTTPS
 // endpoint announcing the exported disks.
 package main
 
@@ -37,11 +37,7 @@ func main() {
 }
 
 func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publishIP string) error {
-	// Resolve the cert dir to an absolute path. It is passed to `podman run` as a
-	// bind-mount source, and podman treats a non-absolute source (e.g. "certs" or
-	// "./certs") as a *named volume* rather than a host directory -- which would mount
-	// an empty volume and leave nbdkit with no certificates. Absolute paths bind-mount
-	// as intended.
+	// Resolve the cert dir to an absolute path for the announce server.
 	absCertsDir, err := filepath.Abs(certsDir)
 	if err != nil {
 		return fmt.Errorf("resolving certs dir %q: %w", certsDir, err)
@@ -68,7 +64,6 @@ func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publ
 	// 2. Start (or reuse) one container per device.
 	r := runner.New(runner.Config{
 		Image:     image,
-		CertsDir:  certsDir,
 		BasePort:  basePort,
 		PublishIP: publishIP,
 	})

@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 #
-# Generate a self-signed CA and server + client certificates for running the
-# nbd-container acceptance tests (mutual TLS with X.509 client verification).
+# Generate a self-signed CA and server + client certificates for the announce
+# endpoint (mutual TLS with X.509 client verification). nbdkit exports are plain TCP.
 #
 # Produces, in the output directory:
 #   ca-cert.pem       CA that signs the server and client certs
-#   ca-key.pem        CA private key (keep local; not needed by the container)
-#   server-cert.pem   server certificate  ) bind-mount this dir to /etc/pki/nbdkit
-#   server-key.pem    server private key   )
-#   client-cert.pem   client certificate  ) point the NBD client's
-#   client-key.pem    client private key   ) tls-certificates dir here
+#   ca-key.pem        CA private key (keep local)
+#   server-cert.pem   announce server certificate
+#   server-key.pem    announce server private key
+#   client-cert.pem   client certificate for querying /disks
+#   client-key.pem    client private key
 #
-# The server certificate is issued for a fixed *logical* name (default: nbd-server)
-# rather than any real hostname or IP. On-demand servers come up on unpredictable
-# addresses, so clients connect to the real address but verify the certificate against
-# this stable logical name via libnbd's `tls-hostname` parameter. See the README.
+# The server certificate is issued for a fixed logical name (default: nbd-server)
+# rather than any real hostname or IP, so clients verify the announce endpoint by name.
 #
 # Usage:
 #   hack/gen-certs.sh [output-dir] [server-name]
@@ -99,12 +97,9 @@ ls -l ca-cert.pem ca-key.pem server-cert.pem server-key.pem client-cert.pem clie
 cat <<EOF
 
 Next steps:
-  # Run the server, bind-mounting this dir as the server cert store:
-  podman run --rm --device /dev/sdX:/dev/nbd-export:r \\
-    -v $(pwd):/etc/pki/nbdkit:ro,Z -p 10809:10809 nbd-container
+  # Run the server (plain NBD on TCP 10809):
+  podman run --rm --device /dev/sdX:/dev/nbd-export:r -p 10809:10809 nbd-container
 
-  # Connect a client. Point the URI at the server's real host/IP, but verify the
-  # certificate against its logical name ($SERVER_NAME) with tls-hostname. The
-  # client dir supplies ca-cert.pem + client-cert.pem + client-key.pem.
-  nbdinfo "nbds://SERVER_HOST_OR_IP:10809/?tls-certificates=$(pwd)&tls-hostname=$SERVER_NAME"
+  # Connect a client over plain TCP:
+  nbdinfo nbds://SERVER_HOST_OR_IP:10809/
 EOF

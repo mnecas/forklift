@@ -269,6 +269,11 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 			return
 		}
 		if Settings.Features.Toehold {
+			err = r.ensureToeholdSSHKeys(provider)
+			if err != nil {
+				r.Log.Error(err, "failed to ensure toehold SSH keys for vSphere provider")
+				return
+			}
 			err = r.ensureToeholdTemplate(ctx, provider)
 			if err != nil {
 				r.Log.Error(err, "failed to reconcile toehold template for vSphere provider")
@@ -543,17 +548,76 @@ func (r *Reconciler) ensureSSHKeys(provider *api.Provider) error {
 	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
 
 	// Store SSH keys in secrets
-	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, "private-key", privateKeyBytes, provider)
+	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, "private-key", privateKeyBytes, provider, "ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store private key: %w", err)
 	}
 
-	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, "public-key", publicKeyBytes, provider)
+	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, "public-key", publicKeyBytes, provider, "ssh-keys")
 	if err != nil {
 		return fmt.Errorf("failed to store public key: %w", err)
 	}
 
 	r.Log.Info("SSH keys generated and stored successfully", "provider", provider.Name)
+	return nil
+}
+
+// ensureToeholdSSHKeys generates and stores SSH keys for toehold appliance VMs.
+func (r *Reconciler) ensureToeholdSSHKeys(provider *api.Provider) error {
+	if provider.Type() != api.VSphere {
+		return nil
+	}
+	providerName := provider.Name
+	if providerName == "" {
+		return fmt.Errorf("provider name is empty")
+	}
+
+	privateSecretName, err := util.GenerateToeholdSSHPrivateSecretName(providerName)
+	if err != nil {
+		return fmt.Errorf("failed to generate toehold SSH private secret name: %w", err)
+	}
+	publicSecretName, err := util.GenerateToeholdSSHPublicSecretName(providerName)
+	if err != nil {
+		return fmt.Errorf("failed to generate toehold SSH public secret name: %w", err)
+	}
+
+	_, err = r.getSSHKeySecret(provider.Namespace, privateSecretName)
+	if err == nil {
+		r.Log.V(1).Info("Toehold SSH keys already exist for provider", "provider", provider.Name)
+		return nil
+	}
+	if !k8serr.IsNotFound(err) {
+		return fmt.Errorf("failed to check for existing toehold SSH private key secret: %w", err)
+	}
+
+	r.Log.Info("Generating toehold SSH keys for vSphere provider", "provider", provider.Name)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return fmt.Errorf("failed to generate RSA key: %w", err)
+	}
+
+	privateKeyPEM := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	}
+	privateKeyBytes := pem.EncodeToMemory(privateKeyPEM)
+
+	publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return fmt.Errorf("failed to create SSH public key: %w", err)
+	}
+	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
+
+	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, "private-key", privateKeyBytes, provider, "toehold-ssh-keys")
+	if err != nil {
+		return fmt.Errorf("failed to store toehold private key: %w", err)
+	}
+	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, "public-key", publicKeyBytes, provider, "toehold-ssh-keys")
+	if err != nil {
+		return fmt.Errorf("failed to store toehold public key: %w", err)
+	}
+
+	r.Log.Info("Toehold SSH keys generated and stored successfully", "provider", provider.Name)
 	return nil
 }
 
@@ -569,7 +633,7 @@ func (r *Reconciler) getSSHKeySecret(namespace, secretName string) (*v1.Secret, 
 }
 
 // storeSSHKeySecret creates or updates an SSH key secret
-func (r *Reconciler) storeSSHKeySecret(namespace, secretName, keyName string, keyData []byte, provider *api.Provider) error {
+func (r *Reconciler) storeSSHKeySecret(namespace, secretName, keyName string, keyData []byte, provider *api.Provider, component string) error {
 	providerLabel, err := util.SanitizeProviderName(provider.Name)
 	if err != nil {
 		return fmt.Errorf("failed to sanitize provider name for secret label: %w", err)
@@ -581,7 +645,7 @@ func (r *Reconciler) storeSSHKeySecret(namespace, secretName, keyName string, ke
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":        "forklift",
-				"app.kubernetes.io/component":   "ssh-keys",
+				"app.kubernetes.io/component":   component,
 				"app.kubernetes.io/managed-by":  "forklift-controller",
 				"forklift.konveyor.io/provider": providerLabel,
 			},

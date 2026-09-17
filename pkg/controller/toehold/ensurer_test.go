@@ -31,7 +31,7 @@ func TestSetOwnerOnBuildPod(t *testing.T) {
 
 	r := Reconciler{Scheme: s}
 	Settings.Toehold.BuilderImage = "builder:latest"
-	pod := r.buildPod(th, "test-vcenter-creds")
+	pod := r.buildPod(th, "test-vcenter-creds", "toehold-ssh-keys-vcenter-public", "ssh-rsa AAAAB3NzaC1yc2E")
 	if err := r.setOwner(th, pod); err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,8 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
-	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
+	plancontext 	"github.com/kubev2v/forklift/pkg/controller/plan/context"
+	"github.com/kubev2v/forklift/pkg/settings"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -206,7 +207,100 @@ func TestItinerary_ConversionOnlyPlanType(t *testing.T) {
 	}
 }
 
+func TestItinerary_CopyApplianceCold_IncludesAppliancePhases(t *testing.T) {
+	settings.Settings.Features.Toehold = true
+	settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	settings.Settings.CopyAppliance.TLSSecret = "copy-appliance-tls"
+
+	p := &api.Plan{
+		Spec: api.PlanSpec{
+			MigrateSharedDisks: true,
+		},
+	}
+	migrator := newBaseMigratorWithProvider(t, p, nil)
+
+	vm := plan.VM{Ref: ref.Ref{ID: "vm-1"}}
+	itr := migrator.Itinerary(vm)
+
+	phases := map[string]bool{}
+	for _, step := range itr.Pipeline {
+		phases[step.Name] = true
+	}
+	for _, phase := range []string{
+		api.PhaseCreateCopyAppliance,
+		api.PhaseWaitForCopyAppliance,
+		api.PhaseTeardownCopyAppliance,
+	} {
+		if !phases[phase] {
+			t.Fatalf("expected cold itinerary to include %q", phase)
+		}
+	}
+}
+
+func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
+	settings.Settings.Features.Toehold = true
+	settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	settings.Settings.CopyAppliance.TLSSecret = "copy-appliance-tls"
+
+	p := &api.Plan{Spec: api.PlanSpec{Warm: true, MigrateSharedDisks: true}}
+	migrator := newBaseMigratorWithProvider(t, p, nil)
+
+	vm := plan.VM{Ref: ref.Ref{ID: "vm-1"}}
+	itr := migrator.Itinerary(vm)
+
+	if itr.Name != "WarmCopyAppliance" {
+		t.Fatalf("expected WarmCopyAppliance itinerary, got %q", itr.Name)
+	}
+
+	phases := map[string]bool{}
+	for _, step := range itr.Pipeline {
+		phases[step.Name] = true
+	}
+	for _, phase := range []string{
+		api.PhaseReleaseCopyAppliance,
+		api.PhaseWaitForCopyApplianceReleased,
+		api.PhaseRefreshCopyAppliance,
+		api.PhaseWaitForRefreshedCopyAppliance,
+	} {
+		if !phases[phase] {
+			t.Fatalf("expected warm copy appliance itinerary to include %q", phase)
+		}
+	}
+	waitCount := 0
+	teardownCount := 0
+	for _, step := range itr.Pipeline {
+		if step.Name == api.PhaseWaitForCopyAppliance {
+			waitCount++
+		}
+		if step.Name == api.PhaseTeardownCopyAppliance {
+			teardownCount++
+		}
+	}
+	if waitCount != 1 {
+		t.Fatalf("expected one WaitForCopyAppliance phase, got %d", waitCount)
+	}
+	if teardownCount != 1 {
+		t.Fatalf("expected one teardown phase at cutover, got %d", teardownCount)
+	}
+
+	list, err := itr.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, done, err := itr.Next(api.PhaseRefreshCopyAppliance)
+	if err != nil || done {
+		t.Fatalf("Next after RefreshCopyAppliance: next=%q done=%v err=%v", next.Name, done, err)
+	}
+	if next.Name != api.PhaseWaitForRefreshedCopyAppliance {
+		t.Fatalf("expected next phase %q after refresh, got %q", api.PhaseWaitForRefreshedCopyAppliance, next.Name)
+	}
+	if len(list) == 0 {
+		t.Fatal("expected non-empty filtered itinerary")
+	}
+}
+
 func TestItinerary_NormalWarm_SelectsWarm(t *testing.T) {
+	settings.Settings.Features.Toehold = false
 	p := &api.Plan{Spec: api.PlanSpec{Warm: true}}
 	migrator := newBaseMigratorWithProvider(t, p, nil)
 

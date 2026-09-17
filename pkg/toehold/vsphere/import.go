@@ -217,8 +217,10 @@ func (c *Client) importOVFStream(ctx context.Context, opts importStreamOptions) 
 		}
 	}
 	log.V(1).Info("Located imported object", "name", vmRef.Name, "moref", vmRef.Moref)
-	if err = c.SetEFIBoot(ctx, vmRef.VM); err != nil {
-		return nil, fmt.Errorf("set EFI boot on %s: %w", vmRef.Moref, err)
+	// rhel-guest-image is built for BIOS boot; forcing EFI here leaves the guest
+	// with no EFI boot loader and clones land in the Boot Manager.
+	if err = c.SetDiskEnableUUID(ctx, vmRef.VM); err != nil {
+		return nil, fmt.Errorf("enable disk.EnableUUID on %s: %w", vmRef.Moref, err)
 	}
 	if opts.TemplateDiskHash != "" || opts.TemplateConfigHash != "" {
 		log.V(1).Info("Stamping template metadata before mark-as-template", "moref", vmRef.Moref)

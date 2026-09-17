@@ -262,6 +262,9 @@ type VMStatus struct {
 	// without re-copying disks.
 	// +optional
 	DisksCopied bool `json:"disksCopied,omitempty"`
+	// CopyAppliance is the copy appliance CR serving this VM's disks over NBD.
+	// +optional
+	CopyAppliance *core.ObjectReference `json:"copyAppliance,omitempty"`
 
 	// Conditions.
 	libcnd.Conditions `json:",inline"`
