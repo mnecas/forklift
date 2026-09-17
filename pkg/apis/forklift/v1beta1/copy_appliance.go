@@ -32,22 +32,22 @@ type ExportRequest struct {
 type CopyApplianceSpec struct {
 	// Source provider in which the appliance VM is created.
 	Provider core.ObjectReference `json:"provider" ref:"Provider"`
-	// Secret holding the SSH key pair the controller logs in to the appliance
-	// with. The private key is read from the "private-key" data key; the
-	// matching public key is expected to be installed in the appliance image
-	// already.
-	SSHKey core.ObjectReference `json:"sshKey" ref:"Secret"`
-	// Secret holding the mutual-TLS material the appliance serves its exports
-	// with. The controller installs the CA and the server half on the appliance
-	// and keeps the client half to query the exports with. The data keys are the
-	// file names the appliance expects: "ca-cert.pem", "server-cert.pem",
-	// "server-key.pem", "client-cert.pem" and "client-key.pem".
+	// Secret holding everything the controller reaches the appliance with.
+	//
+	// The SSH private key is read from the "private-key" data key; the matching
+	// public key is expected to be installed in the appliance image already.
+	//
+	// The mutual-TLS material the appliance serves its exports with is read from
+	// the data keys named for the files the appliance expects: "ca-cert.pem",
+	// "server-cert.pem", "server-key.pem", "client-cert.pem" and
+	// "client-key.pem". The controller installs the CA and the server half on
+	// the appliance and keeps the client half to query the exports with.
 	//
 	// The server certificate must be issued for the logical name "nbd-server"
 	// rather than for an address. The appliance is cloned on demand and its
 	// address is not known when the certificate is issued, so the client
 	// verifies the name instead of where it reached it.
-	TLSSecret core.ObjectReference `json:"tlsSecret" ref:"Secret"`
+	Secret core.ObjectReference `json:"secret" ref:"Secret"`
 	// ImageStreamTag naming the container image loaded into the appliance's
 	// podman store, resolved in the controller's own namespace. The controller
 	// reads the image from the cluster's internal registry and streams it to

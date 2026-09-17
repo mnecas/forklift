@@ -11,7 +11,6 @@ import (
 func TestCopyApplianceEnabledForPlan(t *testing.T) {
 	Settings.Features.Toehold = true
 	Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
-	Settings.CopyAppliance.TLSSecret = "copy-appliance-tls"
 
 	vsphere, openshift := api.VSphere, api.OpenShift
 	p := &api.Plan{

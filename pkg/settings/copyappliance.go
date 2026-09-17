@@ -9,7 +9,6 @@ import (
 const (
 	CopyApplianceSSHUser        = "COPY_APPLIANCE_SSH_USER"
 	CopyApplianceContainerImage = "COPY_APPLIANCE_CONTAINER_IMAGE"
-	CopyApplianceTLSSecret      = "COPY_APPLIANCE_TLS_SECRET"
 	CopyApplianceResourcePool   = "COPY_APPLIANCE_RESOURCE_POOL"
 )
 
@@ -31,10 +30,6 @@ type CopyAppliance struct {
 	// from (e.g. "copy-appliance:latest"). There is no default: it names an
 	// image stream that only exists in the deployment's own cluster.
 	ContainerImage string
-	// Name of the secret holding the mutual-TLS material the appliance serves
-	// its exports with. There is no default, for the same reason as the SSH
-	// key: the certificates are the deployment's own.
-	TLSSecret string
 	// Default vCenter resource pool inventory path for appliance VM clones.
 	ResourcePool string
 }
@@ -43,7 +38,6 @@ type CopyAppliance struct {
 func (r *CopyAppliance) Load() error {
 	r.SSHUser = Lookup(CopyApplianceSSHUser, DefaultCopyApplianceSSHUser)
 	r.ContainerImage = Lookup(CopyApplianceContainerImage, "")
-	r.TLSSecret = Lookup(CopyApplianceTLSSecret, "")
 	r.ResourcePool = Lookup(CopyApplianceResourcePool, "")
 
 	return nil
@@ -55,7 +49,7 @@ func (r *CopyAppliance) EnabledForPlan(p *api.Plan, vmRef ref.Ref) (bool, error)
 	if !Settings.Features.Toehold {
 		return false, nil
 	}
-	if r.ContainerImage == "" || r.TLSSecret == "" {
+	if r.ContainerImage == "" {
 		return false, nil
 	}
 	if !p.IsSourceProviderVSphere() {

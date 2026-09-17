@@ -324,7 +324,6 @@ func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
 		SSHUser:        "root",
 		ContainerImage: "copy-appliance:latest",
-		TLSSecret:      "copy-appliance-tls",
 	}
 }
 
@@ -368,14 +367,9 @@ func TestBuild(t *testing.T) {
 		t.Errorf("ContainerImage = %q, want it from settings", spec.ContainerImage)
 	}
 	// The toehold template build injects the matching public key; the private
-	// half lives with the provider.
-	if spec.SSHKey.Namespace != "forklift" || spec.SSHKey.Name != "toehold-ssh-keys-vcenter-private" {
-		t.Errorf("SSHKey = %v, want the toehold private secret in the provider namespace", spec.SSHKey)
-	}
-	// As are the certificates: the appliance gets the server half, the
-	// controller keeps the client half.
-	if spec.TLSSecret.Namespace != "forklift" || spec.TLSSecret.Name != testSettings().TLSSecret {
-		t.Errorf("TLSSecret = %v, want the settings secret in the provider namespace", spec.TLSSecret)
+	// half and the certificates live with the provider.
+	if spec.Secret.Namespace != "forklift" || spec.Secret.Name != "toehold-ssh-keys-vcenter-private" {
+		t.Errorf("Secret = %v, want the toehold private secret in the provider namespace", spec.Secret)
 	}
 	if len(spec.AttachDisks) != 1 {
 		t.Fatalf("AttachDisks = %+v, want one disk from inventory", spec.AttachDisks)
@@ -405,23 +399,6 @@ func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), settings.CopyApplianceContainerImage) {
 		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceContainerImage)
-	}
-}
-
-// Without the certificates the appliance is cloned and loaded, and then the
-// configure step has nothing to install and nothing to read its exports with.
-func TestBuildRejectsAnUnconfiguredTLSSecret(t *testing.T) {
-	applied := testSettings()
-	applied.TLSSecret = ""
-	withSettings(t, applied)
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
-
-	_, err := build(inventory, testProvider(), testRef)
-	if err == nil {
-		t.Fatal("build succeeded without a TLS secret")
-	}
-	if !strings.Contains(err.Error(), settings.CopyApplianceTLSSecret) {
-		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceTLSSecret)
 	}
 }
 

@@ -25,16 +25,13 @@ import (
 type ApplianceContext struct {
 	Appliance *api.CopyAppliance
 	Secret    *core.Secret
-	// SSHSecret holds the key pair the controller logs in to the appliance
-	// with. Nil when the CopyAppliance names a secret that is not there, which
-	// only the configure step cares about.
-	SSHSecret *core.Secret
-	// TLSSecret holds the mutual-TLS material the appliance serves its exports
-	// with. Nil when the CopyAppliance names a secret that is not there, which
-	// only the configure and export steps care about.
-	TLSSecret *core.Secret
-	VCenter   *govmomi.Client
-	Log       logging.LevelLogger
+	// ApplianceSecret holds the key pair the controller logs in to the appliance
+	// with and the mutual-TLS material the appliance serves its exports with.
+	// Nil when the CopyAppliance names a secret that is not there, which only
+	// the configure and export steps care about.
+	ApplianceSecret *core.Secret
+	VCenter         *govmomi.Client
+	Log             logging.LevelLogger
 	// sshPort is the port the appliance's sshd answers on. Empty means the
 	// standard port, which is the only one an appliance image is built with;
 	// a test appliance is on whatever it was given.
@@ -52,13 +49,12 @@ type ApplianceContext struct {
 // NewApplianceContext connects to the source vCenter and resolves the
 // appliance's datacenter and inventory folder. The caller owns the returned
 // context and must Close it.
-func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret, sshSecret, tlsSecret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
+func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, provider *api.Provider, secret, applianceSecret *core.Secret, log logging.LevelLogger) (ac *ApplianceContext, err error) {
 	ac = &ApplianceContext{
-		Appliance: appliance,
-		Secret:    secret,
-		SSHSecret: sshSecret,
-		TLSSecret: tlsSecret,
-		Log:       log,
+		Appliance:       appliance,
+		Secret:          secret,
+		ApplianceSecret: applianceSecret,
+		Log:             log,
 	}
 	ac.VCenter, err = base.ConnectGovmomi(
 		ctx,
