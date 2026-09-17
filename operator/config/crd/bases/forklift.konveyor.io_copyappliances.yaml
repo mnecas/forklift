@@ -185,12 +185,23 @@ spec:
                   Resource pool in which the appliance VM is created. When omitted, the
                   controller uses ForkliftController.spec.copy_appliance_resource_pool.
                 type: string
-              sshKey:
+              secret:
                 description: |-
-                  Secret holding the SSH key pair the controller logs in to the appliance
-                  with. The private key is read from the "private-key" data key; the
-                  matching public key is expected to be installed in the appliance image
-                  already.
+                  Secret holding everything the controller reaches the appliance with.
+
+                  The SSH private key is read from the "private-key" data key; the matching
+                  public key is expected to be installed in the appliance image already.
+
+                  The mutual-TLS material the appliance serves its exports with is read from
+                  the data keys named for the files the appliance expects: "ca-cert.pem",
+                  "server-cert.pem", "server-key.pem", "client-cert.pem" and
+                  "client-key.pem". The controller installs the CA and the server half on
+                  the appliance and keeps the client half to query the exports with.
+
+                  The server certificate must be issued for the logical name "nbd-server"
+                  rather than for an address. The appliance is cloned on demand and its
+                  address is not known when the certificate is issued, so the client
+                  verifies the name instead of where it reached it.
                 properties:
                   apiVersion:
                     description: API version of the referent.
@@ -240,67 +251,13 @@ spec:
                   which the clone inherits as-is.
                 minLength: 1
                 type: string
-              tlsSecret:
-                description: |-
-                  Secret holding the mutual-TLS material the appliance serves its exports
-                  with. The controller installs the CA and the server half on the appliance
-                  and keeps the client half to query the exports with. The data keys are the
-                  file names the appliance expects: "ca-cert.pem", "server-cert.pem",
-                  "server-key.pem", "client-cert.pem" and "client-key.pem".
-
-                  The server certificate must be issued for the logical name "nbd-server"
-                  rather than for an address. The appliance is cloned on demand and its
-                  address is not known when the certificate is issued, so the client
-                  verifies the name instead of where it reached it.
-                properties:
-                  apiVersion:
-                    description: API version of the referent.
-                    type: string
-                  fieldPath:
-                    description: |-
-                      If referring to a piece of an object instead of an entire object, this string
-                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-                      For example, if the object reference is to a container within a pod, this would take on a value like:
-                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
-                      the event) or if no container name is specified "spec.containers[2]" (container with
-                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
-                      referencing a part of an object.
-                    type: string
-                  kind:
-                    description: |-
-                      Kind of the referent.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                    type: string
-                  name:
-                    description: |-
-                      Name of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-                    type: string
-                  resourceVersion:
-                    description: |-
-                      Specific resourceVersion to which this reference is made, if any.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-                    type: string
-                  uid:
-                    description: |-
-                      UID of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-                    type: string
-                type: object
-                x-kubernetes-map-type: atomic
             required:
             - containerImage
             - datastore
             - folder
             - provider
-            - sshKey
+            - secret
             - template
-            - tlsSecret
             type: object
           status:
             description: CopyAppliance status.

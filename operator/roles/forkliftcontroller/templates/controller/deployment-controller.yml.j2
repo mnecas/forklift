@@ -238,8 +238,6 @@ spec:
           value: "{{ toehold_network | default('', true) }}"
         - name: COPY_APPLIANCE_CONTAINER_IMAGE
           value: "{{ copy_appliance_container_image | default('', true) }}"
-        - name: COPY_APPLIANCE_TLS_SECRET
-          value: "{{ copy_appliance_tls_secret | default('', true) }}"
         - name: COPY_APPLIANCE_RESOURCE_POOL
           value: "{{ copy_appliance_resource_pool | default('', true) }}"
 {% if copy_appliance_ssh_user is defined and copy_appliance_ssh_user != "" %}

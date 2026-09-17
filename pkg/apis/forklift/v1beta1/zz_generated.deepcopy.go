@@ -317,8 +317,7 @@ func (in *CopyApplianceList) DeepCopyObject() runtime.Object {
 func (in *CopyApplianceSpec) DeepCopyInto(out *CopyApplianceSpec) {
 	*out = *in
 	out.Provider = in.Provider
-	out.SSHKey = in.SSHKey
-	out.TLSSecret = in.TLSSecret
+	out.Secret = in.Secret
 	if in.AttachDisks != nil {
 		in, out := &in.AttachDisks, &out.AttachDisks
 		*out = make([]AttachedDisk, len(*in))

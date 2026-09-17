@@ -1946,7 +1946,6 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 	It("creates warm DataVolumes without a copy appliance reference", func() {
 		settings.Settings.Features.Toehold = true
 		settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
-		settings.Settings.CopyAppliance.TLSSecret = "copy-appliance-tls"
 
 		const (
 			dsID       = "ds-1"

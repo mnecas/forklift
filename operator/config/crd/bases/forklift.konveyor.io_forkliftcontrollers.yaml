@@ -347,11 +347,6 @@ spec:
                 description: SSH user the controller logs in to copy appliances as.
                   Defaults to root.
                 type: string
-              copy_appliance_tls_secret:
-                description: |-
-                  Name of the secret holding mutual-TLS material for copy appliance exports.
-                  The secret must exist in the controller namespace.
-                type: string
               deep_inspection_image_fqin:
                 description: Deep inspection image. Optional. If left empty, the operator
                   automatically sets this from the release payload.

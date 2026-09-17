@@ -231,11 +231,6 @@ type ForkliftControllerSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	CopyApplianceContainerImage string `json:"copy_appliance_container_image,omitempty"`
-	// Name of the secret holding mutual-TLS material for copy appliance exports.
-	// The secret must exist in the controller namespace.
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	CopyApplianceTLSSecret string `json:"copy_appliance_tls_secret,omitempty"`
 	// SSH user the controller logs in to copy appliances as. Defaults to root.
 	// +optional
 	// +kubebuilder:default="root"

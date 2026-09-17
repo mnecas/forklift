@@ -46,8 +46,8 @@ const (
 	applianceBasePort     = 10809
 )
 
-// Keys of the TLS secret. They are the file names the appliance expects, so
-// that what the operator puts in the secret is what lands on the appliance.
+// Keys of the TLS material within the appliance secret. They are the file names
+// the appliance expects, so that what is in the secret is what lands on it.
 const (
 	tlsCACert     = "ca-cert.pem"
 	tlsServerCert = "server-cert.pem"
@@ -113,26 +113,26 @@ func (r *ApplianceContext) ClientTLS() (ca, certificate, key []byte, err error) 
 	return files[tlsCACert], files[tlsClientCert], files[tlsClientKey], nil
 }
 
-// tlsData reads the named keys out of the appliance's TLS secret, and reports
-// which one is missing rather than that something is.
+// tlsData reads the named keys out of the appliance's secret, and reports which
+// one is missing rather than that something is.
 func (r *ApplianceContext) tlsData(keys ...string) (files map[string][]byte, err error) {
-	ref := r.Appliance.Spec.TLSSecret
-	if r.TLSSecret == nil {
+	ref := r.Appliance.Spec.Secret
+	if r.ApplianceSecret == nil {
 		err = liberr.New(
-			"the appliance TLS secret is missing",
+			"the appliance secret is missing",
 			"namespace", ref.Namespace,
 			"name", ref.Name)
 		return
 	}
 	files = make(map[string][]byte, len(keys))
 	for _, key := range keys {
-		value, found := r.TLSSecret.Data[key]
+		value, found := r.ApplianceSecret.Data[key]
 		if !found || len(value) == 0 {
 			files = nil
 			err = liberr.New(
-				"the appliance TLS secret has no "+key,
-				"namespace", r.TLSSecret.Namespace,
-				"name", r.TLSSecret.Name)
+				"the appliance secret has no "+key,
+				"namespace", r.ApplianceSecret.Namespace,
+				"name", r.ApplianceSecret.Name)
 			return
 		}
 		files[key] = value

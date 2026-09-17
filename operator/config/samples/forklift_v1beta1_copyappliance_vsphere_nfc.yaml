@@ -10,11 +10,8 @@ spec:
   provider:
     name: vsphere-nfc
     namespace: openshift-mtv
-  sshKey:
+  secret:
     name: toehold-ssh-keys-vsphere-nfc-private
-    namespace: openshift-mtv
-  tlsSecret:
-    name: copy-appliance-tls
     namespace: openshift-mtv
   containerImage: nbd-container:toehold-dev-amd64
   template: /Datacenter/vm/nbdkit-toehold

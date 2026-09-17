@@ -15,12 +15,10 @@ command -v oc >/dev/null || { bad "oc not found"; exit 1; }
 echo "==> ForkliftController toehold + copy appliance settings (${namespace})"
 fc_toehold=false
 fc_image=false
-fc_tls=false
 fc_pool=false
 if fc_yaml="$(oc get forkliftcontroller -n "${namespace}" -o yaml 2>/dev/null)"; then
 	echo "${fc_yaml}" | grep -q 'feature_toehold:.*true' && fc_toehold=true
 	echo "${fc_yaml}" | grep -q 'copy_appliance_container_image:' && fc_image=true
-	echo "${fc_yaml}" | grep -q 'copy_appliance_tls_secret:' && fc_tls=true
 	echo "${fc_yaml}" | grep -q 'copy_appliance_resource_pool:' && fc_pool=true
 else
 	warn "cannot read ForkliftController in ${namespace}"
@@ -28,19 +26,10 @@ fi
 deploy_env="$(oc get deployment forklift-controller -n "${namespace}" -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null || true)"
 [[ "${deploy_env}" == *"FEATURE_TOEHOLD=true"* ]] && fc_toehold=true
 [[ "${deploy_env}" == *"COPY_APPLIANCE_CONTAINER_IMAGE="* ]] && [[ "${deploy_env}" != *"COPY_APPLIANCE_CONTAINER_IMAGE=\n"* ]] && fc_image=true
-[[ "${deploy_env}" == *"COPY_APPLIANCE_TLS_SECRET="* ]] && fc_tls=true
 [[ "${deploy_env}" == *"COPY_APPLIANCE_RESOURCE_POOL="* ]] && fc_pool=true
 ${fc_toehold} && ok "feature_toehold enabled" || bad "feature_toehold not true"
 ${fc_image} && ok "copy_appliance_container_image set" || bad "copy_appliance_container_image missing"
-${fc_tls} && ok "copy_appliance_tls_secret set" || bad "copy_appliance_tls_secret missing"
 ${fc_pool} && ok "copy_appliance_resource_pool set" || warn "copy_appliance_resource_pool not set (set on CopyAppliance.spec.resourcePool instead)"
-
-echo "==> TLS secret"
-if oc get secret copy-appliance-tls -n "${namespace}" >/dev/null 2>&1; then
-	ok "secret copy-appliance-tls exists"
-else
-	bad "secret copy-appliance-tls missing — run create-tls-secret.sh"
-fi
 
 echo "==> ImageStream (copy-appliance:latest or nbd-container tag from controller)"
 img_tag=""
@@ -82,15 +71,23 @@ else
 	oc get toeholdtemplates -n "${namespace}" 2>/dev/null || warn "no toeholdtemplates (pass provider name as 2nd arg)"
 fi
 
-echo "==> SSH keys"
+echo "==> Appliance secret (SSH key + TLS material)"
 if [[ -n "${provider}" ]]; then
-	if oc get secret "toehold-ssh-keys-${provider}-private" -n "${namespace}" >/dev/null 2>&1; then
-		ok "toehold-ssh-keys-${provider}-private"
+	secret="toehold-ssh-keys-${provider}-private"
+	if keys="$(oc get secret "${secret}" -n "${namespace}" -o jsonpath='{.data}' 2>/dev/null)"; then
+		ok "${secret}"
+		# The provider controller fills the certificates in alongside the key;
+		# a secret predating that carries the key on its own.
+		if [[ "${keys}" == *'"ca-cert.pem"'* ]]; then
+			ok "${secret} holds the TLS material"
+		else
+			bad "${secret} has no ca-cert.pem — the provider controller has not filled it in yet"
+		fi
 	else
-		bad "toehold-ssh-keys-${provider}-private missing"
+		bad "${secret} missing"
 	fi
 else
-	oc get secret -n "${namespace}" 2>/dev/null | grep toehold-ssh-keys || warn "pass provider name to check SSH secrets"
+	oc get secret -n "${namespace}" 2>/dev/null | grep toehold-ssh-keys || warn "pass provider name to check the appliance secret"
 fi
 
 echo "==> Controller deployment (custom build)"

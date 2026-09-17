@@ -38,7 +38,6 @@ spec:
   toehold_folder: /Datacenter/vm
   toehold_network: "VM Network"
   copy_appliance_container_image: copy-appliance:latest
-  copy_appliance_tls_secret: copy-appliance-tls
   copy_appliance_resource_pool: /Datacenter/host/my-cluster/Resources
 ```
 
@@ -50,21 +49,19 @@ The **toehold template** only defines the appliance shape (root disk, network, C
 
 The **copy appliance VM** is a **clone** of that template. The clone is placed in the resource pool named by either `CopyAppliance.spec.resourcePool` or `ForkliftController.spec.copy_appliance_resource_pool` when the spec omits it.
 
-SSH keys are **not** configured manually. For each vSphere provider the controller creates:
+Secrets are **not** configured manually. For each vSphere provider the controller creates:
 
 - `toehold-ssh-keys-<provider>-public` — injected into the template by `virt-customize --ssh-inject`
 - `toehold-ssh-keys-<provider>-private` — used by the CopyAppliance reconciler
 
-## 2. Create the TLS secret
+The private secret also holds the mutual-TLS material the appliance serves its exports with,
+generated per provider alongside the keys: `ca-cert.pem`, `server-cert.pem`, `server-key.pem`,
+`client-cert.pem` and `client-key.pem`. The server certificate is issued for the logical name
+`nbd-server` rather than an IP, because the appliance is cloned on demand and its address is
+not known when the certificate is issued; the controller verifies that name when querying
+exports.
 
-```bash
-chmod +x hack/copy-appliance/create-tls-secret.sh
-./hack/copy-appliance/create-tls-secret.sh openshift-mtv copy-appliance-tls
-```
-
-The server certificate is issued for logical name `nbd-server` (not an IP). CopyAppliance verifies that name when querying exports.
-
-## 3. Build and publish the nbd-container image
+## 2. Build and publish the nbd-container image
 
 ```bash
 cd pkg/nbd-container
@@ -98,7 +95,7 @@ So for copy-appliance:
 1. Ship (or reconcile) an ImageStream in `openshift-mtv`, e.g. `copy-appliance:latest`, imported from `registry.redhat.io/migration-toolkit-virtualization/...`.
 2. Set **`referencePolicy: Local`** on that tag.
 3. Point `ForkliftController.spec.copy_appliance_container_image` at the tag (e.g. `copy-appliance:latest`).
-4. Document or generate `copy-appliance-tls`; SSH keys continue to come from the vSphere provider offload secrets.
+4. Nothing to document for TLS: the certificates are generated per provider into `toehold-ssh-keys-<provider>-private`, alongside the SSH keys.
 
 Example ImageStream fragment:
 
@@ -130,7 +127,7 @@ oc get imagestreamtag copy-appliance:latest -n openshift-mtv \
 
 **Orchestrator note:** `nbd-orchestrator` is not a separate container image. It is built into the forklift-controller image and copied to the appliance over SSH during Configure. Only the per-disk **nbd-container** image goes through LoadImage.
 
-## 4. Verify toehold template build
+## 3. Verify toehold template build
 
 After the vSphere provider is ready, the controller creates a `ToeholdTemplate` named `<provider>-toehold`.
 
@@ -147,7 +144,7 @@ Confirm SSH secrets exist:
 oc get secret -n openshift-mtv | grep toehold-ssh-keys
 ```
 
-## 5. Create a CopyAppliance
+## 4. Create a CopyAppliance
 
 The template inventory path is typically `/Datacenter/vm/<provider>-toehold` (folder + template name from the toehold CR).
 
@@ -161,11 +158,8 @@ spec:
   provider:
     name: vcenter
     namespace: openshift-mtv
-  sshKey:
+  secret:
     name: toehold-ssh-keys-vcenter-private
-    namespace: openshift-mtv
-  tlsSecret:
-    name: copy-appliance-tls
     namespace: openshift-mtv
   containerImage: copy-appliance:latest
   # resourcePool: optional when ForkliftController.spec.copy_appliance_resource_pool is set
@@ -179,7 +173,7 @@ spec:
       capacity: 17179869184
 ```
 
-When created via `copyappliance.Build()`, `sshKey` is set automatically from the provider name.
+When created via `copyappliance.Build()`, `secret` is set automatically from the provider name.
 
 Watch deploy phases:
 
@@ -193,7 +187,7 @@ Terminal phase: `DeployCompleted` with `Ready=True` and populated `status.export
 
 Initial deploy seeds `spec.exportRequest: {target: Export, generation: 1}` when
 the CR is created by a migration plan. Manual CRs should set generation `1`
-on first export after deploy if testing release/reattach (see §7).
+on first export after deploy if testing release/reattach (see §6).
 
 ```bash
 chmod +x hack/copy-appliance/*.sh
@@ -201,7 +195,7 @@ chmod +x hack/copy-appliance/*.sh
 ./hack/copy-appliance/t1-deploy-copyappliance.sh
 ```
 
-## 6. Export release and reattach (T2)
+## 5. Export release and reattach (T2)
 
 After `DeployCompleted`, exercise the warm precopy disk cycle without a
 migration plan. The appliance VM stays powered on; only source VMDKs detach
@@ -234,7 +228,7 @@ Run both steps in a loop:
 ./hack/copy-appliance/t2-export-cycle.sh test-copy-appliance openshift-mtv 2
 ```
 
-## 7. Plan-driven migration (T3 cold / T4 warm)
+## 6. Plan-driven migration (T3 cold / T4 warm)
 
 **Cold (T3):** Use a normal plan (no `spec.warm`). With `feature_toehold` and
 copy appliance settings, the controller creates one `CopyAppliance` per VM,
@@ -268,7 +262,7 @@ oc get datavolume -n <target-ns> \
 `cdi.kubevirt.io/storage.import.vddk.nbdConnection`. Appliance deploy can pass
 without it; import may still use direct VDDK until CDI is updated.
 
-## 8. Query exports manually (optional)
+## 7. Query exports manually (optional)
 
 From a host with the client certs and `nbdc`/`curl`:
 
@@ -285,7 +279,7 @@ make query HOST=<appliance-ip>
 | Toehold build fails on SSH secret | Provider reconciled with `feature_toehold=true`? `toehold-ssh-keys-*-public` exists? |
 | CopyAppliance stuck at `WaitForNetwork` | VMware Tools reporting guest IP? Template network matches vSphere port group? |
 | CopyAppliance stuck at `Configure` / SSH errors | Template rebuilt after SSH keys were created? `forceRebuild: true` on ToeholdTemplate? |
-| `WaitForExports` never completes | nbd-container image loaded? TLS secret keys correct? Firewall allows TCP 8443 and 10809+? |
+| `WaitForExports` never completes | nbd-container image loaded? `toehold-ssh-keys-<provider>-private` holds the five `*.pem` keys? Firewall allows TCP 8443 and 10809+? |
 | LoadImage fails with unauthorized / manifest errors | ImageStreamTag `dockerImageReference` pointing at Quay or `registry.redhat.io`? Set `referencePolicy: Local` and confirm internal registry URL. |
 | CloneVM fails: resource pool not found | Set `ForkliftController.spec.copy_appliance_resource_pool` to the real vCenter inventory path, or set `CopyAppliance.spec.resourcePool`. |
 | Disk hash mismatch / rebuild loop | Expected when SSH keys are first added; let rebuild finish |

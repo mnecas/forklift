@@ -17,17 +17,11 @@ func TestCopyApplianceDefaults(t *testing.T) {
 	if applied.ContainerImage != "" {
 		t.Errorf("ContainerImage = %q, want it unset", applied.ContainerImage)
 	}
-	// Nor here: the certificates are the deployment's own, and nothing the
-	// controller could invent would be trusted by anything.
-	if applied.TLSSecret != "" {
-		t.Errorf("TLSSecret = %q, want it unset", applied.TLSSecret)
-	}
 }
 
 func TestCopyApplianceFromEnvironment(t *testing.T) {
 	t.Setenv(CopyApplianceSSHUser, "appliance")
 	t.Setenv(CopyApplianceContainerImage, "copy-appliance:latest")
-	t.Setenv(CopyApplianceTLSSecret, "copy-appliance-tls")
 	t.Setenv(CopyApplianceResourcePool, "/Datacenter/host/cluster/Resources")
 
 	applied := CopyAppliance{}
@@ -39,9 +33,6 @@ func TestCopyApplianceFromEnvironment(t *testing.T) {
 	}
 	if applied.ContainerImage != "copy-appliance:latest" {
 		t.Errorf("ContainerImage = %q, want the configured image", applied.ContainerImage)
-	}
-	if applied.TLSSecret != "copy-appliance-tls" {
-		t.Errorf("TLSSecret = %q, want the configured secret", applied.TLSSecret)
 	}
 	if applied.ResourcePool != "/Datacenter/host/cluster/Resources" {
 		t.Errorf("ResourcePool = %q, want the configured pool", applied.ResourcePool)

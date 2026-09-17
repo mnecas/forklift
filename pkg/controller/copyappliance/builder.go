@@ -9,7 +9,7 @@ import (
 	vspheremodel "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
-	liberr 	"github.com/kubev2v/forklift/pkg/lib/error"
+	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
@@ -58,7 +58,7 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			provider.Name, provider.Type()))
 		return
 	}
-	sshKeySecret, err := util.GenerateToeholdSSHPrivateSecretName(provider.Name)
+	secretName, err := util.GenerateToeholdSSHPrivateSecretName(provider.Name)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
@@ -72,28 +72,14 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 				settings.CopyApplianceContainerImage)
 		return
 	}
-	if Settings.CopyAppliance.TLSSecret == "" {
-		// The certificates are this deployment's own, so there is nothing to
-		// default to. Without them the appliance has nothing to serve its
-		// exports over and the controller has nothing to read them with.
-		err = liberr.New(
-			"the copy appliance TLS secret is not configured; set " +
-				settings.CopyApplianceTLSSecret)
-		return
-	}
-
 	spec := api.CopyApplianceSpec{
 		Provider: core.ObjectReference{
 			Namespace: provider.Namespace,
 			Name:      provider.Name,
 		},
-		SSHKey: core.ObjectReference{
+		Secret: core.ObjectReference{
 			Namespace: provider.Namespace,
-			Name:      sshKeySecret,
-		},
-		TLSSecret: core.ObjectReference{
-			Namespace: provider.Namespace,
-			Name:      Settings.CopyAppliance.TLSSecret,
+			Name:      secretName,
 		},
 		ContainerImage: Settings.CopyAppliance.ContainerImage,
 		// The appliance's shape, root disk and network are not configured here,

@@ -238,27 +238,27 @@ func (r *ApplianceContext) sshAddr(address string) (addr string) {
 
 // signer is the key the appliance was built with the public half of.
 func (r *ApplianceContext) signer() (signer ssh.Signer, err error) {
-	ref := r.Appliance.Spec.SSHKey
-	if r.SSHSecret == nil {
+	ref := r.Appliance.Spec.Secret
+	if r.ApplianceSecret == nil {
 		err = liberr.New(
-			"the appliance SSH key secret is missing",
+			"the appliance secret is missing",
 			"namespace", ref.Namespace,
 			"name", ref.Name)
 		return
 	}
-	key, found := r.SSHSecret.Data[sshPrivateKeyData]
+	key, found := r.ApplianceSecret.Data[sshPrivateKeyData]
 	if !found {
 		err = liberr.New(
-			"the appliance SSH key secret has no "+sshPrivateKeyData,
-			"namespace", r.SSHSecret.Namespace,
-			"name", r.SSHSecret.Name)
+			"the appliance secret has no "+sshPrivateKeyData,
+			"namespace", r.ApplianceSecret.Namespace,
+			"name", r.ApplianceSecret.Name)
 		return
 	}
 	signer, err = ssh.ParsePrivateKey(key)
 	if err != nil {
 		err = liberr.Wrap(err,
-			"namespace", r.SSHSecret.Namespace,
-			"name", r.SSHSecret.Name)
+			"namespace", r.ApplianceSecret.Namespace,
+			"name", r.ApplianceSecret.Name)
 		return
 	}
 	return

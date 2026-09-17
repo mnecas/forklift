@@ -475,16 +475,6 @@ func (r *Reconciler) validateCopyAppliance(ctx *plancontext.Context) error {
 			Message:  "Copy appliance container image is not configured on the ForkliftController.",
 		})
 	}
-	if settings.Settings.CopyAppliance.TLSSecret == "" {
-		plan.Status.SetCondition(libcnd.Condition{
-			Type:     CopyApplianceNotReady,
-			Status:   True,
-			Category: api.CategoryCritical,
-			Reason:   NotSet,
-			Message:  "Copy appliance TLS secret is not configured on the ForkliftController.",
-		})
-	}
-
 	provider := plan.Provider.Source
 	if provider == nil {
 		return nil
