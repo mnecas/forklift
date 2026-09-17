@@ -1,0 +1,17 @@
+---
+# Example ForkliftController with toehold templates and copy appliance defaults.
+# Apply after the operator is installed; adjust vCenter placement for your environment.
+apiVersion: forklift.konveyor.io/v1beta1
+kind: ForkliftController
+metadata:
+  name: forklift-controller
+  namespace: openshift-mtv
+spec:
+  feature_toehold: "true"
+  toehold_base_disk_container_image: registry.redhat.io/rhel9/rhel-guest-image:latest
+  toehold_datastore: datastore1
+  toehold_folder: /Datacenter/vm
+  toehold_network: "VM Network"
+  copy_appliance_container_image: copy-appliance:latest
+  copy_appliance_tls_secret: copy-appliance-tls
+  copy_appliance_resource_pool: /Datacenter/host/my-cluster/Resources

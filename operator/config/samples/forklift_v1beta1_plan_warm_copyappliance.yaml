@@ -1,0 +1,32 @@
+---
+# Warm vSphere plan template for copy-appliance integration testing (T4).
+# Fill in provider, map, and VM refs for your lab. Requires:
+#   - ForkliftController feature_toehold + copy_appliance_* settings
+#   - ToeholdTemplate <source-provider>-toehold Succeeded
+#   - Source VM with Changed Block Tracking (CBT) enabled
+#   - CDI build that honors cdi.kubevirt.io/storage.import.vddk.nbdConnection
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Plan
+metadata:
+  name: warm-copyappliance-test
+  namespace: openshift-mtv
+spec:
+  warm: true
+  targetNamespace: warm-migration-target
+  provider:
+    source:
+      name: vcenter
+      namespace: openshift-mtv
+    destination:
+      name: host
+      namespace: openshift-mtv
+  map:
+    network:
+      name: network-map
+      namespace: openshift-mtv
+    storage:
+      name: storage-map
+      namespace: openshift-mtv
+  vms:
+    - name: test-vm
+      id: "<vm-mo-id>"

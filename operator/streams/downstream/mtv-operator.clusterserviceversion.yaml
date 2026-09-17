@@ -811,6 +811,10 @@ spec:
         displayName: Toehold Template
         kind: ToeholdTemplate
         name: toeholdtemplates.forklift.konveyor.io
+      - description: Copy appliance VM for vSphere disk export over NBD
+        displayName: Copy Appliance
+        kind: CopyAppliance
+        name: copyappliances.forklift.konveyor.io
   relatedImages:
     - name: toehold_builder
       image: "${TOEHOLD_BUILDER_IMAGE}"

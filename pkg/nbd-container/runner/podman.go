@@ -22,6 +22,9 @@ const (
 	wwidLabel = "nbd.wwid"
 	// deviceLabel records the host device path (informational).
 	deviceLabel = "nbd.device"
+	// portLabel records the host port nbdkit listens on. Host-network containers
+	// publish no port bindings, so reuse reads this label instead.
+	portLabel = "nbd.port"
 	// containerPort is the fixed port nbdkit listens on inside every container.
 	containerPort = 10809
 )
@@ -31,12 +34,12 @@ type Export struct {
 	WWID   string `json:"wwid"`
 	Port   int    `json:"port"`
 	Device string `json:"device"`
+	Size   uint64 `json:"size,omitempty"`
 }
 
 // Config controls how containers are launched.
 type Config struct {
 	Image     string // container image, e.g. localhost/nbd-container
-	CertsDir  string // host dir with ca-cert.pem/server-cert.pem/server-key.pem
 	BasePort  int    // first host port to allocate
 	PublishIP string // host IP to bind published ports to (e.g. 0.0.0.0)
 }
@@ -67,7 +70,7 @@ func (r *Runner) Reconcile(ctx context.Context, devices []blockdev.Device) ([]Ex
 			errs = append(errs, fmt.Errorf("%s: checking existing container: %w", d.Path, err))
 			continue
 		} else if ok {
-			exports = append(exports, Export{WWID: d.WWID, Port: port, Device: d.Path})
+			exports = append(exports, Export{WWID: d.WWID, Port: port, Device: d.Path, Size: d.Size})
 			continue
 		}
 
@@ -83,7 +86,7 @@ func (r *Runner) Reconcile(ctx context.Context, devices []blockdev.Device) ([]Ex
 			errs = append(errs, fmt.Errorf("%s: %w", d.Path, err))
 			continue
 		}
-		exports = append(exports, Export{WWID: d.WWID, Port: port, Device: d.Path})
+		exports = append(exports, Export{WWID: d.WWID, Port: port, Device: d.Path, Size: d.Size})
 	}
 
 	if len(errs) > 0 {
@@ -119,24 +122,27 @@ func (r *Runner) run(ctx context.Context, d blockdev.Device, hostPort int) error
 	name := "nbd-" + sanitize(d.WWID)
 	args := []string{
 		"run", "-d", "--restart=always",
+		"--network", "host",
+		"--privileged",
+		"--cgroups=disabled",
+		"--security-opt", "label=disable",
 		"--name", name,
 		"--label", wwidLabel + "=" + d.WWID,
 		"--label", deviceLabel + "=" + d.Path,
+		"--label", portLabel + "=" + strconv.Itoa(hostPort),
 		"--device", fmt.Sprintf("%s:/dev/nbd-export:r", d.Path),
-		// Lowercase z, the shared SELinux content label. Uppercase Z is
-		// private: it would relabel the one certs directory with a category
-		// only this container can read, locking out every container already
-		// running off the same directory.
-		"-v", fmt.Sprintf("%s:/etc/pki/nbdkit:ro,z", r.cfg.CertsDir),
-		"-p", fmt.Sprintf("%s:%d:%d", r.cfg.PublishIP, hostPort, containerPort),
+		"--entrypoint", "nbdkit",
 		r.cfg.Image,
+		"--foreground", "--readonly",
+		"--port", strconv.Itoa(hostPort),
+		"file", "/dev/nbd-export",
 	}
 	if out, err := exec.CommandContext(ctx, "podman", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("podman run: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	// `podman run -d` succeeds as soon as the container is created, even if the process
-	// inside exits immediately (e.g. nbdkit failing on a bad cert mount). Confirm the
+	// inside exits immediately (e.g. nbdkit failing on a missing device). Confirm the
 	// container is actually up before reporting the export as ready, and tear down a
 	// failed one so it doesn't linger crash-looping (restart=always) and get falsely
 	// reused by WWID on the next reconcile.
@@ -275,10 +281,28 @@ func (r *Runner) publishedPort(ctx context.Context, name string) (int, error) {
 	}
 	key := fmt.Sprintf("%d/tcp", containerPort)
 	bindings := inspected[0].NetworkSettings.Ports[key]
-	if len(bindings) == 0 {
-		return 0, fmt.Errorf("container %s has no binding for %s", name, key)
+	if len(bindings) > 0 {
+		return strconv.Atoi(bindings[0].HostPort)
 	}
-	return strconv.Atoi(bindings[0].HostPort)
+	return r.labeledPort(ctx, name)
+}
+
+// labeledPort reads the host port from the container label written at create time.
+func (r *Runner) labeledPort(ctx context.Context, name string) (int, error) {
+	out, err := exec.CommandContext(ctx, "podman", "inspect", name,
+		"--format", "{{index .Config.Labels \""+portLabel+"\"}}").Output()
+	if err != nil {
+		return 0, fmt.Errorf("podman inspect %s: %w", name, err)
+	}
+	portStr := strings.TrimSpace(string(out))
+	if portStr == "" {
+		return 0, fmt.Errorf("container %s has no %s label", name, portLabel)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("parsing %s label on %s: %w", portLabel, name, err)
+	}
+	return port, nil
 }
 
 // usedPorts returns the set of host ports already published by nbd containers, so we

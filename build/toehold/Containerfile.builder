@@ -38,11 +38,15 @@ COPY --from=gobuild /toehold-uploader /usr/local/bin/toehold-uploader
 COPY build/toehold/scripts/extract-appliance-root.sh /usr/local/bin/extract-appliance-root
 COPY build/toehold/scripts/toehold-build.sh /usr/local/bin/toehold-build
 COPY build/toehold/scripts/bake-appliance-tarball.sh /usr/local/bin/bake-appliance-tarball
+COPY build/toehold/scripts/toehold-publish-guestinfo.sh /usr/local/bin/toehold-publish-guestinfo.sh
+COPY build/toehold/scripts/toehold-podman.sh /usr/local/bin/toehold-podman.sh
 COPY build/toehold/systemd/ /usr/share/toehold/systemd/
 RUN chmod +x /usr/local/bin/extract-appliance-root \
         /usr/local/bin/toehold-build \
         /usr/local/bin/toehold-uploader \
         /usr/local/bin/bake-appliance-tarball \
+        /usr/local/bin/toehold-publish-guestinfo.sh \
+        /usr/local/bin/toehold-podman.sh \
     && bake-appliance-tarball
 
 ENTRYPOINT ["/usr/libexec/catatonit/catatonit", "/usr/local/bin/toehold-build"]

@@ -25,9 +25,10 @@ type Runner struct {
 	r          *Reconciler
 	toehold    *api.ToeholdTemplate
 	pctx       *providerContext
-	diskHash   string
-	configHash string
-	skipBuild  bool
+	diskHash      string
+	configHash    string
+	sshPublicKey  string
+	skipBuild     bool
 }
 
 type runnerPredicate struct {
@@ -57,7 +58,11 @@ func (run *Runner) itinerary() *libitr.Itinerary {
 }
 
 func (run *Runner) Run() (done bool, err error) {
-	run.diskHash = version.DiskHash(run.toehold.Spec)
+	run.sshPublicKey, err = run.r.loadToeholdSSHPublicKey(run.ctx, run.toehold)
+	if err != nil {
+		return false, err
+	}
+	run.diskHash = version.DiskHash(run.toehold.Spec, run.sshPublicKey)
 	run.configHash = version.ConfigHash(run.toehold.Spec)
 	run.toehold.Status.Template.DiskHash = run.diskHash
 	run.toehold.Status.Template.ConfigHash = run.configHash
@@ -124,7 +129,11 @@ func (run *Runner) stagePrerequisites() error {
 	if err != nil {
 		return err
 	}
-	if err = run.r.ensureCredsSecret(run.ctx, run.toehold, pctx); err != nil {
+	if err = run.r.ensureSSHPublicSecret(run.ctx, run.toehold); err != nil {
+		pctx.Client.Close(run.ctx)
+		return err
+	}
+	if err = run.r.ensureCredsSecret(run.ctx, run.toehold, pctx, run.sshPublicKey); err != nil {
 		pctx.Client.Close(run.ctx)
 		return err
 	}

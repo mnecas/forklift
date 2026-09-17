@@ -24,7 +24,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/provider"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
-	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	liberr 	"github.com/kubev2v/forklift/pkg/lib/error"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cnv "kubevirt.io/api/core/v1"

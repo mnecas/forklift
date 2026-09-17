@@ -72,8 +72,11 @@ func (r *BaseMigrator) Reset(vm *plan.VMStatus, pipeline []*plan.Step) {
 
 func (r *BaseMigrator) Pipeline(vm plan.VM) (pipeline []*plan.Step, err error) {
 	itinerary := r.Itinerary(vm)
-	step, _ := itinerary.First()
-	for {
+	steps, err := itinerary.List()
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	for _, step := range steps {
 		switch step.Name {
 		case api.PhaseStarted:
 			pipeline = append(
@@ -232,12 +235,12 @@ func (r *BaseMigrator) Pipeline(vm plan.VM) (pipeline []*plan.Step, err error) {
 						Progress:    libitr.Progress{Total: 1},
 					},
 				})
-		}
-		next, done, _ := itinerary.Next(step.Name)
-		if !done {
-			step = next
-		} else {
-			break
+		case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance,
+			api.PhaseReleaseCopyAppliance, api.PhaseWaitForCopyApplianceReleased,
+			api.PhaseRefreshCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+			pipeline = appendApplianceDeploymentStep(pipeline)
+		case api.PhaseTeardownCopyAppliance:
+			pipeline = appendApplianceTeardownStep(pipeline)
 		}
 	}
 
@@ -260,7 +263,16 @@ func (r *BaseMigrator) Itinerary(vm plan.VM) (itinerary *libitr.Itinerary) {
 	case r.Plan.Spec.Type == api.MigrationOnlyConversion:
 		itinerary = r.onlyConversionItinerary()
 	case r.Plan.IsWarm():
-		itinerary = r.warmItinerary()
+		useCopyAppliance, err := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
+		if err != nil {
+			r.Log.Error(err, "Failed to determine copy appliance usage.", "vm", vm.String())
+			useCopyAppliance = false
+		}
+		if useCopyAppliance {
+			itinerary = r.warmCopyApplianceItinerary()
+		} else {
+			itinerary = r.warmItinerary()
+		}
 	default:
 		itinerary = r.coldItinerary()
 	}
@@ -316,10 +328,65 @@ func (r *BaseMigrator) Step(status *plan.VMStatus) (step string) {
 		step = PreflightInspection
 	case api.PhaseWaitForFinalSnapshotRemoval:
 		step = WaitForSnapshotConsolidation
+	case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance,
+		api.PhaseReleaseCopyAppliance, api.PhaseWaitForCopyApplianceReleased,
+		api.PhaseRefreshCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+		step = ApplianceDeployment
+	case api.PhaseTeardownCopyAppliance:
+		step = ApplianceTeardown
 	default:
 		step = Unknown
 	}
 	return
+}
+
+func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
+	return &libitr.Itinerary{
+		Name: "WarmCopyAppliance",
+		Pipeline: libitr.Pipeline{
+			{Name: api.PhaseStarted},
+			{Name: api.PhasePreHook, All: HasPreHook},
+			{Name: api.PhaseCreateInitialSnapshot},
+			{Name: api.PhaseWaitForInitialSnapshot},
+			{Name: api.PhaseStoreInitialSnapshotDeltas, All: VSphere},
+			{Name: api.PhasePreflightInspection, All: RunInspection},
+			{Name: api.PhaseCreateDataVolumes},
+			{Name: api.PhaseCreateCopyAppliance},
+			{Name: api.PhaseWaitForCopyAppliance},
+			// Precopy loop start
+			{Name: api.PhaseCopyDisks},
+			{Name: api.PhaseCopyingPaused},
+			{Name: api.PhaseReleaseCopyAppliance},
+			{Name: api.PhaseWaitForCopyApplianceReleased},
+			{Name: api.PhaseRemovePreviousSnapshot, All: VSphere},
+			{Name: api.PhaseWaitForPreviousSnapshotRemoval, All: VSphere},
+			{Name: api.PhaseRefreshCopyAppliance},
+			{Name: api.PhaseWaitForRefreshedCopyAppliance},
+			{Name: api.PhaseCreateSnapshot},
+			{Name: api.PhaseWaitForSnapshot},
+			{Name: api.PhaseStoreSnapshotDeltas, All: VSphere},
+			{Name: api.PhaseAddCheckpoint},
+			// Precopy loop end
+			{Name: api.PhaseStorePowerState},
+			{Name: api.PhasePowerOffSource},
+			{Name: api.PhaseWaitForPowerOff},
+			{Name: api.PhaseRemovePenultimateSnapshot, All: VSphere},
+			{Name: api.PhaseWaitForPenultimateSnapshotRemoval, All: VSphere},
+			{Name: api.PhaseCreateFinalSnapshot},
+			{Name: api.PhaseWaitForFinalSnapshot},
+			{Name: api.PhaseAddFinalCheckpoint},
+			{Name: api.PhaseFinalize},
+			{Name: api.PhaseRemoveFinalSnapshot, All: VSphere},
+			{Name: api.PhaseCreateGuestConversionPod, All: RequiresConversion},
+			{Name: api.PhaseConvertGuest, All: RequiresConversion},
+			{Name: api.PhaseCreateVM},
+			{Name: api.PhaseWaitForGuestReboots, All: WindowsWaitForGuestReboot},
+			{Name: api.PhasePostHook, All: HasPostHook},
+			{Name: api.PhaseWaitForFinalSnapshotRemoval, All: VSphere | WaitForFinalSnapshotConsolidation},
+			{Name: api.PhaseTeardownCopyAppliance},
+			{Name: api.PhaseCompleted},
+		},
+	}
 }
 
 func (r *BaseMigrator) warmItinerary() *libitr.Itinerary {
@@ -364,6 +431,38 @@ func (r *BaseMigrator) warmItinerary() *libitr.Itinerary {
 	}
 }
 
+func appendApplianceDeploymentStep(pipeline []*plan.Step) []*plan.Step {
+	if len(pipeline) > 0 && pipeline[len(pipeline)-1].Name == ApplianceDeployment {
+		return pipeline
+	}
+	return append(
+		pipeline,
+		&plan.Step{
+			Task: plan.Task{
+				Name:        ApplianceDeployment,
+				Description: "Deploy copy appliance.",
+				Progress:    libitr.Progress{Total: 1},
+				Phase:       api.StepPending,
+			},
+		})
+}
+
+func appendApplianceTeardownStep(pipeline []*plan.Step) []*plan.Step {
+	if len(pipeline) > 0 && pipeline[len(pipeline)-1].Name == ApplianceTeardown {
+		return pipeline
+	}
+	return append(
+		pipeline,
+		&plan.Step{
+			Task: plan.Task{
+				Name:        ApplianceTeardown,
+				Description: "Tear down copy appliance.",
+				Progress:    libitr.Progress{Total: 1},
+				Phase:       api.StepPending,
+			},
+		})
+}
+
 func (r *BaseMigrator) coldItinerary() *libitr.Itinerary {
 	return &libitr.Itinerary{
 		Name: "",
@@ -373,8 +472,11 @@ func (r *BaseMigrator) coldItinerary() *libitr.Itinerary {
 			{Name: api.PhaseStorePowerState},
 			{Name: api.PhasePowerOffSource},
 			{Name: api.PhaseWaitForPowerOff},
+			{Name: api.PhaseCreateCopyAppliance, All: CopyAppliance},
+			{Name: api.PhaseWaitForCopyAppliance, All: CopyAppliance},
 			{Name: api.PhaseCreateDataVolumes},
 			{Name: api.PhaseCopyDisks, All: CDIDiskCopy},
+			{Name: api.PhaseTeardownCopyAppliance, All: CopyAppliance},
 			{Name: api.PhaseAllocateDisks, All: VirtV2vDiskCopy},
 			{Name: api.PhaseCreateGuestConversionPod, All: RequiresConversion},
 			{Name: api.PhaseConvertGuest, All: RequiresConversion},
@@ -502,6 +604,13 @@ func (r *BasePredicate) Evaluate(flag libitr.Flag) (allowed bool, err error) {
 		allowed = r.context.Source.Provider.RequiresConversion() && !r.context.Plan.Spec.SkipGuestConversion
 	case WaitForFinalSnapshotConsolidation:
 		allowed = settings.Settings.WaitForFinalSnapshotConsolidation
+	case CopyAppliance:
+		var useCopyAppliance bool
+		useCopyAppliance, err = settings.Settings.CopyAppliance.EnabledForPlan(r.context.Plan, r.vm.Ref)
+		if err != nil {
+			return
+		}
+		allowed = useCopyAppliance
 	}
 
 	return

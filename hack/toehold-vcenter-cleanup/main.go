@@ -19,6 +19,10 @@ func main() {
 		cleanup()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "cleanup-appliances" {
+		cleanupAppliances()
+		return
+	}
 	listDatastores()
 }
 
@@ -115,6 +119,45 @@ func cleanup() {
 
 	folder := "/Datacenter/vm"
 	for _, name := range []string{"nbdkit-toehold", "nbdkit-toehold-02"} {
+		if err := client.DestroyVMIfExists(ctx, folder, name); err != nil {
+			fmt.Fprintf(os.Stderr, "destroy %s: %v\n", name, err)
+			os.Exit(1)
+		}
+		fmt.Printf("destroyed %s if present\n", name)
+	}
+	cleanupAppliancesOn(ctx, client)
+}
+
+func cleanupAppliances() {
+	ctx := context.Background()
+	creds, url, err := loadCreds()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	conn := conversion.VsphereConnectionSecret(url, creds, os.Getenv(settings.VCenterThumbprint))
+	gc, err := conversion.GovmomiClientFromSecret(ctx, conn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	client, err := toeholdvsphere.NewClient(gc)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer client.Close(ctx)
+	cleanupAppliancesOn(ctx, client)
+}
+
+func cleanupAppliancesOn(ctx context.Context, client *toeholdvsphere.Client) {
+	folder := "/Datacenter/vm"
+	for _, name := range []string{
+		"e2e-copy-appliance",
+		"e2e-copy-appliance-2",
+		"e2e-appliance-v3",
+		"diskid-e2e-gwen",
+	} {
 		if err := client.DestroyVMIfExists(ctx, folder, name); err != nil {
 			fmt.Fprintf(os.Stderr, "destroy %s: %v\n", name, err)
 			os.Exit(1)

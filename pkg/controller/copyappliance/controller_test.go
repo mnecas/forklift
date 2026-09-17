@@ -55,9 +55,9 @@ func testAppliance() *api.CopyAppliance {
 			ResourcePool:   "/DC0/host/cluster/Resources",
 			Folder:         "/DC0/vm",
 			Template:       "/DC0/vm/appliance-template",
-			AttachDiskPaths: []string{
-				"[datastore13] vm-a/disk-0.vmdk",
-				"[datastore13] vm-b/disk-0.vmdk",
+			AttachDisks: []api.AttachedDisk{
+				{VMDKPath: "[datastore13] vm-a/disk-0.vmdk", Serial: "wwn-abc", DiskKey: 2000},
+				{VMDKPath: "[datastore13] vm-b/disk-0.vmdk", Serial: "wwn-def", DiskKey: 2001},
 			},
 		},
 	}
@@ -87,6 +87,9 @@ func TestApplianceRequeueFor(t *testing.T) {
 		{"an appliance waiting on its exports is polled slowly", PhaseWaitForExports, "long"},
 		{"an appliance waiting on a power off is polled", PhaseWaitForPowerOff, "slow"},
 		{"an appliance waiting on a disk detach is polled", PhaseWaitForDetachDisks, "slow"},
+		{"an appliance waiting on a release detach is polled", PhaseWaitForReleaseDisks, "slow"},
+		{"an appliance waiting on a disk attach is polled", PhaseWaitForAttachDisks, "slow"},
+		{"an appliance waiting on orchestrator restart is polled", PhaseRestartOrchestrator, "slow"},
 		{"an appliance waiting on a destroy is polled", PhaseWaitForDestroyVM, "slow"},
 		{"a failed deployment backs off", PhaseDeployFailed, "long"},
 		{"a failed teardown backs off", PhaseTeardownFailed, "long"},

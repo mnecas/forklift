@@ -3,6 +3,7 @@ package copyappliance
 import (
 	"context"
 	"errors"
+	stderr "errors"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -10,8 +11,6 @@ import (
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
-	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
-	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi/vim25/types"
 	"golang.org/x/crypto/ssh"
@@ -41,7 +40,12 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 
 	next, err := r.ExecutePhase(ctx)
 	if err != nil {
-		r.context.Log.Error(err, "Deploy phase failed.", "phase", r.context.Appliance.Status.Phase)
+		log := []interface{}{"phase", r.context.Appliance.Status.Phase}
+		var detail *liberr.Error
+		if stderr.As(err, &detail) && len(detail.Context()) > 0 {
+			log = append(log, "details", detail.Context())
+		}
+		r.context.Log.Error(err, "Deploy phase failed.", log...)
 	}
 	r.context.Appliance.Status.Phase = next
 	return
@@ -140,6 +144,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 		next = PhaseDeployCompleted
 		fallthrough
 	case PhaseDeployCompleted:
+		observeExportRequest(r.context.Appliance)
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
@@ -256,6 +261,10 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		_ = client.Close()
 	}()
 
+	if err = r.context.EnsurePodmanWrapper(client); err != nil {
+		return
+	}
+
 	// Asking first is what keeps a supervisor that cannot start from costing a
 	// whole reinstall every few seconds, and from having its exports torn down
 	// by the restart at the end of every one of them.
@@ -340,6 +349,10 @@ func (r *DeployRunner) LoadImage(ctx context.Context) (done bool, err error) {
 		_ = client.Close()
 	}()
 
+	if err = r.context.EnsurePodmanWrapper(client); err != nil {
+		return
+	}
+
 	// Asking the appliance is what makes the step idempotent. Without it a
 	// re-entry sends the whole image again.
 	loaded := r.context.Appliance.Status.LoadedImage
@@ -389,75 +402,11 @@ func (r *DeployRunner) loadImage(ctx context.Context, client *ssh.Client, spec s
 
 // WaitForExports reports whether the appliance has published the disk exports
 // the migration reads from, and records them.
-//
-// This is the step that actually proves the appliance works. Everything before
-// it establishes that the pieces are in place; this asks the appliance itself
-// what it is serving, over the same mutual TLS a migration will use, and holds
-// the deploy until there is one export for every disk attached to the VM.
 func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
-	if !ok {
-		err = liberr.New(
-			"the appliance reports no address to reach it on",
-			"appliance", r.context.Appliance.Name)
-		return
-	}
-	ca, certificate, key, err := r.context.ClientTLS()
-	if err != nil {
-		return
-	}
-	client, err := announce.NewClient(ca, certificate, key)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-
-	exports, err := client.Disks(ctx, r.context.announceAddr(address))
-	if err != nil {
-		if exportsNotReady(err) {
-			r.context.Log.Info("The appliance is not announcing its exports yet.",
-				"address", address)
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err, "address", address)
-		return
-	}
-
-	// One export per disk attached to the VM. The appliance's own root disk is
-	// mounted and so is never exported, which is what makes the two counts
-	// comparable.
-	attached := len(r.context.Appliance.Spec.AttachDiskPaths)
-	if len(exports) < attached {
-		r.context.Log.Info("The appliance has not exported every disk yet.",
-			"address", address,
-			"exported", len(exports),
-			"attached", attached)
-		return
-	}
-	r.context.Appliance.Status.Exports = applianceExports(exports)
-	r.context.Log.Info("The appliance is exporting its disks.",
-		"address", address, "exports", len(exports))
-	done = true
-	return
+	return r.context.WaitForExports(ctx)
 }
 
-// applianceExports converts what the appliance announced into what the status
-// records.
-func applianceExports(exports []runner.Export) (converted []api.ApplianceExport) {
-	converted = make([]api.ApplianceExport, 0, len(exports))
-	for _, export := range exports {
-		converted = append(converted, api.ApplianceExport{
-			WWID: export.WWID,
-			// The appliance publishes host ports, so this is always in range;
-			// the conversion is only because the API types a port the way
-			// Kubernetes does and the announce wire format does not.
-			Port:   int32(export.Port), // #nosec G115
-			Device: export.Device,
-		})
-	}
-	return
-}
+var errExportsIncomplete = errors.New("not all attached disks are exported yet")
 
 // exportsNotReady reports whether a failed query means the appliance is not
 // serving yet rather than that something is wrong with what it serves. The

@@ -11,6 +11,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	"github.com/kubev2v/forklift/pkg/settings"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/vmware/govmomi/vim25/types"
@@ -1938,6 +1939,59 @@ var _ = Describe("excludeDisks", func() {
 			Expect(pvcs[0].Annotations[planbase.AnnDiskSource]).To(Equal(keptDiskFile))
 			Expect(pvcs[0].Annotations[planbase.AnnNetAppShift]).To(Equal("true"))
 		})
+	})
+})
+
+var _ = Describe("Copy appliance DataVolumes", func() {
+	It("creates warm DataVolumes without a copy appliance reference", func() {
+		settings.Settings.Features.Toehold = true
+		settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+		settings.Settings.CopyAppliance.TLSSecret = "copy-appliance-tls"
+
+		const (
+			dsID       = "ds-1"
+			diskFile   = "[datastore1] test-vm/disk-0.vmdk"
+			storageClass = "test-sc"
+		)
+		vm := model.VM{
+			ConnectionState: string(types.VirtualMachineConnectionStateConnected),
+			UUID:            "vm-uuid",
+			VM1: model.VM1{
+				VM0: model.VM0{ID: "test-vm-id", Name: "test"},
+				Disks: []vsphere.Disk{{
+					File:      diskFile,
+					Datastore: vsphere.Ref{ID: dsID},
+					Capacity:  1 << 30,
+					Key:       2000,
+					Bus:       vsphere.SCSI,
+				}},
+			},
+		}
+		builder := createBuilder()
+		builder.Plan.Spec.Warm = true
+		builder.Source.Inventory = &mockInventory{
+			ds: model.Datastore{Resource: model.Resource{ID: dsID}},
+			vm: vm,
+		}
+		builder.Map.Storage = &v1beta1.StorageMap{
+			Spec: v1beta1.StorageMapSpec{
+				Map: []v1beta1.StoragePair{{
+					Source:      ref.Ref{ID: dsID},
+					Destination: v1beta1.DestinationStorage{StorageClass: storageClass},
+				}},
+			},
+		}
+
+		dvs, err := builder.DataVolumes(
+			ref.Ref{ID: vm.ID},
+			&core.Secret{ObjectMeta: meta.ObjectMeta{Name: "test-secret"}},
+			nil,
+			&cdi.DataVolume{},
+			nil,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dvs).To(HaveLen(1))
+		Expect(dvs[0].Annotations).NotTo(HaveKey(planbase.AnnVddkNbdConnection))
 	})
 })
 

@@ -105,7 +105,7 @@ func TestReconcileReplacesAStaleContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	want := Export{WWID: testDevice.WWID, Port: 10809, Device: testDevice.Path}
+	want := Export{WWID: testDevice.WWID, Port: 10809, Device: testDevice.Path, Size: testDevice.Size}
 	if len(exports) != 1 || exports[0] != want {
 		t.Errorf("exports = %+v, want %+v", exports, []Export{want})
 	}
@@ -122,7 +122,6 @@ func TestReconcileReplacesAStaleContainer(t *testing.T) {
 func testConfig() Config {
 	return Config{
 		Image:     "localhost/nbd-container",
-		CertsDir:  "/etc/pki/nbd",
 		BasePort:  10809,
 		PublishIP: "0.0.0.0",
 	}

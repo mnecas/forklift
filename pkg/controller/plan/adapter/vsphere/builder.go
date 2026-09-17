@@ -26,6 +26,7 @@ import (
 	basecontroller "github.com/kubev2v/forklift/pkg/controller/base"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
+	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	utils "github.com/kubev2v/forklift/pkg/controller/plan/util"
 	"github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
@@ -685,6 +686,22 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 	// Important: need to match order in mapDisks method
 	disks := vm.SortedDisksAsVmware()
 
+	var nbdConnections map[string]string
+	useCopyAppliance, caErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vmRef)
+	if caErr != nil {
+		err = caErr
+		return
+	}
+	if useCopyAppliance {
+		vmStatus, found := r.Plan.Status.Migration.FindVM(vmRef)
+		if found && vmStatus.CopyAppliance != nil {
+			nbdConnections, err = r.nbdConnectionsForVM(vmRef)
+			if err != nil {
+				return
+			}
+		}
+	}
+
 	for diskIndex, disk := range disks {
 		mapped, found := dsMap[disk.Datastore.ID]
 		if !found {
@@ -781,10 +798,35 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 		if !useV2vForTransfer && vddkConfigMap != nil {
 			dv.Annotations[planbase.AnnVddkExtraArgs] = vddkConfigMap.Name
 		}
+		if nbdConnections != nil && !useV2vForTransfer {
+			backing := baseVolume(disk.File, r.Plan.IsWarm())
+			uri, present := nbdConnections[backing]
+			if !present {
+				err = liberr.New("no NBD export for disk", "backing", backing)
+				return
+			}
+			dv.Annotations[planbase.AnnVddkNbdConnection] = uri
+		}
 		dvs = append(dvs, *dv)
 	}
 
 	return
+}
+
+func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) {
+	vmStatus, found := r.Plan.Status.Migration.FindVM(vmRef)
+	if !found || vmStatus.CopyAppliance == nil {
+		return nil, liberr.New("copy appliance reference is not set on the VM status")
+	}
+	appliance := &api.CopyAppliance{}
+	err := r.Client.Get(context.TODO(), client.ObjectKey{
+		Namespace: vmStatus.CopyAppliance.Namespace,
+		Name:      vmStatus.CopyAppliance.Name,
+	}, appliance)
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	return cacontroller.ExportNbdConnections(appliance)
 }
 
 func (r *Builder) applyHostsConfig(vmRef ref.Ref, url, thumbprint string) (string, string, error) {

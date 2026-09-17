@@ -82,7 +82,13 @@ func testInventory() *fakeInventory {
 				VM0:  resource("vm-101", "/DC0/vm/apps/web-01"),
 				Host: "host-1",
 				Disks: []vspheremodel.Disk{
-					{Datastore: vspheremodel.Ref{Kind: vspheremodel.DsKind, ID: "ds-1"}},
+					{
+						Key:      2000,
+						File:     "[datastore1] web-01/disk-0.vmdk",
+						Serial:   "6000C297-7d53-fad7-e8b4-5194193802f7",
+						Capacity: 16 << 30,
+						Datastore: vspheremodel.Ref{Kind: vspheremodel.DsKind, ID: "ds-1"},
+					},
 				},
 			},
 			// The source VM's own NIC. Nothing reads it; it is here so that
@@ -316,7 +322,6 @@ func withSettings(t *testing.T, applied settings.CopyAppliance) {
 
 func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
-		SSHKeySecret:   "copy-appliance-ssh-key",
 		SSHUser:        "root",
 		ContainerImage: "copy-appliance:latest",
 		TLSSecret:      "copy-appliance-tls",
@@ -362,38 +367,27 @@ func TestBuild(t *testing.T) {
 	if spec.ContainerImage != testSettings().ContainerImage {
 		t.Errorf("ContainerImage = %q, want it from settings", spec.ContainerImage)
 	}
-	// The key lives with the provider, which is where the appliance's other
-	// credentials already are.
-	if spec.SSHKey.Namespace != "forklift" || spec.SSHKey.Name != testSettings().SSHKeySecret {
-		t.Errorf("SSHKey = %v, want the settings secret in the provider namespace", spec.SSHKey)
+	// The toehold template build injects the matching public key; the private
+	// half lives with the provider.
+	if spec.SSHKey.Namespace != "forklift" || spec.SSHKey.Name != "toehold-ssh-keys-vcenter-private" {
+		t.Errorf("SSHKey = %v, want the toehold private secret in the provider namespace", spec.SSHKey)
 	}
 	// As are the certificates: the appliance gets the server half, the
 	// controller keeps the client half.
 	if spec.TLSSecret.Namespace != "forklift" || spec.TLSSecret.Name != testSettings().TLSSecret {
 		t.Errorf("TLSSecret = %v, want the settings secret in the provider namespace", spec.TLSSecret)
 	}
-	if len(spec.AttachDiskPaths) != 0 {
-		t.Errorf("AttachDiskPaths = %v, want none", spec.AttachDiskPaths)
+	if len(spec.AttachDisks) != 1 {
+		t.Fatalf("AttachDisks = %+v, want one disk from inventory", spec.AttachDisks)
+	}
+	if spec.AttachDisks[0].VMDKPath != "[datastore1] web-01/disk-0.vmdk" {
+		t.Errorf("AttachDisks[0].VMDKPath = %q", spec.AttachDisks[0].VMDKPath)
+	}
+	if spec.AttachDisks[0].Serial != "6000C297-7d53-fad7-e8b4-5194193802f7" {
+		t.Errorf("AttachDisks[0].Serial = %q", spec.AttachDisks[0].Serial)
 	}
 	if spec.Folder != "/DC0/vm/apps" || spec.Datastore != "/DC0/datastore/datastore1" {
 		t.Errorf("placement = (%q, %q), want the source VM's", spec.Folder, spec.Datastore)
-	}
-}
-
-// Without a key the appliance is cloned and then never configured, and the
-// deploy parks short of Ready with nothing saying why.
-func TestBuildRejectsAnUnconfiguredSSHKeySecret(t *testing.T) {
-	applied := testSettings()
-	applied.SSHKeySecret = ""
-	withSettings(t, applied)
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
-
-	_, err := build(inventory, testProvider(), testRef)
-	if err == nil {
-		t.Fatal("build succeeded without an SSH key secret")
-	}
-	if !strings.Contains(err.Error(), settings.CopyApplianceSSHKeySecret) {
-		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceSSHKeySecret)
 	}
 }
 

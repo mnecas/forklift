@@ -9,15 +9,25 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
 
+type diskHashInput struct {
+	ContainerImage string `json:"containerImage"`
+	SSHPublicKey   string `json:"sshPublicKey,omitempty"`
+}
+
 type configHashInput struct {
 	Network   string `json:"network"`
 	CPU       int32  `json:"cpu"`
 	MemoryMiB int32  `json:"memoryMiB"`
 }
 
-// DiskHash fingerprints the base containerdisk image that produces the disk artifact.
-func DiskHash(spec api.ToeholdTemplateSpec) string {
-	return hash(spec.BaseDisk.ContainerImage)
+// DiskHash fingerprints the base containerdisk image and guest customization
+// that produces the disk artifact. sshPublicKey is the authorized_keys entry
+// virt-customize installs; an empty value means no key is injected.
+func DiskHash(spec api.ToeholdTemplateSpec, sshPublicKey string) string {
+	return hash(diskHashInput{
+		ContainerImage: spec.BaseDisk.ContainerImage,
+		SSHPublicKey:   sshPublicKey,
+	})
 }
 
 // ConfigHash fingerprints OVF hardware and network configuration.

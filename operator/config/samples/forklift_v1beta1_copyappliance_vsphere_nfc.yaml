@@ -1,0 +1,25 @@
+---
+# Lab CopyAppliance for vsphere-nfc (T1/T2). Adjust attachDiskPaths if your
+# source VMDK path differs.
+apiVersion: forklift.konveyor.io/v1beta1
+kind: CopyAppliance
+metadata:
+  name: test-copy-appliance
+  namespace: openshift-mtv
+spec:
+  provider:
+    name: vsphere-nfc
+    namespace: openshift-mtv
+  sshKey:
+    name: toehold-ssh-keys-vsphere-nfc-private
+    namespace: openshift-mtv
+  tlsSecret:
+    name: copy-appliance-tls
+    namespace: openshift-mtv
+  containerImage: nbd-container:toehold-dev-amd64
+  template: /Datacenter/vm/nbdkit-toehold
+  datastore: mtv-nfs-rhos-v7
+  folder: /Datacenter/vm
+  resourcePool: /Datacenter/host/10.6.46.28/Resources
+  attachDiskPaths:
+    - "[datastore2] Gwen-test-january/Gwen-test-january.vmdk"

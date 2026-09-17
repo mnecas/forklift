@@ -237,6 +237,26 @@ func (c *Client) TemplateHashesFromVM(ctx context.Context, vm *object.VirtualMac
 	return maps[DiskHashAnnotation], maps[ConfigHashAnnotation], nil
 }
 
+// SetDiskEnableUUID enables disk.EnableUUID so guests can read stable SCSI
+// identifiers that match VMware backing.Uuid values.
+func (c *Client) SetDiskEnableUUID(ctx context.Context, vm *object.VirtualMachine) error {
+	log.V(1).Info("Enabling disk.EnableUUID", "moref", vm.Reference().Value)
+	spec := types.VirtualMachineConfigSpec{
+		ExtraConfig: []types.BaseOptionValue{
+			&types.OptionValue{Key: "disk.EnableUUID", Value: "TRUE"},
+		},
+	}
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("enable disk.EnableUUID reconfigure %s: %w", vm.Reference().Value, err)
+	}
+	if err = task.Wait(ctx); err != nil {
+		return fmt.Errorf("enable disk.EnableUUID task %s: %w", vm.Reference().Value, err)
+	}
+	log.V(1).Info("Enabled disk.EnableUUID", "moref", vm.Reference().Value)
+	return nil
+}
+
 // SetEFIBoot configures UEFI firmware on a VM.
 func (c *Client) SetEFIBoot(ctx context.Context, vm *object.VirtualMachine) error {
 	log.V(1).Info("Setting EFI boot", "moref", vm.Reference().Value)

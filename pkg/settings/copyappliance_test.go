@@ -12,11 +12,6 @@ func TestCopyApplianceDefaults(t *testing.T) {
 	if applied.SSHUser != DefaultCopyApplianceSSHUser {
 		t.Errorf("SSHUser = %q, want %q", applied.SSHUser, DefaultCopyApplianceSSHUser)
 	}
-	// There is no default: the secret exists only in the deployment's own
-	// cluster, and the builder refuses to run until it is named.
-	if applied.SSHKeySecret != "" {
-		t.Errorf("SSHKeySecret = %q, want it unset", applied.SSHKeySecret)
-	}
 	// Nor here: the image stream exists only in the deployment's own cluster,
 	// and the builder refuses to run until it is named.
 	if applied.ContainerImage != "" {
@@ -30,17 +25,14 @@ func TestCopyApplianceDefaults(t *testing.T) {
 }
 
 func TestCopyApplianceFromEnvironment(t *testing.T) {
-	t.Setenv(CopyApplianceSSHKeySecret, "copy-appliance-ssh-key")
 	t.Setenv(CopyApplianceSSHUser, "appliance")
 	t.Setenv(CopyApplianceContainerImage, "copy-appliance:latest")
 	t.Setenv(CopyApplianceTLSSecret, "copy-appliance-tls")
+	t.Setenv(CopyApplianceResourcePool, "/Datacenter/host/cluster/Resources")
 
 	applied := CopyAppliance{}
 	if err := applied.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if applied.SSHKeySecret != "copy-appliance-ssh-key" {
-		t.Errorf("SSHKeySecret = %q, want the configured secret", applied.SSHKeySecret)
 	}
 	if applied.SSHUser != "appliance" {
 		t.Errorf("SSHUser = %q, want the configured user", applied.SSHUser)
@@ -50,5 +42,8 @@ func TestCopyApplianceFromEnvironment(t *testing.T) {
 	}
 	if applied.TLSSecret != "copy-appliance-tls" {
 		t.Errorf("TLSSecret = %q, want the configured secret", applied.TLSSecret)
+	}
+	if applied.ResourcePool != "/Datacenter/host/cluster/Resources" {
+		t.Errorf("ResourcePool = %q, want the configured pool", applied.ResourcePool)
 	}
 }

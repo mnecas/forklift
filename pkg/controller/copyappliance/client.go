@@ -9,6 +9,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/fault"
 	"github.com/vmware/govmomi/find"
@@ -127,7 +128,17 @@ func (r *ApplianceContext) CheckInstance() (err error) {
 // will do it. If the name is already taken in the target folder, vCenter fails
 // the task with DuplicateName.
 func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err error) {
-	pool, err := r.finder.ResourcePool(ctx, r.Appliance.Spec.ResourcePool)
+	poolPath := r.Appliance.Spec.ResourcePool
+	if poolPath == "" {
+		poolPath = Settings.CopyAppliance.ResourcePool
+	}
+	if poolPath == "" {
+		err = liberr.New(
+			"resource pool is not configured; set copyAppliance.spec.resourcePool or " +
+				settings.CopyApplianceResourcePool)
+		return
+	}
+	pool, err := r.finder.ResourcePool(ctx, poolPath)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
@@ -340,6 +351,79 @@ func (r *ApplianceContext) PowerOff(ctx context.Context, vm *object.VirtualMachi
 	return
 }
 
+// AttachDisks hot-attaches every spec disk that is not already on the appliance
+// VM and returns the reconfigure task that will do it.
+func (r *ApplianceContext) AttachDisks(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		if fault.Is(err, &types.ManagedObjectNotFound{}) {
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "vm", vm.Reference().Value)
+		return
+	}
+	changes, err := r.buildAttachDiskChanges(ctx, devices)
+	if err != nil {
+		return
+	}
+	if len(changes) == 0 {
+		return
+	}
+	task, err = vm.Reconfigure(ctx, types.VirtualMachineConfigSpec{DeviceChange: changes})
+	if err != nil {
+		task = nil
+		if fault.Is(err, &types.ManagedObjectNotFound{}) {
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "vm", vm.Reference().Value)
+		return
+	}
+	return
+}
+
+// DetachAttachedDisks removes only the source VMDKs listed in the spec from the
+// appliance VM. The template root disk is left in place.
+func (r *ApplianceContext) DetachAttachedDisks(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
+	attachPaths := attachedDiskPathSet(r.Appliance.Spec)
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		if fault.Is(err, &types.ManagedObjectNotFound{}) {
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "vm", vm.Reference().Value)
+		return
+	}
+	var detach []types.BaseVirtualDeviceConfigSpec
+	for _, device := range devices.SelectByType((*types.VirtualDisk)(nil)) {
+		path := diskBackingFile(device)
+		if path == "" || !attachPaths[path] {
+			continue
+		}
+		detach = append(detach, &types.VirtualDeviceConfigSpec{
+			Operation:     types.VirtualDeviceConfigSpecOperationRemove,
+			FileOperation: "",
+			Device:        device,
+		})
+	}
+	if len(detach) == 0 {
+		return
+	}
+	task, err = vm.Reconfigure(ctx, types.VirtualMachineConfigSpec{DeviceChange: detach})
+	if err != nil {
+		task = nil
+		if fault.Is(err, &types.ManagedObjectNotFound{}) {
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "vm", vm.Reference().Value)
+		return
+	}
+	return
+}
+
 // DetachDisks removes every virtual disk from the appliance VM and returns the
 // task that will do it. The backing vmdk files are left where they are: they
 // belong to other VMs. A VM with no disks left, or that no longer exists, has
@@ -395,17 +479,26 @@ func (r *ApplianceContext) DestroyVM(ctx context.Context, vm *object.VirtualMach
 }
 
 func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.VirtualMachine) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
-	datastore, err := r.finder.Datastore(ctx, r.Appliance.Spec.Datastore)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
 	devices, err := template.Device(ctx)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
 	}
-	for _, path := range r.Appliance.Spec.AttachDiskPaths {
+	return r.buildAttachDiskChanges(ctx, devices)
+}
+
+func (r *ApplianceContext) buildAttachDiskChanges(ctx context.Context, devices object.VirtualDeviceList) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
+	datastore, err := r.finder.Datastore(ctx, r.Appliance.Spec.Datastore)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	present := diskPathsOnVM(devices)
+	for _, attached := range r.Appliance.Spec.AttachedDisks() {
+		path := attached.VMDKPath
+		if present[path] {
+			continue
+		}
 		controller := devices.PickController((*types.VirtualSCSIController)(nil))
 		if controller == nil {
 			err = liberr.New("no free SCSI slots; add another controller", "disk", path)
@@ -431,6 +524,37 @@ func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.Vir
 		changes = append(changes, change)
 	}
 	return
+}
+
+func attachedDiskPathSet(spec api.CopyApplianceSpec) map[string]bool {
+	paths := make(map[string]bool, len(spec.AttachedDisks()))
+	for _, disk := range spec.AttachedDisks() {
+		paths[disk.VMDKPath] = true
+	}
+	return paths
+}
+
+func diskPathsOnVM(devices object.VirtualDeviceList) map[string]bool {
+	paths := make(map[string]bool)
+	for _, device := range devices.SelectByType((*types.VirtualDisk)(nil)) {
+		path := diskBackingFile(device)
+		if path != "" {
+			paths[path] = true
+		}
+	}
+	return paths
+}
+
+func diskBackingFile(device types.BaseVirtualDevice) string {
+	disk, ok := device.(*types.VirtualDisk)
+	if !ok {
+		return ""
+	}
+	backing, ok := disk.Backing.(*types.VirtualDiskFlatVer2BackingInfo)
+	if !ok {
+		return ""
+	}
+	return backing.FileName
 }
 
 // applianceAnnotation marks the appliance VM in the vSphere inventory so an

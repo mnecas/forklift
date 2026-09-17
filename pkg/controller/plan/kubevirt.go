@@ -27,6 +27,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	convbuilder "github.com/kubev2v/forklift/pkg/controller/conversion"
 	convctx "github.com/kubev2v/forklift/pkg/controller/conversion/context"
+	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	hvutil "github.com/kubev2v/forklift/pkg/controller/hyperv"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
@@ -1579,6 +1580,60 @@ func (r *KubeVirt) DeleteDataVolumes(vm *plan.VMStatus) (err error) {
 		}
 	}
 	return
+}
+
+// EnsureNbdConnections patches migration DataVolumes with copy-appliance NBD URIs.
+func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
+	useCopyAppliance, err := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
+	if err != nil {
+		return err
+	}
+	if !useCopyAppliance {
+		return nil
+	}
+	if vm.CopyAppliance == nil {
+		return liberr.New("copy appliance is not set on the VM status")
+	}
+
+	appliance := &api.CopyAppliance{}
+	err = r.Get(context.TODO(), client.ObjectKey{
+		Namespace: vm.CopyAppliance.Namespace,
+		Name:      vm.CopyAppliance.Name,
+	}, appliance)
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+
+	connections, err := cacontroller.ExportNbdConnections(appliance)
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+
+	dvs, err := r.getDVs(vm)
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	for _, edv := range dvs {
+		dv := edv.DataVolume
+		backing := dv.Annotations[planbase.AnnDiskSource]
+		uri, present := connections[backing]
+		if !present {
+			return liberr.New("no NBD export for disk", "backing", backing)
+		}
+		if dv.Annotations[planbase.AnnVddkNbdConnection] == uri {
+			continue
+		}
+		patch := dv.DeepCopy()
+		if patch.Annotations == nil {
+			patch.Annotations = map[string]string{}
+		}
+		patch.Annotations[planbase.AnnVddkNbdConnection] = uri
+		err = r.Destination.Update(context.TODO(), patch)
+		if err != nil {
+			return liberr.Wrap(err)
+		}
+	}
+	return nil
 }
 
 // Delete the importer pods for a PersistentVolumeClaim.

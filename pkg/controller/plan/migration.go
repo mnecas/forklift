@@ -502,6 +502,10 @@ func (r *Migration) cleanup(vm *plan.VMStatus, failOnErr func(error) bool, force
 		}
 	}
 
+	r.Log.Info("Deleting copy appliance.", "vm", vm.String())
+	if err := r.deleteCopyAppliance(vm); failOnErr(err) {
+		return err
+	}
 	r.Log.Info("Deleting importer pods.", "vm", vm.String())
 	if err := r.deleteImporterPods(vm); failOnErr(err) {
 		return err
@@ -1011,6 +1015,117 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 			} else {
 				vm.Phase = api.PhaseCompleted
 			}
+		case api.PhaseCreateCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			err = r.ensureCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseWaitForCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			var applianceReady bool
+			applianceReady, err = r.waitForCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !applianceReady {
+				return
+			}
+			err = r.kubevirt.EnsureNbdConnections(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			step.MarkCompleted()
+			r.NextPhase(vm)
+		case api.PhaseReleaseCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			err = r.releaseCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseWaitForCopyApplianceReleased:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			var released bool
+			released, err = r.waitForCopyApplianceReleased(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !released {
+				return
+			}
+			step.MarkCompleted()
+			r.NextPhase(vm)
+		case api.PhaseRefreshCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			err = r.refreshCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseTeardownCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			var teardownDone bool
+			teardownDone, err = r.teardownCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !teardownDone {
+				return
+			}
+			step.MarkCompleted()
+			r.NextPhase(vm)
 		case api.PhaseCreateDataVolumes:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
@@ -1519,6 +1634,22 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				break
 			}
 			vm.Warm.Precopies[n-1].WithDeltas(deltas)
+			if vm.Phase == api.PhaseStoreSnapshotDeltas {
+				useCopyAppliance, cpErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
+				if cpErr != nil {
+					step.AddError(cpErr.Error())
+					break
+				}
+				if useCopyAppliance {
+					err = r.kubevirt.EnsureNbdConnections(vm)
+					if err != nil {
+						step.AddError(err.Error())
+						break
+					}
+					vm.Phase = api.PhaseCopyDisks
+					break
+				}
+			}
 			r.NextPhase(vm)
 		case api.PhaseAddCheckpoint, api.PhaseAddFinalCheckpoint:
 			step, found := vm.FindStep(r.migrator.Step(vm))
@@ -1536,7 +1667,16 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 
 			switch vm.Phase {
 			case api.PhaseAddCheckpoint:
-				vm.Phase = api.PhaseCopyDisks
+				useCopyAppliance, cpErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
+				if cpErr != nil {
+					step.AddError(cpErr.Error())
+					break
+				}
+				if useCopyAppliance {
+					vm.Phase = api.PhaseRemovePreviousSnapshot
+				} else {
+					vm.Phase = api.PhaseCopyDisks
+				}
 			case api.PhaseAddFinalCheckpoint:
 				vm.Phase = api.PhaseFinalize
 			}

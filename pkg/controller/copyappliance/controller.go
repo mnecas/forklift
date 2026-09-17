@@ -91,7 +91,10 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	}()
 
 	deleting := !appliance.DeletionTimestamp.IsZero()
-	if !deleting && appliance.Status.Phase == PhaseDeployCompleted {
+	if !deleting &&
+		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) &&
+		!NeedsExportConvergence(appliance) &&
+		!IsExportPhase(appliance.Status.Phase) {
 		// Nothing left to do. Connecting would cost a vCenter login per watch
 		// event for a pass that cannot change anything.
 		return
@@ -102,6 +105,12 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	switch {
 	case deleting:
 		err = r.Teardown(ctx, appliance)
+	case !deleting && RoutesToExportRunner(appliance):
+		err = r.AddFinalizer(ctx, appliance)
+		if err != nil {
+			return
+		}
+		err = r.Export(ctx, appliance)
 	default:
 		err = r.AddFinalizer(ctx, appliance)
 		if err != nil {
@@ -149,7 +158,11 @@ func requeueFor(phase string) (reQ time.Duration) {
 	case PhaseWaitForClone,
 		PhaseWaitForPowerOff,
 		PhaseWaitForDetachDisks,
+		PhaseWaitForReleaseDisks,
+		PhaseWaitForAttachDisks,
 		PhaseWaitForDestroyVM:
+		reQ = base.SlowReQ
+	case PhaseRestartOrchestrator:
 		reQ = base.SlowReQ
 	case PhaseWaitForNetwork:
 		// Slower than the task waits above. Those are waiting on vSphere,
@@ -353,6 +366,35 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 		return
 	}
 	r.setConverging(appliance, "The copy appliance is being deployed.")
+	return
+}
+
+// Export drives disk release or re-export on a deployed appliance.
+func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+	applianceContext, err := r.ApplianceContext(ctx, appliance)
+	if err != nil {
+		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		err = nil
+		return
+	}
+	defer applianceContext.Close()
+
+	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
+
+	runner := ExportRunner{context: applianceContext}
+	// Begin only from a stable phase. WaitForExports is shared with deploy and
+	// is not an export phase, so calling Begin there would restart attach every pass.
+	if NeedsExportConvergence(appliance) &&
+		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) {
+		runner.Begin()
+	}
+	err = runner.Run(ctx)
+	if err != nil {
+		r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
+		err = nil
+		return
+	}
+	r.setConverging(appliance, "The copy appliance export is being updated.")
 	return
 }
 

@@ -7,6 +7,7 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
 	core "k8s.io/api/core/v1"
@@ -26,6 +27,10 @@ const (
 
 func credsSecretName(toehold *api.ToeholdTemplate) string {
 	return toehold.Name + credsSecretSuffix
+}
+
+func toeholdSSHPublicSecretName(toehold *api.ToeholdTemplate) (string, error) {
+	return util.GenerateToeholdSSHPublicSecretName(toehold.Spec.Provider.Name)
 }
 
 func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) error {
@@ -62,7 +67,7 @@ func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.Toeho
 	return nil
 }
 
-func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdTemplate, pctx *providerContext) error {
+func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdTemplate, pctx *providerContext, sshPublicKey string) error {
 	name := credsSecretName(toehold)
 	ns := toehold.TargetNS()
 	data := map[string]string{
@@ -71,7 +76,7 @@ func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdT
 		settings.VCenterPassword:            string(pctx.Secret.Data["password"]),
 		settings.VCenterInsecure:            fmt.Sprint(base.GetInsecureSkipVerifyFlag(pctx.Secret)),
 		settings.VCenterThumbprint:          pctx.Provider.Status.Fingerprint,
-		settings.ToeholdTemplateContentHash: version.DiskHash(toehold.Spec),
+		settings.ToeholdTemplateContentHash: version.DiskHash(toehold.Spec, sshPublicKey),
 		settings.ToeholdBaseContainerImage:  toehold.Spec.BaseDisk.ContainerImage,
 	}
 	secret := &core.Secret{}
@@ -125,7 +130,18 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		}
 	}
 
-	pod := r.buildPod(toehold, credsSecretName(toehold))
+	sshPublicSecretName, err := toeholdSSHPublicSecretName(toehold)
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	if err = r.ensureSSHPublicSecret(ctx, toehold); err != nil {
+		return nil, err
+	}
+	sshPublicKey, err := r.loadToeholdSSHPublicKey(ctx, toehold)
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	pod := r.buildPod(toehold, credsSecretName(toehold), sshPublicSecretName, sshPublicKey)
 	if err := r.setOwner(toehold, pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
@@ -152,7 +168,78 @@ func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 	return nil
 }
 
-func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName string) *core.Pod {
+// ensureSSHPublicSecret copies the provider's toehold SSH public key into the
+// build namespace. Pods can only mount secrets from their own namespace.
+func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate) error {
+	name, err := toeholdSSHPublicSecretName(toehold)
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	source := &core.Secret{}
+	err = r.Get(ctx, client.ObjectKey{
+		Namespace: toehold.Spec.Provider.Namespace,
+		Name:      name,
+	}, source)
+	if err != nil {
+		return liberr.Wrap(err, "secret", name)
+	}
+	publicKey, ok := source.Data["public-key"]
+	if !ok || len(publicKey) == 0 {
+		return liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
+	}
+
+	targetNS := toehold.TargetNS()
+	target := &core.Secret{}
+	err = r.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: name}, target)
+	if k8serr.IsNotFound(err) {
+		target = &core.Secret{
+			ObjectMeta: meta.ObjectMeta{
+				Name:      name,
+				Namespace: targetNS,
+			},
+			Type: core.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"public-key": publicKey,
+			},
+		}
+		if err = r.setOwner(toehold, target); err != nil {
+			return liberr.Wrap(err)
+		}
+		return liberr.Wrap(r.Create(ctx, target))
+	}
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	target.Data = map[string][]byte{
+		"public-key": publicKey,
+	}
+	if err = r.setOwner(toehold, target); err != nil {
+		return liberr.Wrap(err)
+	}
+	return liberr.Wrap(r.Update(ctx, target))
+}
+
+func (r Reconciler) loadToeholdSSHPublicKey(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
+	secretName, err := toeholdSSHPublicSecretName(toehold)
+	if err != nil {
+		return "", liberr.Wrap(err)
+	}
+	secret := &core.Secret{}
+	err = r.Get(ctx, client.ObjectKey{
+		Namespace: toehold.Spec.Provider.Namespace,
+		Name:      secretName,
+	}, secret)
+	if err != nil {
+		return "", liberr.Wrap(err, "secret", secretName)
+	}
+	publicKey, ok := secret.Data["public-key"]
+	if !ok || len(publicKey) == 0 {
+		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", secretName)
+	}
+	return string(publicKey), nil
+}
+
+func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName, sshPublicSecretName, sshPublicKey string) *core.Pod {
 	builderImage := Settings.Toehold.BuilderImage
 	if toehold.Spec.Images.ToeholdBuilder != "" {
 		builderImage = toehold.Spec.Images.ToeholdBuilder
@@ -176,13 +263,17 @@ func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName string) *c
 		{Name: settings.ToeholdNetwork, Value: toehold.Spec.Network},
 		{Name: settings.ToeholdBuildPodCPUs, Value: fmt.Sprint(cpuCount(toehold))},
 		{Name: settings.ToeholdBuildPodMemoryMiB, Value: fmt.Sprint(memoryMiB(toehold))},
-		{Name: settings.ToeholdTemplateContentHash, Value: version.DiskHash(toehold.Spec)},
+		{Name: settings.ToeholdTemplateContentHash, Value: version.DiskHash(toehold.Spec, sshPublicKey)},
 		{Name: settings.ToeholdTemplateConfigHash, Value: version.ConfigHash(toehold.Spec)},
 		{Name: settings.ToeholdBaseContainerImage, Value: toehold.Spec.BaseDisk.ContainerImage},
 	}
 	if password := toehold.Spec.Customize.RootPassword; password != "" {
 		buildEnv = append(buildEnv, core.EnvVar{Name: "TOEHOLD_ROOT_PASSWORD", Value: password})
 	}
+	buildEnv = append(buildEnv, core.EnvVar{
+		Name:  "TOEHOLD_SSH_PUBLIC_KEY_FILE",
+		Value: "/etc/toehold/ssh/public-key",
+	})
 
 	buildResources := core.ResourceRequirements{
 		Requests: core.ResourceList{
@@ -217,6 +308,17 @@ func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName string) *c
 				Name:         "work",
 				VolumeSource: core.VolumeSource{EmptyDir: &workDir},
 			},
+			{
+				Name: "ssh-public-key",
+				VolumeSource: core.VolumeSource{
+					Secret: &core.SecretVolumeSource{
+						SecretName: sshPublicSecretName,
+						Items: []core.KeyToPath{
+							{Key: "public-key", Path: "public-key"},
+						},
+					},
+				},
+			},
 		},
 		Containers: []core.Container{
 			{
@@ -231,6 +333,7 @@ func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName string) *c
 				VolumeMounts: []core.VolumeMount{
 					{Name: "base-disk", MountPath: "/disk", ReadOnly: true},
 					{Name: "work", MountPath: "/work"},
+					{Name: "ssh-public-key", MountPath: "/etc/toehold/ssh", ReadOnly: true},
 				},
 				Resources: buildResources,
 			},

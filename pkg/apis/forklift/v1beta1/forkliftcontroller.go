@@ -224,6 +224,31 @@ type ForkliftControllerSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	ToeholdNetwork string `json:"toehold_network,omitempty"`
 
+	// Copy appliance defaults
+
+	// ImageStreamTag naming the nbd-container image loaded onto copy appliances
+	// (e.g. "copy-appliance:latest"). Resolved in the controller namespace.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	CopyApplianceContainerImage string `json:"copy_appliance_container_image,omitempty"`
+	// Name of the secret holding mutual-TLS material for copy appliance exports.
+	// The secret must exist in the controller namespace.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	CopyApplianceTLSSecret string `json:"copy_appliance_tls_secret,omitempty"`
+	// SSH user the controller logs in to copy appliances as. Defaults to root.
+	// +optional
+	// +kubebuilder:default="root"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	CopyApplianceSSHUser string `json:"copy_appliance_ssh_user,omitempty"`
+	// Default vCenter resource pool for copy appliance VM clones. Inventory path
+	// (e.g. "/Datacenter/host/my-cluster/Resources"). Used when a CopyAppliance
+	// spec omits resourcePool. The template is not placed in a pool; only the
+	// cloned appliance VM is.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
+	CopyApplianceResourcePool string `json:"copy_appliance_resource_pool,omitempty"`
+
 	// Controller Resource Configuration
 
 	// Controller CPU limit.

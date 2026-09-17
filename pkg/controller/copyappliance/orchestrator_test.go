@@ -140,6 +140,23 @@ func TestInstallOrchestrator(t *testing.T) {
 	})
 }
 
+func TestRestartOrchestrator(t *testing.T) {
+	ac, server, client := applianceLogin(t)
+	err := ac.RestartOrchestrator(client)
+	if err != nil {
+		t.Fatalf("RestartOrchestrator: %v", err)
+	}
+	ran := server.Ran()
+	for _, want := range []string{
+		"systemctl reset-failed " + orchestratorUnit,
+		"systemctl restart " + orchestratorUnit,
+	} {
+		if !slices.Contains(ran, want) {
+			t.Errorf("%q was not run; ran %v", want, ran)
+		}
+	}
+}
+
 func TestOrchestratorInstalled(t *testing.T) {
 	t.Run("an appliance that matches is already installed", func(t *testing.T) {
 		ac, _, client := applianceLogin(t)

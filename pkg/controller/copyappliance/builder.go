@@ -2,13 +2,15 @@ package copyappliance
 
 import (
 	"fmt"
+	"path"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	vspheremodel "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
-	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	liberr 	"github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,14 +58,9 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			provider.Name, provider.Type()))
 		return
 	}
-	if Settings.CopyAppliance.SSHKeySecret == "" {
-		// No default: it names an object that only exists in this deployment.
-		// Without it the appliance is cloned and then never configured. In the
-		// message rather than a key/value pair, because liberr renders only the
-		// message and this is the one thing the operator has to go fix.
-		err = liberr.New(
-			"the copy appliance SSH key secret is not configured; set " +
-				settings.CopyApplianceSSHKeySecret)
+	sshKeySecret, err := util.GenerateToeholdSSHPrivateSecretName(provider.Name)
+	if err != nil {
+		err = liberr.Wrap(err)
 		return
 	}
 	if Settings.CopyAppliance.ContainerImage == "" {
@@ -92,7 +89,7 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		},
 		SSHKey: core.ObjectReference{
 			Namespace: provider.Namespace,
-			Name:      Settings.CopyAppliance.SSHKeySecret,
+			Name:      sshKeySecret,
 		},
 		TLSSecret: core.ObjectReference{
 			Namespace: provider.Namespace,
@@ -121,6 +118,16 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		Spec: spec,
 	}
 	return
+}
+
+// TemplateInventoryPath returns the vSphere inventory path of the toehold template.
+func TemplateInventoryPath(toehold *api.ToeholdTemplate) string {
+	return path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
+}
+
+// WithTemplate sets the clone template inventory path on a built appliance.
+func WithTemplate(appliance *api.CopyAppliance, template string) {
+	appliance.Spec.Template = template
 }
 
 // placement fills in the placement fields of spec from where the source VM
@@ -161,15 +168,38 @@ func placement(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec)
 	if err != nil {
 		return
 	}
-	spec.ResourcePool = cluster.Path + "/" + rootResourcePool
+	if Settings.CopyAppliance.ResourcePool != "" {
+		spec.ResourcePool = Settings.CopyAppliance.ResourcePool
+	} else {
+		spec.ResourcePool = cluster.Path + "/" + rootResourcePool
+	}
 
 	datastore, err := vmDatastore(inventory, vm)
 	if err != nil {
 		return
 	}
 	spec.Datastore = datastore.Path
+	spec.AttachDisks = attachedDisks(vm)
 
 	return
+}
+
+// attachedDisks builds the VMDK attach list from VMware inventory. Shared and
+// RDM disks are skipped because the copy appliance path targets flat VMDKs.
+func attachedDisks(vm *model.VM) []api.AttachedDisk {
+	disks := make([]api.AttachedDisk, 0, len(vm.Disks))
+	for _, disk := range vm.Disks {
+		if disk.Shared || disk.RDM || disk.File == "" {
+			continue
+		}
+		disks = append(disks, api.AttachedDisk{
+			VMDKPath: disk.File,
+			DiskKey:  disk.Key,
+			Serial:   disk.Serial,
+			Capacity: disk.Capacity,
+		})
+	}
+	return disks
 }
 
 // vmFolder returns the inventory folder the VM lives in.
