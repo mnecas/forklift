@@ -154,6 +154,10 @@ type Reconciler struct {
 	catalog   *Catalog
 	container *libcontainer.Container
 	web       *libweb.WebServer
+	// newCheckAppliance builds the toehold check appliance. Nil means the real
+	// one; a test supplies its own, because building one reads the inventory
+	// service over the network.
+	newCheckAppliance func(*api.Provider, *api.ToeholdTemplate) (*api.CopyAppliance, error)
 }
 
 // Reconcile a Inventory CR.
@@ -286,6 +290,13 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	err = r.updateContainer(provider)
 	if err != nil {
 		return
+	}
+
+	// Prove the copy appliance works, before a migration finds out that it
+	// does not. This runs after updateContainer and ensureToeholdTemplate
+	// because it sets a blocking condition, and both of those bail on one.
+	if provider.Type() == api.VSphere && Settings.Features.Toehold {
+		r.ensureToeholdApplianceCheck(ctx, provider)
 	}
 
 	// Ready condition.
@@ -752,6 +763,13 @@ func (r *Reconciler) cleanupProviderServer(ctx context.Context, provider *api.Pr
 	return nil
 }
 
+// toeholdTemplateName is the name of a provider's toehold template. The
+// appliance check reads the template this function creates, so the two have to
+// agree on where it is.
+func toeholdTemplateName(provider *api.Provider) string {
+	return provider.Name + "-toehold"
+}
+
 func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Provider) error {
 	if provider.Status.HasBlockerCondition() ||
 		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
@@ -764,7 +782,7 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 		return nil
 	}
 
-	name := provider.Name + "-toehold"
+	name := toeholdTemplateName(provider)
 	desired := api.ToeholdTemplateSpec{
 		Provider:     v1.ObjectReference{Name: provider.Name, Namespace: provider.Namespace},
 		TemplateName: name,

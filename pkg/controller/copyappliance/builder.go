@@ -35,6 +35,14 @@ const rootResourcePool = "Resources"
 // that a cycle in the inventory cannot hang a reconcile.
 const folderWalkLimit = 100
 
+// checkNameSuffix is appended to a provider's name to name its check appliance.
+const checkNameSuffix = "-toehold-check"
+
+// maxVMNameLength is what vSphere accepts as a virtual machine name. A built
+// appliance's own name is what its VM is cloned as, so a CopyAppliance cannot
+// be named anything vCenter would refuse.
+const maxVMNameLength = 80
+
 // Build returns a CopyAppliance for an appliance VM that will read the given
 // source VM's disks. The appliance is placed where the source VM already is:
 // the same folder, datacenter and datastore. The shape of the appliance itself,
@@ -104,6 +112,63 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		Spec: spec,
 	}
 	return
+}
+
+// BuildCheck returns a CopyAppliance for an appliance VM that reads no disks at
+// all. Deploying one exercises everything the appliance path needs — the clone,
+// the boot, the guest network, the login, the orchestrator install and the
+// export endpoint — against nothing a migration depends on, so a provider can
+// be told its appliance works before a plan relies on it.
+func BuildCheck(provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
+	inventory, err := web.NewClient(provider)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	return buildCheck(inventory, provider, toehold)
+}
+
+// buildCheck is BuildCheck over an already-resolved inventory client.
+//
+// There is no source VM to place the appliance from, so it is placed from the
+// toehold template, which is a VM in the datacenter, folder and datastore the
+// clone lands in anyway. The inventory collects templates, and reading one by
+// moRef reaches the Get handler rather than the List handler that filters them
+// out, so placement resolves it like any other VM.
+func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
+	moRef := toehold.Status.Template.Moref
+	if moRef == "" {
+		err = liberr.New(fmt.Sprintf(
+			"toehold template %s has no moref to place the check appliance from",
+			toehold.Name))
+		return
+	}
+	appliance, err = build(inventory, provider, ref.Ref{ID: moRef})
+	if err != nil {
+		return
+	}
+	// Placement takes the attach list from the disks of the VM it was pointed
+	// at, which here is the template. Leaving it would hand the appliance the
+	// template's own root vmdk; a check appliance exports nothing.
+	appliance.Spec.AttachDisks = nil
+	WithTemplate(appliance, TemplateInventoryPath(toehold))
+	// There is no source VM. The label would carry the template's ID, which
+	// reads as an appliance serving a VM that is not being migrated.
+	delete(appliance.Labels, LabelVM)
+	// Named rather than generated: there is one check appliance per provider,
+	// and the next pass has to find this one rather than create another.
+	appliance.GenerateName = ""
+	appliance.Name = CheckName(provider.Name)
+	return
+}
+
+// CheckName returns the name of a provider's check appliance.
+func CheckName(providerName string) string {
+	name := providerName + checkNameSuffix
+	if len(name) <= maxVMNameLength {
+		return name
+	}
+	return providerName[:maxVMNameLength-len(checkNameSuffix)] + checkNameSuffix
 }
 
 // TemplateInventoryPath returns the vSphere inventory path of the toehold template.
