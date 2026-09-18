@@ -2,9 +2,6 @@ package plan
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
@@ -12,9 +9,7 @@ import (
 	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	core "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -58,35 +53,17 @@ func toeholdTemplateForProvider(r client.Client, provider *api.Provider) (*api.T
 	return toehold, nil
 }
 
-func copyApplianceName(migrationUID types.UID, vmID string) string {
-	sum := sha256.Sum256([]byte(vmID))
-	vmShort := hex.EncodeToString(sum[:4])
-	migShort := string(migrationUID)
-	if len(migShort) > 8 {
-		migShort = migShort[:8]
-	}
-	return fmt.Sprintf("copy-appliance-%s-%s", migShort, vmShort)
-}
-
 func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 	provider := r.Source.Provider
 	if provider == nil {
 		return liberr.New("source provider is not available")
 	}
 
-	if vm.CopyAppliance != nil {
-		existing := &api.CopyAppliance{}
-		err = r.Get(context.TODO(), client.ObjectKey{
-			Namespace: vm.CopyAppliance.Namespace,
-			Name:      vm.CopyAppliance.Name,
-		}, existing)
-		if err == nil {
-			return nil
-		}
-		if !k8serr.IsNotFound(err) {
-			return liberr.Wrap(err)
-		}
-		vm.CopyAppliance = nil
+	if _, err = r.getCopyAppliance(vm); err == nil {
+		return nil
+	}
+	if !k8serr.IsNotFound(err) {
+		return err
 	}
 
 	toehold, err := toeholdTemplateForProvider(r.Client, provider)
@@ -100,8 +77,7 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 	}
 	cacontroller.WithTemplate(appliance, cacontroller.TemplateInventoryPath(toehold))
 
-	name := copyApplianceName(r.Migration.UID, vm.ID)
-	appliance.Name = name
+	appliance.Name = cacontroller.ApplianceName(r.Migration.UID, vm.ID)
 	appliance.Namespace = provider.Namespace
 	appliance.GenerateName = ""
 	appliance.Spec.ExportRequest = &api.ExportRequest{
@@ -123,11 +99,6 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 	err = r.Create(context.TODO(), appliance)
 	if err != nil && !k8serr.IsAlreadyExists(err) {
 		return liberr.Wrap(err)
-	}
-
-	vm.CopyAppliance = &core.ObjectReference{
-		Namespace: appliance.Namespace,
-		Name:      appliance.Name,
 	}
 	return nil
 }
@@ -219,14 +190,9 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (ready bool,
 }
 
 func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err error) {
-	if vm.CopyAppliance == nil {
-		return true, nil
-	}
-
 	appliance, err := r.getCopyAppliance(vm)
 	if err != nil {
 		if k8serr.IsNotFound(err) {
-			vm.CopyAppliance = nil
 			return true, nil
 		}
 		return false, err
@@ -242,7 +208,6 @@ func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err err
 
 	switch appliance.Status.Phase {
 	case cacontroller.PhaseTeardownCompleted, cacontroller.PhaseTeardownFailed:
-		vm.CopyAppliance = nil
 		return true, nil
 	default:
 		return false, nil
@@ -250,37 +215,25 @@ func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err err
 }
 
 func (r *Migration) deleteCopyAppliance(vm *plan.VMStatus) error {
-	if vm.CopyAppliance == nil {
-		return nil
-	}
-	appliance := &api.CopyAppliance{}
-	err := r.Get(context.TODO(), client.ObjectKey{
-		Namespace: vm.CopyAppliance.Namespace,
-		Name:      vm.CopyAppliance.Name,
-	}, appliance)
+	appliance, err := r.getCopyAppliance(vm)
 	if k8serr.IsNotFound(err) {
-		vm.CopyAppliance = nil
 		return nil
 	}
 	if err != nil {
-		return liberr.Wrap(err)
+		return err
 	}
-	err = client.IgnoreNotFound(r.Delete(context.TODO(), appliance))
-	if err != nil {
-		return liberr.Wrap(err)
-	}
-	vm.CopyAppliance = nil
-	return nil
+	return client.IgnoreNotFound(r.Delete(context.TODO(), appliance))
 }
 
 func (r *Migration) getCopyAppliance(vm *plan.VMStatus) (*api.CopyAppliance, error) {
-	if vm.CopyAppliance == nil {
-		return nil, liberr.New("copy appliance is not set on the VM status")
+	provider := r.Source.Provider
+	if provider == nil {
+		return nil, liberr.New("source provider is not available")
 	}
 	appliance := &api.CopyAppliance{}
 	err := r.Get(context.TODO(), client.ObjectKey{
-		Namespace: vm.CopyAppliance.Namespace,
-		Name:      vm.CopyAppliance.Name,
+		Namespace: provider.Namespace,
+		Name:      cacontroller.ApplianceName(r.Migration.UID, vm.ID),
 	}, appliance)
 	if err != nil {
 		return nil, liberr.Wrap(err)

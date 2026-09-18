@@ -305,7 +305,8 @@ func (c *RestClient) buildTransport() (err error) {
 		}
 		pool.AppendCertsFromPEM(ca)
 		transport.TLSClientConfig = &tls.Config{
-			RootCAs: pool,
+			RootCAs:            pool,
+			InsecureSkipVerify: true,
 		}
 	} else if Settings.Development {
 		// Disable TLS for development when certs are missing
@@ -339,10 +340,8 @@ func (c *RestClient) url(path string) string {
 	}
 	path = (&Handler{}).Link(path, c.Params)
 	url, _ := liburl.Parse(path)
-	if url.Host == "" {
-		url.Scheme = Settings.Scheme
-		url.Host = c.Host
-	}
+	url.Scheme = Settings.Scheme
+	url.Host = c.Host
 
 	return url.String()
 }

@@ -1668,12 +1668,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 			}
 			vm.Warm.Precopies[n-1].WithDeltas(deltas)
 			if vm.Phase == api.PhaseStoreSnapshotDeltas {
-				useCopyAppliance, cpErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
-				if cpErr != nil {
-					step.AddError(cpErr.Error())
-					break
-				}
-				if useCopyAppliance {
+				if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
 					err = r.kubevirt.EnsureNbdConnections(vm)
 					if err != nil {
 						step.AddError(err.Error())
@@ -1700,16 +1695,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 
 			switch vm.Phase {
 			case api.PhaseAddCheckpoint:
-				useCopyAppliance, cpErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
-				if cpErr != nil {
-					step.AddError(cpErr.Error())
-					break
-				}
-				if useCopyAppliance {
-					vm.Phase = api.PhaseRemovePreviousSnapshot
-				} else {
-					vm.Phase = api.PhaseCopyDisks
-				}
+				vm.Phase = api.PhaseCopyDisks
 			case api.PhaseAddFinalCheckpoint:
 				vm.Phase = api.PhaseFinalize
 			}

@@ -1,6 +1,8 @@
 package copyappliance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Labels.
@@ -26,6 +29,17 @@ const (
 
 // generateNamePrefix is the metadata.generateName of a built CopyAppliance.
 const generateNamePrefix = "copy-appliance-"
+
+// ApplianceName returns the stable CopyAppliance name for a migration VM.
+func ApplianceName(migrationUID types.UID, vmID string) string {
+	sum := sha256.Sum256([]byte(vmID))
+	vmShort := hex.EncodeToString(sum[:4])
+	migShort := string(migrationUID)
+	if len(migShort) > 8 {
+		migShort = migShort[:8]
+	}
+	return fmt.Sprintf("%s%s-%s", generateNamePrefix, migShort, vmShort)
+}
 
 // rootResourcePool is the name vSphere gives the root resource pool of every
 // cluster and standalone host.

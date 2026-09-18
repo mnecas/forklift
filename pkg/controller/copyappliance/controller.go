@@ -93,8 +93,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	deleting := !appliance.DeletionTimestamp.IsZero()
 	if !deleting &&
 		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) &&
-		!NeedsExportConvergence(appliance) &&
-		!IsExportPhase(appliance.Status.Phase) {
+		!NeedsExportConvergence(appliance) {
 		// Nothing left to do. Connecting would cost a vCenter login per watch
 		// event for a pass that cannot change anything.
 		return
@@ -450,6 +449,7 @@ func (r *Reconciler) setConverging(appliance *api.CopyAppliance, message string)
 	phase := appliance.Status.Phase
 	switch phase {
 	case PhaseDeployCompleted, PhaseDeployFailed,
+		PhaseReleased,
 		PhaseTeardownCompleted, PhaseTeardownFailed:
 		return
 	}
