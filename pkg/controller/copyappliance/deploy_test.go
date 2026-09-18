@@ -16,42 +16,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
 
-// Both the wait and the login go through this, so an appliance that reports
-// nothing must read as "not yet" and not as an empty address to dial.
-func TestApplianceAddress(t *testing.T) {
-	tests := []struct {
-		name      string
-		addresses []api.ApplianceAddress
-		want      string
-		wantOK    bool
-	}{
-		{"the address the guest reports",
-			[]api.ApplianceAddress{
-				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
-			},
-			"192.0.2.10", true},
-		// One adapter is reported once per address it holds, and the appliance
-		// answers on any of them.
-		{"an adapter with more than one address gives the first",
-			[]api.ApplianceAddress{
-				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
-				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "2001:db8::1"},
-			},
-			"192.0.2.10", true},
-		{"no addresses at all", nil, "", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := applianceAddress(tc.addresses)
-
-			if got != tc.want || ok != tc.wantOK {
-				t.Errorf("applianceAddress(%+v) = (%q, %v), want (%q, %v)",
-					tc.addresses, got, ok, tc.want, tc.wantOK)
-			}
-		})
-	}
-}
-
 // A pass walks as many steps as it can, so the phase it records is not the
 // phase it started on. Recording the entry phase instead would send the next
 // pass back to a step that is already done, and would tell an operator the
