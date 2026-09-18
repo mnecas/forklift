@@ -34,7 +34,7 @@ const testOrchestratorBinary = "#!/bin/sh\n# not really a binary\n"
 func TestRenderUnit(t *testing.T) {
 	t.Run("the unit describes this appliance", func(t *testing.T) {
 		ac := sshContext(t, nil, "127.0.0.1:22")
-		ac.Appliance.Status.LoadedImage = testLoadedImage
+		ac.Appliance.Status.ExporterImage = testLoadedImage
 
 		unit, err := ac.renderUnit()
 		if err != nil {
@@ -74,7 +74,7 @@ func TestRenderUnit(t *testing.T) {
 
 func TestInstallOrchestrator(t *testing.T) {
 	ac, server, client := applianceLogin(t)
-	ac.Appliance.Status.LoadedImage = testLoadedImage
+	ac.Appliance.Status.ExporterImage = testLoadedImage
 	unit, certs := testInstallInputs(t, ac)
 
 	err := ac.InstallOrchestrator(client, unit, certs)
@@ -160,7 +160,7 @@ func TestRestartOrchestrator(t *testing.T) {
 func TestOrchestratorInstalled(t *testing.T) {
 	t.Run("an appliance that matches is already installed", func(t *testing.T) {
 		ac, _, client := applianceLogin(t)
-		ac.Appliance.Status.LoadedImage = testLoadedImage
+		ac.Appliance.Status.ExporterImage = testLoadedImage
 		unit, certs := testInstallInputs(t, ac)
 
 		installed, err := ac.OrchestratorInstalled(client, unit, certs)
@@ -178,7 +178,7 @@ func TestOrchestratorInstalled(t *testing.T) {
 	t.Run("an appliance that does not match is not installed", func(t *testing.T) {
 		probe := installedProbe(t)
 		ac, _, client := applianceLogin(t, probe)
-		ac.Appliance.Status.LoadedImage = testLoadedImage
+		ac.Appliance.Status.ExporterImage = testLoadedImage
 		unit, certs := testInstallInputs(t, ac)
 
 		installed, err := ac.OrchestratorInstalled(client, unit, certs)
@@ -215,7 +215,7 @@ func testInstallInputs(t *testing.T, ac *ApplianceContext) (unit string, certs m
 func installedProbe(t *testing.T) (command string) {
 	t.Helper()
 	ac := sshContext(t, nil, "127.0.0.1:22")
-	ac.Appliance.Status.LoadedImage = testLoadedImage
+	ac.Appliance.Status.ExporterImage = testLoadedImage
 	unit, certs := testInstallInputs(t, ac)
 	manifest, err := ac.manifest(unit, certs)
 	if err != nil {

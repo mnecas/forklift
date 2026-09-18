@@ -177,7 +177,7 @@ type CopyApplianceStatus struct {
 	// podman store. It carries the digest of the image that was loaded, so an
 	// appliance holding an earlier build of the same tag does not match.
 	// +optional
-	LoadedImage string `json:"loadedImage,omitempty"`
+	ExporterImage string `json:"exporterImage,omitempty"`
 	// The disk exports the appliance publishes, one per attached disk. Empty
 	// until the appliance is serving all of them.
 	// +optional
