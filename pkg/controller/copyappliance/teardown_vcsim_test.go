@@ -3,6 +3,7 @@ package copyappliance
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
@@ -10,6 +11,53 @@ import (
 	"github.com/vmware/govmomi/simulator"
 	"github.com/vmware/govmomi/vim25/types"
 )
+
+// slowTaskDelay is how long the simulator is made to leave a task running. It
+// only has to outlast the passes a test drives while the task is in flight.
+const slowTaskDelay = time.Second
+
+// slowTasks makes the simulator leave its tasks running for a while. It
+// otherwise finishes one before the call that started it returns, so every wait
+// step reads as done and no pass ever stops on one — which is why a runner that
+// mishandles a wait looks fine here.
+//
+// The delay is a package global that the goroutine running a task reads, so the
+// task the appliance is left waiting on is waited out before it is restored.
+func slowTasks(t *testing.T, ctx context.Context, applianceContext *ApplianceContext) {
+	t.Helper()
+	previous := simulator.TaskDelay
+	t.Cleanup(func() {
+		awaitTask(t, ctx, applianceContext)
+		simulator.TaskDelay = previous
+	})
+	simulator.TaskDelay = simulator.DelayConfig{
+		Delay: int(slowTaskDelay.Milliseconds()),
+		// Without this the simulator holds the entity lock across the delay and
+		// nothing can read a property until the task has finished.
+		MethodDelay: map[string]int{"LockHandoff": 0},
+	}
+}
+
+// awaitTask blocks until the task the appliance last recorded has finished.
+func awaitTask(t *testing.T, ctx context.Context, applianceContext *ApplianceContext) {
+	t.Helper()
+	deadline := time.Now().Add(slowTaskDelay * 10)
+	for {
+		done, _, err := applianceContext.WaitForTask(ctx)
+		if err != nil {
+			t.Errorf("wait for the outstanding task: %v", err)
+			return
+		}
+		if done {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Error("the outstanding task never finished")
+			return
+		}
+		time.Sleep(slowTaskDelay / 20)
+	}
+}
 
 // simulatedVCenter starts a vcsim instance and returns a client connected to
 // it, along with the model, whose registry is how a test reaches behind the
@@ -75,7 +123,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		runner := TeardownRunner{context: applianceContext}
 
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 		phases := runTeardown(t, ctx, runner)
 
 		status := applianceContext.Appliance.Status
@@ -98,7 +148,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			context: &ApplianceContext{Appliance: appliance, VCenter: client, Log: testLog()},
 		}
 
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 		phases := runTeardown(t, ctx, runner)
 
 		if len(phases) != 1 {
@@ -106,6 +158,52 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		}
 		if appliance.Status.Phase != PhaseTeardownCompleted {
 			t.Errorf("phase = %q, want %q", appliance.Status.Phase, PhaseTeardownCompleted)
+		}
+	})
+
+	// Teardown used to record the phase the pass started on rather than the one
+	// it stopped in. A pass that started the power off and found the task still
+	// running recorded PhasePowerOff, so the next pass started a second power
+	// off and overwrote the reference to the first — which nothing then
+	// observed, because an action phase is requeued immediately on the
+	// assumption that the pass walks straight through it. Teardown is the
+	// deletion path, so that is an appliance whose finalizer is never released.
+	t.Run("a pass waiting on a task records the wait, not the step that started it", func(t *testing.T) {
+		ctx, _, client := simulatedVCenter(t)
+		applianceContext, _ := simulatedAppliance(t, ctx, client)
+		slowTasks(t, ctx, applianceContext)
+		runner := TeardownRunner{context: applianceContext}
+		status := &applianceContext.Appliance.Status
+
+		err := runner.Begin()
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		err = runner.Run(ctx)
+		if err != nil {
+			t.Fatalf("first pass: %v", err)
+		}
+
+		if status.Phase != PhaseWaitForPowerOff {
+			t.Fatalf("phase = %q, want %q: the pass started the power off and stopped waiting for it",
+				status.Phase, PhaseWaitForPowerOff)
+		}
+		started := status.TaskRef
+		if started == "" {
+			t.Fatal("the pass recorded no task to wait on")
+		}
+
+		err = runner.Run(ctx)
+		if err != nil {
+			t.Fatalf("second pass: %v", err)
+		}
+
+		if status.Phase != PhaseWaitForPowerOff {
+			t.Errorf("phase = %q on the second pass, want %q", status.Phase, PhaseWaitForPowerOff)
+		}
+		if status.TaskRef != started {
+			t.Errorf("task = %q, want the first pass's %q: the second pass started another power off",
+				status.TaskRef, started)
 		}
 	})
 
@@ -177,7 +275,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("destroy the simulated VM: %v", err)
 		}
 
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 		phases := runTeardown(t, ctx, runner)
 
 		if applianceContext.Appliance.Status.Phase != PhaseTeardownCompleted {
@@ -194,7 +294,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		applianceContext.Appliance.Status.VCenterInstanceUUID = "some-other-vcenter"
 		runner := TeardownRunner{context: applianceContext}
 
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 		err := runner.Run(ctx)
 
 		if err == nil {

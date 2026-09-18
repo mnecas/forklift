@@ -2,10 +2,13 @@ package copyappliance
 
 import (
 	"context"
+	"errors"
+	"syscall"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 )
 
@@ -67,20 +70,22 @@ func RoutesToExportRunner(appliance *api.CopyAppliance) bool {
 }
 
 // Begin seeds the export itinerary from the requested target.
-func (r *ExportRunner) Begin() {
+func (r *ExportRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
-	req := r.context.Appliance.Spec.ExportRequest
-	if req == nil {
+	if r.context.Appliance.Spec.ExportRequest == nil {
 		return
 	}
-	switch req.Target {
-	case api.ExportTargetRelease:
-		r.context.Appliance.Status.Phase = PhaseReleaseDisks
-	case api.ExportTargetExport:
-		r.context.Appliance.Status.Phase = PhaseAttachDisks
-	default:
+	itinerary, _, err := r.itinerary()
+	if err != nil {
 		r.context.Appliance.Status.Phase = PhaseDeployFailed
+		return
 	}
+	step, err := itinerary.First()
+	if err != nil {
+		return
+	}
+	r.context.Appliance.Status.Phase = step.Name
+	return
 }
 
 // Run advances the export pipeline by one pass.
@@ -90,134 +95,112 @@ func (r *ExportRunner) Run(ctx context.Context) (err error) {
 		return
 	}
 
-	next, err := r.ExecutePhase(ctx)
+	itinerary, completed, err := r.itinerary()
+	if err != nil {
+		r.context.Appliance.Status.Phase = PhaseDeployFailed
+		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
+		return
+	}
+
+	err = advance(
+		ctx,
+		r.context.Appliance,
+		itinerary,
+		r.execute,
+		completed,
+		PhaseDeployFailed)
 	if err != nil {
 		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
 	}
-	r.context.Appliance.Status.Phase = next
 	return
 }
 
-// ExecutePhase runs the current export phase and returns the phase to record.
-func (r *ExportRunner) ExecutePhase(ctx context.Context) (next string, err error) {
+// itinerary returns the pipeline for the requested target and the phase that
+// ends it. The two targets are disjoint routes rather than variations on one,
+// so the target picks the table and the phase alone then picks the step.
+func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed string, err error) {
 	req := r.context.Appliance.Spec.ExportRequest
 	if req == nil {
 		err = liberr.New("export request is not set")
-		next = PhaseDeployFailed
 		return
 	}
-
 	switch req.Target {
 	case api.ExportTargetRelease:
-		return r.executeRelease(ctx)
+		itinerary = &libitr.Itinerary{
+			Name: "Release",
+			Pipeline: libitr.Pipeline{
+				{Name: PhaseReleaseDisks},
+				{Name: PhaseWaitForReleaseDisks},
+				{Name: PhaseReleased},
+			},
+		}
+		completed = PhaseReleased
 	case api.ExportTargetExport:
-		return r.executeExport(ctx)
+		itinerary = &libitr.Itinerary{
+			Name: "Export",
+			Pipeline: libitr.Pipeline{
+				{Name: PhaseAttachDisks},
+				{Name: PhaseWaitForAttachDisks},
+				{Name: PhaseRestartOrchestrator},
+				{Name: PhaseWaitForExports},
+				{Name: PhaseDeployCompleted},
+			},
+		}
+		completed = PhaseDeployCompleted
 	default:
 		err = liberr.New("unknown export target", "target", req.Target)
-		next = PhaseDeployFailed
-		return
 	}
+	return
 }
 
-func (r *ExportRunner) executeRelease(ctx context.Context) (next string, err error) {
-	switch r.context.Appliance.Status.Phase {
+// execute runs one export step and reports whether it finished. A step with
+// nothing to wait for finishes, and the walk moves on to the next step within
+// the same pass. The terminal phases report not finished, which parks the walk
+// on them.
+func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, err error) {
+	switch phase {
 	case PhaseReleaseDisks:
 		err = r.detachAttached(ctx)
 		if err != nil {
-			next = PhaseDeployFailed
-			break
+			return
 		}
-		next = PhaseWaitForReleaseDisks
-		fallthrough
+		done = true
 	case PhaseWaitForReleaseDisks:
-		var done bool
 		done, err = r.waitForDetach(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForReleaseDisks
+		if err != nil || !done {
 			return
 		}
 		r.context.Appliance.Status.Exports = nil
-		observeExportRequest(r.context.Appliance)
+	case PhaseAttachDisks:
+		err = r.attach(ctx)
+		if err != nil {
+			return
+		}
+		done = true
+	case PhaseWaitForAttachDisks:
+		done, err = r.waitForAttach(ctx)
+	case PhaseRestartOrchestrator:
+		done, err = r.restartOrchestrator(ctx)
+	case PhaseWaitForExports:
+		done, err = r.context.WaitForExports(ctx)
+	case PhaseReleased:
+		r.context.observeExportRequest(r.context.Appliance)
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
 			Message:  "Copy appliance disks have been released.",
 		})
-		next = PhaseReleased
-	default:
-		if r.context.Appliance.Status.Phase == PhaseReleased && ExportRequestObserved(r.context.Appliance) {
-			next = PhaseReleased
-			return
-		}
-		err = liberr.New("unexpected phase for release", "phase", r.context.Appliance.Status.Phase)
-		next = PhaseDeployFailed
-	}
-	return
-}
-
-func (r *ExportRunner) executeExport(ctx context.Context) (next string, err error) {
-	switch r.context.Appliance.Status.Phase {
-	case PhaseAttachDisks:
-		err = r.attach(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		next = PhaseWaitForAttachDisks
-		fallthrough
-	case PhaseWaitForAttachDisks:
-		var done bool
-		done, err = r.waitForAttach(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForAttachDisks
-			return
-		}
-		next = PhaseRestartOrchestrator
-		fallthrough
-	case PhaseRestartOrchestrator:
-		var done bool
-		done, err = r.restartOrchestrator(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseRestartOrchestrator
-			return
-		}
-		next = PhaseWaitForExports
-		fallthrough
-	case PhaseWaitForExports:
-		var done bool
-		done, err = r.context.WaitForExports(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForExports
-			return
-		}
-		observeExportRequest(r.context.Appliance)
+	case PhaseDeployCompleted:
+		r.context.observeExportRequest(r.context.Appliance)
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
 			Message:  "Copy appliance disk export has succeeded.",
 		})
-		next = PhaseDeployCompleted
 	default:
-		err = liberr.New("unexpected phase for export", "phase", r.context.Appliance.Status.Phase)
-		next = PhaseDeployFailed
+		err = liberr.New("unexpected phase for export", "phase", phase)
 	}
 	return
 }
@@ -261,7 +244,7 @@ func (r *ExportRunner) restartOrchestrator(ctx context.Context) (done bool, err 
 		return
 	}
 
-	client, answered, err := r.context.SSHLoginFor(ctx, address, sshTransferTimeout)
+	client, answered, err := r.context.SSHLoginFor(ctx, address, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
@@ -289,7 +272,7 @@ func (r *ExportRunner) restartOrchestrator(ctx context.Context) (done bool, err 
 	return
 }
 
-func observeExportRequest(appliance *api.CopyAppliance) {
+func (r *ApplianceContext) observeExportRequest(appliance *api.CopyAppliance) {
 	if appliance.Spec.ExportRequest != nil {
 		appliance.Status.ObservedExportRequest = appliance.Spec.ExportRequest.DeepCopy()
 	}
@@ -317,7 +300,7 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 
 	exports, err := client.Disks(ctx, r.announceAddr(address))
 	if err != nil {
-		if exportsNotReady(err) {
+		if r.announceStarting(err) {
 			r.Log.Info("The appliance is not announcing its exports yet.",
 				"address", address)
 			err = nil
@@ -328,21 +311,32 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 	}
 
 	attached := r.Appliance.Spec.AttachedDisks()
-	matched, matchErr := matchExports(attached, exports)
-	if matchErr == errExportsIncomplete {
+	if len(exports) < len(attached) {
 		r.Log.Info("The appliance has not exported every disk yet.",
 			"address", address,
 			"exported", len(exports),
 			"attached", len(attached))
 		return
 	}
-	if matchErr != nil {
-		err = liberr.Wrap(matchErr, "address", address)
+	matched, err := matchExports(attached, exports)
+	if err != nil {
+		err = liberr.Wrap(err, "address", address)
 		return
 	}
 	r.Appliance.Status.Exports = matched
 	r.Log.Info("The appliance is exporting its disks.",
 		"address", address, "exports", len(matched))
 	done = true
+	return
+}
+
+// announceStarting reports whether the query failed because the announce
+// endpoint is not up yet: nothing listening, a connection dropped before the
+// reply, or a timeout.
+func (r *ApplianceContext) announceStarting(err error) (ok bool) {
+	var timeout interface{ Timeout() bool }
+	ok = isStarting(err) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		(errors.As(err, &timeout) && timeout.Timeout())
 	return
 }

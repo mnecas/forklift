@@ -15,10 +15,6 @@ var errExportsIncomplete = errors.New("not all attached disks are exported yet")
 // asked vSphere to attach. Every attached disk must match exactly one export
 // by serial/WWID; unmatched exports are rejected.
 func matchExports(attached []api.AttachedDisk, announced []runner.Export) ([]api.ApplianceExport, error) {
-	if len(announced) < len(attached) {
-		return nil, errExportsIncomplete
-	}
-
 	used := make([]bool, len(announced))
 	matched := make([]api.ApplianceExport, 0, len(attached))
 

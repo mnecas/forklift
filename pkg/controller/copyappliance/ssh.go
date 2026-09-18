@@ -25,16 +25,19 @@ const sshPrivateKeyData = "private-key"
 // next pass.
 const sshTimeout = 30 * time.Second
 
-// sshTransferTimeout bounds one image transfer. Unlike a login this is a
-// connection the controller means to hold open: a few hundred megabytes to a
-// freshly cloned VM is minutes, not seconds. Nothing else in the path imposes a
-// limit, so this is what eventually cuts a stuck transfer loose.
-const sshTransferTimeout = 30 * time.Minute
+const SSHFileTransferTimeout = 30 * time.Minute
 
-// SSHLogin logs in to the appliance for as long as a login and a handful of
+// SSHClient logs in to the appliance for as long as a login and a handful of
 // short commands take. See SSHLoginFor.
-func (r *ApplianceContext) SSHLogin(ctx context.Context, address string) (client *ssh.Client, answered bool, err error) {
-	return r.SSHLoginFor(ctx, address, sshTimeout)
+func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration) (client *ssh.Client, answered bool, err error) {
+	address, ok := applianceAddress(r.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.Appliance.Name)
+		return
+	}
+	return r.SSHLoginFor(ctx, address, timeout)
 }
 
 // SSHLoginFor logs in to the appliance at the given address, and reports
@@ -73,6 +76,7 @@ func (r *ApplianceContext) SSHLoginFor(ctx context.Context, address string, time
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
+
 	addr := r.sshAddr(address)
 	dialer := &net.Dialer{}
 	netConn, err := dialer.DialContext(dialCtx, "tcp", addr)
