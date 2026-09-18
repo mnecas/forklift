@@ -15,7 +15,7 @@ func TestCopyApplianceEnabledForPlan(t *testing.T) {
 	vsphere, openshift := api.VSphere, api.OpenShift
 	p := &api.Plan{
 		Spec: api.PlanSpec{
-			Type:             api.MigrationCold,
+			Type:              api.MigrationCold,
 			MigrateSharedDisks: true,
 			VMs: []plan.VM{{
 				Ref: ref.Ref{ID: "vm-1", Name: "vm-1"},
@@ -31,20 +31,12 @@ func TestCopyApplianceEnabledForPlan(t *testing.T) {
 		},
 	}
 
-	use, err := Settings.CopyAppliance.EnabledForPlan(p, p.Spec.VMs[0].Ref)
-	if err != nil {
-		t.Fatalf("EnabledForPlan() error: %v", err)
-	}
-	if !use {
+	if !Settings.CopyAppliance.EnabledForPlan(p) {
 		t.Fatal("expected copy appliance path for vSphere cold migration with toehold enabled")
 	}
 
 	Settings.Features.Toehold = false
-	use, err = Settings.CopyAppliance.EnabledForPlan(p, p.Spec.VMs[0].Ref)
-	if err != nil {
-		t.Fatalf("EnabledForPlan() error: %v", err)
-	}
-	if use {
+	if Settings.CopyAppliance.EnabledForPlan(p) {
 		t.Fatal("expected copy appliance disabled when toehold feature is off")
 	}
 }

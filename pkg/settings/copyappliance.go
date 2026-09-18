@@ -2,7 +2,6 @@ package settings
 
 import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 )
 
 // Environment variables.
@@ -43,24 +42,20 @@ func (r *CopyAppliance) Load() error {
 	return nil
 }
 
-// EnabledForPlan reports whether disk transfer for vmRef should use a copy
-// appliance exporting source disks over NBD.
-func (r *CopyAppliance) EnabledForPlan(p *api.Plan, vmRef ref.Ref) (bool, error) {
+// EnabledForPlan reports whether disk transfer should use a copy appliance
+// exporting source disks over NBD.
+func (r *CopyAppliance) EnabledForPlan(p *api.Plan) bool {
 	if !Settings.Features.Toehold {
-		return false, nil
+		return false
 	}
 	if r.ContainerImage == "" {
-		return false, nil
+		return false
 	}
 	if !p.IsSourceProviderVSphere() {
-		return false, nil
+		return false
 	}
 	if p.IsUsingOffloadPlugin() {
-		return false, nil
+		return false
 	}
-	useV2v, err := p.ShouldUseV2vForTransfer(vmRef)
-	if err != nil {
-		return false, err
-	}
-	return !useV2v, nil
+	return true
 }

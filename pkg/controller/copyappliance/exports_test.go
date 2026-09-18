@@ -13,18 +13,16 @@ func TestMatchExports(t *testing.T) {
 			VMDKPath: "[ds] vm/disk-0.vmdk",
 			DiskKey:  2000,
 			Serial:   "6000C297-7d53-fad7-e8b4-5194193802f7",
-			Capacity: 16 << 30,
 		},
 		{
 			VMDKPath: "[ds] vm/disk-1.vmdk",
 			DiskKey:  2001,
-			Serial:   "6000C2902b72f55a-2146-4350-72ab-cdef01234567",
-			Capacity: 2 << 30,
+			Serial:   "6000C290-2b72-f55a-2146-435072abcdef01",
 		},
 	}
 	announced := []runner.Export{
-		{WWID: "36000c2902b72f55a2146435072abcdef01", Port: 10810, Device: "/dev/sdc", Size: 2 << 30},
-		{WWID: "36000c2977d53fad7e8b45194193802f7", Port: 10809, Device: "/dev/sdb", Size: 16 << 30},
+		{WWID: "36000c2902b72f55a2146435072abcdef01", Port: 10810, Device: "/dev/sdc"},
+		{WWID: "36000c2977d53fad7e8b45194193802f7", Port: 10809, Device: "/dev/sdb"},
 	}
 
 	matched, err := matchExports(attached, announced)

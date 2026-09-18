@@ -29,6 +29,14 @@ func TestRestClientURL_UsesConfiguredScheme(t *testing.T) {
 			path:   "/api/v1/providers",
 			want:   "https://api.example.com:8443/api/v1/providers",
 		},
+		{
+			name:   "rewrites localhost selfLink host",
+			scheme: "https",
+			host:   "forklift-inventory.openshift-mtv.svc.cluster.local",
+			port:   8443,
+			path:   "https://localhost:8443/providers/vsphere/uid/vms/vm-1",
+			want:   "https://forklift-inventory.openshift-mtv.svc.cluster.local:8443/providers/vsphere/uid/vms/vm-1",
+		},
 	}
 
 	for _, tt := range tests {

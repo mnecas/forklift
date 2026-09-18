@@ -212,7 +212,7 @@ func (r *ExportRunner) executeExport(ctx context.Context) (next string, err erro
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
-			Message:  "Deploying the copy appliance has succeeded.",
+			Message:  "Copy appliance disk export has succeeded.",
 		})
 		next = PhaseDeployCompleted
 	default:
@@ -328,13 +328,6 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 	}
 
 	attached := r.Appliance.Spec.AttachedDisks()
-	if len(exports) < len(attached) {
-		r.Log.Info("The appliance has not exported every disk yet.",
-			"address", address,
-			"exported", len(exports),
-			"attached", len(attached))
-		return
-	}
 	matched, matchErr := matchExports(attached, exports)
 	if matchErr == errExportsIncomplete {
 		r.Log.Info("The appliance has not exported every disk yet.",

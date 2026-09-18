@@ -113,9 +113,8 @@ func TestWaitForExports(t *testing.T) {
 
 	t.Run("an appliance exporting every disk is done", func(t *testing.T) {
 		ac := exportsContext(t, startAnnounce(t, applianceTLS().server, twoExports))
-		deploy := DeployRunner{context: ac}
 
-		done, err := deploy.WaitForExports(context.TODO())
+		done, err := ac.WaitForExports(context.TODO())
 
 		if err != nil {
 			t.Fatalf("WaitForExports: %v", err)
@@ -151,9 +150,8 @@ func TestWaitForExports(t *testing.T) {
 	// hand the migration a set of disks with one missing.
 	t.Run("an appliance short of a disk is not done", func(t *testing.T) {
 		ac := exportsContext(t, startAnnounce(t, applianceTLS().server, twoExports[:1]))
-		deploy := DeployRunner{context: ac}
 
-		done, err := deploy.WaitForExports(context.TODO())
+		done, err := ac.WaitForExports(context.TODO())
 
 		if err != nil {
 			t.Fatalf("WaitForExports: %v", err)
@@ -170,9 +168,9 @@ func TestWaitForExports(t *testing.T) {
 	// endpoint binds after that. Failing here would fail a deploy that is on
 	// track, and PhaseDeployFailed has no way back.
 	t.Run("an appliance not answering yet is not a failure", func(t *testing.T) {
-		deploy := DeployRunner{context: exportsContext(t, closedAddr(t))}
+		ac := exportsContext(t, closedAddr(t))
 
-		done, err := deploy.WaitForExports(context.TODO())
+		done, err := ac.WaitForExports(context.TODO())
 
 		if err != nil {
 			t.Fatalf("WaitForExports: %v", err)
@@ -192,11 +190,9 @@ func TestWaitForExports(t *testing.T) {
 		if err != nil {
 			t.Fatalf("keypair: %v", err)
 		}
-		deploy := DeployRunner{
-			context: exportsContext(t, startAnnounce(t, impostor, twoExports)),
-		}
+		ac := exportsContext(t, startAnnounce(t, impostor, twoExports))
 
-		done, err := deploy.WaitForExports(context.TODO())
+		done, err := ac.WaitForExports(context.TODO())
 
 		if err == nil {
 			t.Fatal("WaitForExports accepted a server it could not verify")
@@ -209,9 +205,8 @@ func TestWaitForExports(t *testing.T) {
 	t.Run("an appliance reporting no address fails", func(t *testing.T) {
 		ac := exportsContext(t, closedAddr(t))
 		ac.Appliance.Status.Addresses = nil
-		deploy := DeployRunner{context: ac}
 
-		_, err := deploy.WaitForExports(context.TODO())
+		_, err := ac.WaitForExports(context.TODO())
 
 		if err == nil {
 			t.Fatal("WaitForExports succeeded with no address to reach the appliance at")

@@ -263,12 +263,7 @@ func (r *BaseMigrator) Itinerary(vm plan.VM) (itinerary *libitr.Itinerary) {
 	case r.Plan.Spec.Type == api.MigrationOnlyConversion:
 		itinerary = r.onlyConversionItinerary()
 	case r.Plan.IsWarm():
-		useCopyAppliance, err := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
-		if err != nil {
-			r.Log.Error(err, "Failed to determine copy appliance usage.", "vm", vm.String())
-			useCopyAppliance = false
-		}
-		if useCopyAppliance {
+		if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
 			itinerary = r.warmCopyApplianceItinerary()
 		} else {
 			itinerary = r.warmItinerary()
@@ -365,7 +360,6 @@ func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
 			{Name: api.PhaseCreateSnapshot},
 			{Name: api.PhaseWaitForSnapshot},
 			{Name: api.PhaseStoreSnapshotDeltas, All: VSphere},
-			{Name: api.PhaseAddCheckpoint},
 			// Precopy loop end
 			{Name: api.PhaseStorePowerState},
 			{Name: api.PhasePowerOffSource},
@@ -476,7 +470,6 @@ func (r *BaseMigrator) coldItinerary() *libitr.Itinerary {
 			{Name: api.PhaseWaitForCopyAppliance, All: CopyAppliance},
 			{Name: api.PhaseCreateDataVolumes},
 			{Name: api.PhaseCopyDisks, All: CDIDiskCopy},
-			{Name: api.PhaseTeardownCopyAppliance, All: CopyAppliance},
 			{Name: api.PhaseAllocateDisks, All: VirtV2vDiskCopy},
 			{Name: api.PhaseCreateGuestConversionPod, All: RequiresConversion},
 			{Name: api.PhaseConvertGuest, All: RequiresConversion},
@@ -485,6 +478,7 @@ func (r *BaseMigrator) coldItinerary() *libitr.Itinerary {
 			{Name: api.PhaseCreateVM},
 			{Name: api.PhaseWaitForGuestReboots, All: WindowsWaitForGuestReboot},
 			{Name: api.PhasePostHook, All: HasPostHook},
+			{Name: api.PhaseTeardownCopyAppliance, All: CopyAppliance},
 			{Name: api.PhaseCompleted},
 		},
 	}
@@ -605,12 +599,7 @@ func (r *BasePredicate) Evaluate(flag libitr.Flag) (allowed bool, err error) {
 	case WaitForFinalSnapshotConsolidation:
 		allowed = settings.Settings.WaitForFinalSnapshotConsolidation
 	case CopyAppliance:
-		var useCopyAppliance bool
-		useCopyAppliance, err = settings.Settings.CopyAppliance.EnabledForPlan(r.context.Plan, r.vm.Ref)
-		if err != nil {
-			return
-		}
-		allowed = useCopyAppliance
+		allowed = settings.Settings.CopyAppliance.EnabledForPlan(r.context.Plan)
 	}
 
 	return
