@@ -3,14 +3,12 @@ package copyappliance
 import (
 	"context"
 	"errors"
-	stderr "errors"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi/vim25/types"
 	"golang.org/x/crypto/ssh"
@@ -42,7 +40,7 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 	if err != nil {
 		log := []interface{}{"phase", r.context.Appliance.Status.Phase}
 		var detail *liberr.Error
-		if stderr.As(err, &detail) && len(detail.Context()) > 0 {
+		if errors.As(err, &detail) && len(detail.Context()) > 0 {
 			log = append(log, "details", detail.Context())
 		}
 		r.context.Log.Error(err, "Deploy phase failed.", log...)
@@ -132,7 +130,7 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 		fallthrough
 	case PhaseWaitForExports:
 		var done bool
-		done, err = r.WaitForExports(ctx)
+		done, err = r.context.WaitForExports(ctx)
 		if err != nil {
 			next = PhaseDeployFailed
 			break
@@ -400,14 +398,6 @@ func (r *DeployRunner) loadImage(ctx context.Context, client *ssh.Client, spec s
 	return
 }
 
-// WaitForExports reports whether the appliance has published the disk exports
-// the migration reads from, and records them.
-func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
-	return r.context.WaitForExports(ctx)
-}
-
-var errExportsIncomplete = errors.New("not all attached disks are exported yet")
-
 // exportsNotReady reports whether a failed query means the appliance is not
 // serving yet rather than that something is wrong with what it serves. The
 // announce endpoint comes up after sshd does, so for a while there is nothing
@@ -435,21 +425,4 @@ func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool
 	address = addresses[0].IP
 	ok = true
 	return
-}
-
-// Itinerary is the ordered pipeline of deploy phases.
-func (r *DeployRunner) Itinerary() *libitr.Itinerary {
-	return &libitr.Itinerary{
-		Name: "Deploy",
-		Pipeline: libitr.Pipeline{
-			{Name: PhaseCloneVM},
-			{Name: PhaseWaitForClone},
-			{Name: PhaseWaitForNetwork},
-			{Name: PhaseLoadImage},
-			{Name: PhaseConfigure},
-			{Name: PhaseWaitForExports},
-			{Name: PhaseDeployCompleted},
-			{Name: PhaseDeployFailed},
-		},
-	}
 }

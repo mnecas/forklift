@@ -150,6 +150,13 @@ func (run *Runner) stagePrerequisites() error {
 }
 
 func (run *Runner) stageEnsureTemplate() error {
+	if run.pctx == nil || run.pctx.Client == nil {
+		pctx, err := run.r.providerContext(run.ctx, run.toehold)
+		if err != nil {
+			return err
+		}
+		run.pctx = pctx
+	}
 	defer run.pctx.Client.Close(run.ctx)
 	if run.toehold.Spec.ForceRebuild {
 		_ = run.pctx.Client.DestroyVMIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)

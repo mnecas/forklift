@@ -1584,21 +1584,14 @@ func (r *KubeVirt) DeleteDataVolumes(vm *plan.VMStatus) (err error) {
 
 // EnsureNbdConnections patches migration DataVolumes with copy-appliance NBD URIs.
 func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
-	useCopyAppliance, err := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vm.Ref)
-	if err != nil {
-		return err
-	}
-	if !useCopyAppliance {
+	if !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
 		return nil
-	}
-	if vm.CopyAppliance == nil {
-		return liberr.New("copy appliance is not set on the VM status")
 	}
 
 	appliance := &api.CopyAppliance{}
-	err = r.Get(context.TODO(), client.ObjectKey{
-		Namespace: vm.CopyAppliance.Namespace,
-		Name:      vm.CopyAppliance.Name,
+	err := r.Get(context.TODO(), client.ObjectKey{
+		Namespace: r.Source.Provider.Namespace,
+		Name:      cacontroller.ApplianceName(r.Migration.UID, vm.ID),
 	}, appliance)
 	if err != nil {
 		return liberr.Wrap(err)

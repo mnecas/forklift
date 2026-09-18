@@ -5,7 +5,6 @@ import (
 
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 )
 
 // TeardownRunner drives the appliance VM from running to gone. It holds no
@@ -193,20 +192,4 @@ func (r *TeardownRunner) DestroyVM(ctx context.Context) (err error) {
 func (r *TeardownRunner) WaitForDestroyVM(ctx context.Context) (done bool, err error) {
 	done, _, err = r.context.WaitForTask(ctx)
 	return
-}
-
-// TeardownItinerary is the ordered pipeline of teardown phases.
-func TeardownItinerary() *libitr.Itinerary {
-	return &libitr.Itinerary{
-		Name: "Teardown",
-		Pipeline: libitr.Pipeline{
-			{Name: PhasePowerOff},
-			{Name: PhaseWaitForPowerOff},
-			{Name: PhaseDetachDisks},
-			{Name: PhaseWaitForDetachDisks},
-			{Name: PhaseDestroyVM},
-			{Name: PhaseWaitForDestroyVM},
-			{Name: PhaseTeardownCompleted},
-		},
-	}
 }

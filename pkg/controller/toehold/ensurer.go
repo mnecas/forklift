@@ -189,6 +189,10 @@ func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.Toeh
 	}
 
 	targetNS := toehold.TargetNS()
+	if targetNS == toehold.Spec.Provider.Namespace {
+		return nil
+	}
+
 	target := &core.Secret{}
 	err = r.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: name}, target)
 	if k8serr.IsNotFound(err) {

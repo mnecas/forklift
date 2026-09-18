@@ -309,7 +309,60 @@ func (r *Builder) PodEnvironment(vmRef ref.Ref, sourceSecret *core.Secret) (env 
 			Value: macsToIps,
 		})
 	}
+	nbdURIs, nbdErr := r.nbdDiskURIsForVM(vmRef, vm)
+	if nbdErr != nil {
+		err = nbdErr
+		return
+	}
+	if len(nbdURIs) > 0 {
+		env = append(env, core.EnvVar{
+			Name:  "V2V_nbdDisks",
+			Value: strings.Join(nbdURIs, ","),
+		})
+	}
 	return
+}
+
+// nbdDiskURIsForVM returns ordered nbd:// URIs for virt-v2v when a copy appliance
+// is exporting the VM's disks. Empty means fall back to VDDK/libvirt input.
+//
+// Lookup is driven by the appliance CR (if present) rather than only the feature
+// gate, so conversion matches an appliance that the cold itinerary already deployed.
+func (r *Builder) nbdDiskURIsForVM(vmRef ref.Ref, vm *model.VM) ([]string, error) {
+	if r.Migration == nil || r.Migration.UID == "" {
+		return nil, nil
+	}
+	connections, err := r.nbdConnectionsForVM(vmRef)
+	if err != nil {
+		notFound := k8serr.IsNotFound(err) || k8serr.IsNotFound(liberr.Unwrap(err))
+		if notFound && !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	// Shared disks are already dropped by RemoveSharedDisks when they should
+	// not be migrated; do not skip Shared here or migrateSharedDisks plans
+	// produce empty NBD input.
+	var uris []string
+	for _, disk := range vm.SortedDisksAsVmware() {
+		if disk.RDM || disk.File == "" {
+			continue
+		}
+		uri, ok := connections[disk.File]
+		if !ok {
+			uri, ok = connections[baseVolume(disk.File, r.Plan.IsWarm())]
+		}
+		if !ok {
+			return nil, liberr.New("no NBD export for disk", "backing", disk.File)
+		}
+		uris = append(uris, uri)
+	}
+	if len(uris) == 0 {
+		return nil, liberr.New(
+			"copy appliance has exports but no migratable disks mapped for NBD input",
+			"vm", vmRef.String())
+	}
+	return uris, nil
 }
 
 // isNonGlobalIPv6 returns true for link-local (fe80::/10) and ULA (fc00::/7) IPv6 addresses.
@@ -687,18 +740,15 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 	disks := vm.SortedDisksAsVmware()
 
 	var nbdConnections map[string]string
-	useCopyAppliance, caErr := settings.Settings.CopyAppliance.EnabledForPlan(r.Plan, vmRef)
-	if caErr != nil {
-		err = caErr
-		return
-	}
-	if useCopyAppliance {
-		vmStatus, found := r.Plan.Status.Migration.FindVM(vmRef)
-		if found && vmStatus.CopyAppliance != nil {
-			nbdConnections, err = r.nbdConnectionsForVM(vmRef)
-			if err != nil {
+	if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+		nbdConnections, err = r.nbdConnectionsForVM(vmRef)
+		if err != nil {
+			// Appliance may not exist yet when DataVolumes are created; NBD
+			// annotations are patched later in EnsureNbdConnections.
+			if !k8serr.IsNotFound(err) {
 				return
 			}
+			err = nil
 		}
 	}
 
@@ -814,14 +864,10 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 }
 
 func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) {
-	vmStatus, found := r.Plan.Status.Migration.FindVM(vmRef)
-	if !found || vmStatus.CopyAppliance == nil {
-		return nil, liberr.New("copy appliance reference is not set on the VM status")
-	}
 	appliance := &api.CopyAppliance{}
 	err := r.Client.Get(context.TODO(), client.ObjectKey{
-		Namespace: vmStatus.CopyAppliance.Namespace,
-		Name:      vmStatus.CopyAppliance.Name,
+		Namespace: r.Source.Provider.Namespace,
+		Name:      cacontroller.ApplianceName(r.Migration.UID, vmRef.ID),
 	}, appliance)
 	if err != nil {
 		return nil, liberr.Wrap(err)
