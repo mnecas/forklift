@@ -322,7 +322,12 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 
 	runner := DeployRunner{context: applianceContext}
 	if appliance.Status.Phase == "" {
-		runner.Begin()
+		err = runner.Begin()
+		if err != nil {
+			r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
+			err = nil
+			return
+		}
 	}
 	err = runner.Run(ctx)
 	if err != nil {
@@ -351,7 +356,12 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 	// is not an export phase, so calling Begin there would restart attach every pass.
 	if NeedsExportConvergence(appliance) &&
 		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) {
-		runner.Begin()
+		err = runner.Begin()
+		if err != nil {
+			r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
+			err = nil
+			return
+		}
 	}
 	err = runner.Run(ctx)
 	if err != nil {
@@ -388,7 +398,12 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 		// A deploy phase, an empty phase, or a previous teardown failure.
 		// Giving up means an undeletable CR and source vmdks locked forever,
 		// so a failed teardown restarts rather than parking.
-		runner.Begin()
+		err = runner.Begin()
+		if err != nil {
+			r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
+			err = nil
+			return
+		}
 	}
 	err = runner.Run(ctx)
 	if err != nil {

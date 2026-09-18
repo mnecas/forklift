@@ -331,7 +331,7 @@ func TestSSHLogin(t *testing.T) {
 		server := startSSHServer(t, public)
 		ac := sshContext(t, private, server.addr)
 
-		client, answered, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err != nil {
 			t.Fatalf("SSHLogin: %v", err)
 		}
@@ -348,7 +348,7 @@ func TestSSHLogin(t *testing.T) {
 		server := startSSHServer(t, installed)
 		ac := sshContext(t, private, server.addr)
 
-		client, answered, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err == nil {
 			t.Fatal("SSHLogin succeeded with a key the appliance does not know")
 		}
@@ -361,7 +361,7 @@ func TestSSHLogin(t *testing.T) {
 		private, _ := testKeyPair(t)
 		ac := sshContext(t, private, closedAddr(t))
 
-		client, answered, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err != nil {
 			t.Fatalf("SSHLogin: %v, want a closed port to be something to wait for", err)
 		}
@@ -381,7 +381,7 @@ func TestSSHLogin(t *testing.T) {
 			Data:       map[string][]byte{"public-key": []byte("ssh-ed25519 AAAA")},
 		}
 
-		_, _, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		_, _, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err == nil {
 			t.Fatal("SSHLogin succeeded with no private key in the secret")
 		}
@@ -396,7 +396,7 @@ func TestSSHLogin(t *testing.T) {
 		ac := sshContext(t, nil, closedAddr(t))
 		ac.ApplianceSecret = nil
 
-		_, _, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		_, _, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err == nil {
 			t.Fatal("SSHLogin succeeded with no secret at all")
 		}
@@ -424,7 +424,7 @@ func TestSSHLoginForHonoursTheContextDeadline(t *testing.T) {
 	}
 	finished := make(chan result, 1)
 	go func() {
-		client, answered, err := ac.SSHLoginFor(ctx, "127.0.0.1", sshTransferTimeout)
+		client, answered, err := ac.SSHLoginFor(ctx, "127.0.0.1", SSHFileTransferTimeout)
 		finished <- result{client, answered, err}
 	}()
 
@@ -477,7 +477,7 @@ func TestRunCommands(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public, failing...)
 		ac := sshContext(t, private, server.addr)
-		client, answered, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 		if err != nil || !answered {
 			t.Fatalf("SSHLogin: (%v, %v)", answered, err)
 		}
@@ -537,7 +537,7 @@ func applianceLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshSer
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public, failing...)
 	ac := sshContext(t, private, server.addr)
-	client, answered, err := ac.SSHLogin(context.TODO(), "127.0.0.1")
+	client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
 	if err != nil || !answered {
 		t.Fatalf("SSHLogin: (%v, %v)", answered, err)
 	}
@@ -651,7 +651,7 @@ func TestConfigure(t *testing.T) {
 	configureContext := func(t *testing.T, private []byte, addr string) *ApplianceContext {
 		t.Helper()
 		ac := sshContext(t, private, addr)
-		ac.Appliance.Status.LoadedImage = testLoadedImage
+		ac.Appliance.Status.ExporterImage = testLoadedImage
 		return ac
 	}
 

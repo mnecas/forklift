@@ -3,13 +3,12 @@ package copyappliance
 import (
 	"context"
 	"errors"
-	"syscall"
 
-	"github.com/google/go-containerregistry/pkg/v1/remote"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"github.com/kubev2v/forklift/pkg/settings"
+	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/vmware/govmomi/vim25/types"
 	"golang.org/x/crypto/ssh"
 )
@@ -19,14 +18,36 @@ import (
 // and leaves the next phase behind.
 type DeployRunner struct {
 	context *ApplianceContext
+	// registry reads the appliance's container image out of the cluster's
+	// internal registry. Nil means the real one, built on first use; a test
+	// supplies its own.
+	registry *ClusterRegistry
+}
+
+// clusterRegistry returns the registry the appliance image is read from,
+// building the real one on first use.
+func (r *DeployRunner) clusterRegistry() (registry *ClusterRegistry, err error) {
+	if r.registry == nil {
+		r.registry, err = NewClusterRegistry()
+		if err != nil {
+			return
+		}
+	}
+	registry = r.registry
+	return
 }
 
 // Begin seeds the deploy itinerary and records the vCenter the appliance VM
 // will belong to.
-func (r *DeployRunner) Begin() {
+func (r *DeployRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
-	r.context.Appliance.Status.Phase = PhaseCloneVM
 	r.context.Appliance.Status.VCenterInstanceUUID = r.context.InstanceUUID()
+	step, err := r.Itinerary().First()
+	if err != nil {
+		return
+	}
+	r.context.Appliance.Status.Phase = step.Name
+	return
 }
 
 // Run advances the deployment by one pass.
@@ -36,7 +57,13 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 		return
 	}
 
-	next, err := r.ExecutePhase(ctx)
+	err = advance(
+		ctx,
+		r.context.Appliance,
+		r.Itinerary(),
+		r.execute,
+		PhaseDeployCompleted,
+		PhaseDeployFailed)
 	if err != nil {
 		log := []interface{}{"phase", r.context.Appliance.Status.Phase}
 		var detail *liberr.Error
@@ -45,111 +72,47 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 		}
 		r.context.Log.Error(err, "Deploy phase failed.", log...)
 	}
-	r.context.Appliance.Status.Phase = next
 	return
 }
 
-// ExecutePhase runs the current phase and returns the phase to record. Steps
-// that need no wait fall through to the next in the same pass; a step that is
-// still waiting returns its own phase and picks up again on the next reconcile.
-//
-// A waiting step records the phase of the case it is in and not the phase the
-// pass started on. Those differ whenever a pass has fallen through, and the
-// recorded phase is both what the next pass re-enters at and what an operator
-// reads to see which step an appliance is sitting in.
-func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error) {
-	switch r.context.Appliance.Status.Phase {
+// execute runs one deploy step and reports whether it finished. A step with
+// nothing to wait for finishes, and the walk moves on to the next step within
+// the same pass. The terminal phases report not finished, which parks the walk
+// on them.
+func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, err error) {
+	switch phase {
 	case PhaseCloneVM:
 		err = r.CloneVM(ctx)
 		if err != nil {
-			next = PhaseDeployFailed
-			break
+			return
 		}
-		next = PhaseWaitForClone
-		fallthrough
+		done = true
 	case PhaseWaitForClone:
-		var done bool
 		done, err = r.WaitForClone(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForClone
-			return
-		}
-		next = PhaseWaitForNetwork
-		fallthrough
 	case PhaseWaitForNetwork:
-		var done bool
 		done, err = r.WaitForNetwork(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForNetwork
-			return
-		}
-		next = PhaseLoadImage
-		fallthrough
 	case PhaseLoadImage:
-		var done bool
-		done, err = r.LoadImage(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseLoadImage
-			return
-		}
-		next = PhaseConfigure
-		fallthrough
+		done, err = r.InjectImage(ctx)
 	case PhaseConfigure:
 		// LoadImage used to run after this step and now runs before it. An
 		// appliance an older controller left sitting here has therefore not
-		// loaded its image, and the fallthrough chain only ever moves forward,
-		// so it cannot reach a case above this one. Send it back, rather than
-		// install a supervisor with no image to run.
-		if r.context.Appliance.Status.LoadedImage == "" {
-			next = PhaseLoadImage
+		// loaded its image. Send it back, rather than install a supervisor with
+		// no image to run.
+		if r.context.Appliance.Status.ExporterImage == "" {
+			r.context.Appliance.Status.Phase = PhaseLoadImage
 			return
 		}
-		var done bool
 		done, err = r.Configure(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseConfigure
-			return
-		}
-		next = PhaseWaitForExports
-		fallthrough
 	case PhaseWaitForExports:
-		var done bool
-		done, err = r.context.WaitForExports(ctx)
-		if err != nil {
-			next = PhaseDeployFailed
-			break
-		}
-		if !done {
-			next = PhaseWaitForExports
-			return
-		}
-		next = PhaseDeployCompleted
-		fallthrough
+		done, err = r.WaitForExports(ctx)
 	case PhaseDeployCompleted:
-		observeExportRequest(r.context.Appliance)
+		r.context.observeExportRequest(r.context.Appliance)
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
 			Message:  "Deploying the copy appliance has succeeded.",
 		})
-		next = PhaseDeployCompleted
 	case PhaseDeployFailed:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
@@ -157,10 +120,8 @@ func (r *DeployRunner) ExecutePhase(ctx context.Context) (next string, err error
 			Category: libcnd.Critical,
 			Message:  "Deploying the copy appliance has failed.",
 		})
-		next = PhaseDeployFailed
 	default:
-		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
-		next = PhaseDeployFailed
+		err = liberr.New("unknown phase", "phase", phase)
 	}
 	return
 }
@@ -196,10 +157,6 @@ func (r *DeployRunner) WaitForClone(ctx context.Context) (done bool, err error) 
 
 // WaitForNetwork reports whether the appliance can be reached, and records the
 // addresses the guest reports itself on.
-//
-// The template gives the appliance one network, already configured, so there is
-// nothing to match up: the appliance is reachable once the guest has booted far
-// enough for VMware Tools to report an address at all.
 func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error) {
 	vm := r.context.VM(r.context.Appliance.Status.MoRef)
 	addresses, err := r.context.GuestAddresses(ctx, vm)
@@ -213,20 +170,8 @@ func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error
 }
 
 // Configure installs the NBD orchestrator on the appliance and makes sure it is
-// running. It reports whether the appliance is configured.
-//
-// The orchestrator is what turns the loaded image into exports: it finds the
-// attached disks, runs one container per disk, and announces the result. It is
-// installed as a systemd unit, and enabled, so that the appliance comes back
-// supervising its disks after a reboot rather than idle.
-//
-// An appliance that is not accepting connections yet is not a failure: the
-// guest reports its address before sshd is answering on it. Neither is a
-// supervisor that is not up yet, which is only observable one moment after
-// being asked to start. A rejected key, or a command the appliance answers, is.
+// running.
 func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
-	// Recorded by WaitForNetwork on an earlier pass, so this costs no vCenter
-	// round trip.
 	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
 	if !ok {
 		err = liberr.New(
@@ -234,8 +179,7 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 			"appliance", r.context.Appliance.Name)
 		return
 	}
-	// Both are read before logging in: neither depends on the appliance, and a
-	// misconfigured secret should be reported without holding a connection.
+
 	unit, err := r.context.renderUnit()
 	if err != nil {
 		return
@@ -245,9 +189,7 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 
-	// The orchestrator binary goes over this login, so it is opened for as long
-	// as a transfer takes rather than as long as a command takes.
-	client, answered, err := r.context.SSHLoginFor(ctx, address, sshTransferTimeout)
+	client, answered, err := r.context.SSHLoginFor(ctx, address, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
@@ -263,9 +205,6 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 
-	// Asking first is what keeps a supervisor that cannot start from costing a
-	// whole reinstall every few seconds, and from having its exports torn down
-	// by the restart at the end of every one of them.
 	installed, err := r.context.OrchestratorInstalled(client, unit, certs)
 	if err != nil {
 		return
@@ -286,10 +225,7 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 			return
 		}
 		r.context.Log.Info("Installed the appliance supervisor.",
-			"address", address, "image", r.context.Appliance.Status.LoadedImage)
-		// It was just restarted. Whether it stays up is a question for the next
-		// pass; asked now it would only catch a process that had not yet got
-		// round to failing.
+			"address", address, "image", r.context.Appliance.Status.ExporterImage)
 		return
 	}
 
@@ -298,9 +234,6 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 	if !active {
-		// Installed but down. Starting it is all that is left to try, and if
-		// that does not take either, the journal is the only thing that will
-		// say why.
 		sErr := r.context.StartOrchestrator(client)
 		if sErr != nil {
 			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
@@ -317,101 +250,87 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 	return
 }
 
-// LoadImage puts the appliance's container image into its podman store, and
-// reports whether the image is there.
-//
-// The transfer runs inside the pass and the pass waits for it, which for a few
-// hundred megabytes means one of the controller's reconcile workers is held for
-// minutes. What that buys is a step with no state to keep: it asks the
-// appliance what it already has, so a controller that restarted part way
-// through starts again rather than recovering anything.
-func (r *DeployRunner) LoadImage(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
-	if !ok {
-		err = liberr.New(
-			"the appliance reports no address to reach it on",
-			"appliance", r.context.Appliance.Name)
-		return
-	}
-	// The transfer runs over this login, so it is opened for as long as a
-	// transfer takes rather than as long as a command takes.
-	client, answered, err := r.context.SSHLoginFor(ctx, address, sshTransferTimeout)
+// InjectImage copies the appliance container image from the cluster registry
+// into the appliance VM's container registry.
+// TODO: Find a way to do the image upload that doesn't block the reconciler.
+func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
+	client, answered, err := r.context.SSHClient(ctx, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
 	if !answered {
-		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+		r.context.Log.Info("The appliance is not answering on SSH yet.")
 		return
 	}
 	defer func() {
 		_ = client.Close()
 	}()
-
 	if err = r.context.EnsurePodmanWrapper(client); err != nil {
 		return
 	}
-
-	// Asking the appliance is what makes the step idempotent. Without it a
-	// re-entry sends the whole image again.
-	loaded := r.context.Appliance.Status.LoadedImage
+	// Check if the image is already present in the podman registry
+	loaded := r.context.Appliance.Status.ExporterImage
 	if loaded != "" {
 		done, err = r.context.Probe(client, "podman image exists "+loaded)
 		if err != nil || done {
 			return
 		}
 	}
-
-	spec, err := resolveImage(ctx, r.context.Appliance.Spec.ContainerImage)
+	registry, err := r.clusterRegistry()
 	if err != nil {
 		return
 	}
-	registry, err := clusterRegistry(settings.ServiceCAFile, serviceAccountTokenFile)
+	img, err := registry.Image(ctx, r.context.Appliance.Spec.ContainerImage)
 	if err != nil {
 		return
 	}
-	return r.loadImage(ctx, client, spec, registry...)
+	return r.injectImage(client, img)
 }
 
-// loadImage is LoadImage from a resolved pull spec, which is everything about
-// the step that does not need a cluster to run.
-func (r *DeployRunner) loadImage(ctx context.Context, client *ssh.Client, spec string, registry ...remote.Option) (done bool, err error) {
-	img, err := registryImage(ctx, spec, registry...)
-	if err != nil {
-		return
-	}
-	ref, err := loadedReference(img)
+func (r *DeployRunner) injectImage(client *ssh.Client, img v1.Image) (done bool, err error) {
+	tag, err := makeTag(img)
 	if err != nil {
 		return
 	}
 	// Recorded before the transfer rather than after it. A load that is cut off
 	// can still leave the image in the store, and the next pass has to know
 	// what to ask about.
-	r.context.Appliance.Status.LoadedImage = ref.Name()
-	r.context.Log.Info("Loading the appliance image.", "image", spec, "as", ref.Name())
+	r.context.Appliance.Status.ExporterImage = tag.Name()
+	r.context.Log.Info("Starting to stream the exporter image.",
+		"imageStreamTag", r.context.Appliance.Spec.ContainerImage,
+		"as", tag.Name())
 
-	err = r.context.streamImage(client, img, ref)
+	err = r.context.streamImage(client, img, tag)
 	if err != nil {
 		return
 	}
-	r.context.Log.Info("Loaded the appliance image.", "image", ref.Name())
+	r.context.Log.Info("Done streaming the exporter image.", "image", tag.Name())
 	done = true
 	return
 }
 
-// exportsNotReady reports whether a failed query means the appliance is not
-// serving yet rather than that something is wrong with what it serves. The
-// announce endpoint comes up after sshd does, so for a while there is nothing
-// listening; and like sshd it accepts a connection slightly before it can talk
-// over it, which ends the handshake with no reply rather than with a refusal.
-//
-// A certificate that does not verify is deliberately not in here. That does not
-// improve by waiting.
-func exportsNotReady(err error) (notReady bool) {
-	var timeout interface{ Timeout() bool }
-	notReady = isStarting(err) ||
-		errors.Is(err, syscall.ECONNREFUSED) ||
-		(errors.As(err, &timeout) && timeout.Timeout())
-	return
+// WaitForExports reports whether the appliance has published the disk exports
+// the migration reads from, and records them.
+func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
+	return r.context.WaitForExports(ctx)
+}
+
+// Itinerary is the ordered pipeline of deploy phases. PhaseDeployFailed is not
+// in it: a failure is not a step the walk arrives at, it is where the walk ends
+// when a step returns an error.
+func (r *DeployRunner) Itinerary() *libitr.Itinerary {
+	return &libitr.Itinerary{
+		Name: "Deploy",
+		Pipeline: libitr.Pipeline{
+			{Name: PhaseCloneVM},
+			{Name: PhaseWaitForClone},
+			{Name: PhaseWaitForNetwork},
+			{Name: PhaseLoadImage},
+			{Name: PhaseConfigure},
+			{Name: PhaseWaitForExports},
+			{Name: PhaseDeployCompleted},
+		},
+	}
 }
 
 // applianceAddress returns the address to reach the appliance at. The appliance

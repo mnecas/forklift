@@ -66,7 +66,7 @@ var orchestratorUnitText = template.Must(
 // LoadImage put in the appliance's podman store, which is why the unit is
 // rendered per appliance rather than shipped as a fixed file.
 func (r *ApplianceContext) renderUnit() (unit string, err error) {
-	image := r.Appliance.Status.LoadedImage
+	image := r.Appliance.Status.ExporterImage
 	if image == "" {
 		err = liberr.New(
 			"the appliance has no loaded image to supervise",

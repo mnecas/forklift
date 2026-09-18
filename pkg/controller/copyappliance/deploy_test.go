@@ -52,53 +52,81 @@ func TestApplianceAddress(t *testing.T) {
 	}
 }
 
-// A pass falls through as many steps as it can, so the phase it records is not
-// the phase it started on. Recording the entry phase instead would send the
-// next pass back to a step that is already done, and would tell an operator the
+// A pass walks as many steps as it can, so the phase it records is not the
+// phase it started on. Recording the entry phase instead would send the next
+// pass back to a step that is already done, and would tell an operator the
 // appliance is waiting on something it is not.
-func TestExecutePhaseRecordsTheStepItStoppedIn(t *testing.T) {
+func TestRunRecordsTheStepItStoppedIn(t *testing.T) {
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public)
 	ac := sshContext(t, private, server.addr)
 	// The appliance answers every command, so it reads as already installed and
 	// running. Nothing is announcing exports, so the step after it cannot
 	// finish, and that is where the pass has to stop.
-	ac.Appliance.Status.LoadedImage = testLoadedImage
+	ac.Appliance.Status.ExporterImage = testLoadedImage
 	ac.Appliance.Status.Phase = PhaseConfigure
 	runner := DeployRunner{context: ac}
 
-	next, err := runner.ExecutePhase(context.TODO())
+	err := runner.Run(context.TODO())
 	if err != nil {
-		t.Fatalf("ExecutePhase: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	if next != PhaseWaitForExports {
+	if ac.Appliance.Status.Phase != PhaseWaitForExports {
 		t.Errorf("phase = %q, want %q: the pass configured the appliance and stopped waiting for its exports",
-			next, PhaseWaitForExports)
+			ac.Appliance.Status.Phase, PhaseWaitForExports)
 	}
 }
 
 // Configure used to run before LoadImage and now runs after it. An appliance
 // that an older controller left in the configure phase has no loaded image, and
-// the fallthrough chain only moves forward, so nothing would ever take it back
-// to the step it skipped: it would install a supervisor with no image to run
-// and then wait forever for exports that cannot appear.
-func TestExecutePhaseSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
+// nothing in the itinerary walks backwards, so without the shim it would
+// install a supervisor with no image to run and then wait forever for exports
+// that cannot appear.
+func TestRunSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public)
 	ac := sshContext(t, private, server.addr)
 	ac.Appliance.Status.Phase = PhaseConfigure
 	runner := DeployRunner{context: ac}
 
-	next, err := runner.ExecutePhase(context.TODO())
+	err := runner.Run(context.TODO())
 
 	if err != nil {
-		t.Fatalf("ExecutePhase: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	if next != PhaseLoadImage {
-		t.Errorf("phase = %q, want %q", next, PhaseLoadImage)
+	if ac.Appliance.Status.Phase != PhaseLoadImage {
+		t.Errorf("phase = %q, want %q", ac.Appliance.Status.Phase, PhaseLoadImage)
 	}
 	if ran := server.Ran(); len(ran) != 0 {
 		t.Errorf("ran %v, want the appliance left alone until it has an image", ran)
+	}
+}
+
+// The pipeline is the order the pass walks in, so it has to agree with the
+// order execute implements. LoadImage before Configure is the part that has
+// already been got wrong once, and the shim above is what it cost.
+func TestDeployItinerary(t *testing.T) {
+	runner := DeployRunner{context: &ApplianceContext{Appliance: testAppliance()}}
+
+	got := phaseNames(t, runner.Itinerary())
+
+	want := []string{
+		PhaseCloneVM,
+		PhaseWaitForClone,
+		PhaseWaitForNetwork,
+		PhaseLoadImage,
+		PhaseConfigure,
+		PhaseWaitForExports,
+		PhaseDeployCompleted,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("pipeline = %v, want %v", got, want)
+	}
+	// The failure phase is not a step the walk arrives at; it is where the walk
+	// ends when a step errors. A pipeline that contains it would hand it back
+	// as the step after DeployCompleted.
+	if slices.Contains(got, PhaseDeployFailed) {
+		t.Errorf("pipeline %v walks to %q", got, PhaseDeployFailed)
 	}
 }
 
@@ -266,7 +294,9 @@ func TestDeployBegin(t *testing.T) {
 		appliance.Status.TaskRef = "task-7"
 
 		runner := DeployRunner{context: testContext(appliance, "uuid-a")}
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 
 		if appliance.Status.Phase != PhaseCloneVM {
 			t.Errorf("phase = %q, want %q", appliance.Status.Phase, PhaseCloneVM)
@@ -282,7 +312,9 @@ func TestDeployBegin(t *testing.T) {
 		appliance := testAppliance()
 
 		runner := DeployRunner{context: testContext(appliance, "uuid-a")}
-		runner.Begin()
+		if err := runner.Begin(); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
 
 		if appliance.Status.VCenterInstanceUUID != "uuid-a" {
 			t.Errorf("recorded vCenter = %q, want %q", appliance.Status.VCenterInstanceUUID, "uuid-a")
