@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -106,7 +105,7 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 	case PhaseWaitForExports:
 		done, err = r.WaitForExports(ctx)
 	case PhaseDeployCompleted:
-		r.context.observeExportRequest(r.context.Appliance)
+		r.context.observeExportRequest()
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
@@ -331,17 +330,4 @@ func (r *DeployRunner) Itinerary() *libitr.Itinerary {
 			{Name: PhaseDeployCompleted},
 		},
 	}
-}
-
-// applianceAddress returns the address to reach the appliance at. The appliance
-// has one network, so the choice is only between the addresses the guest holds
-// on it; the first is the one the guest listed first, and it answers on any of
-// them.
-func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool) {
-	if len(addresses) == 0 {
-		return
-	}
-	address = addresses[0].IP
-	ok = true
-	return
 }

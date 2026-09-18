@@ -2,14 +2,11 @@ package copyappliance
 
 import (
 	"context"
-	"errors"
-	"syscall"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
-	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 )
 
 // ExportRunner drives disk release and re-export on an already-deployed appliance.
@@ -184,7 +181,7 @@ func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, er
 	case PhaseWaitForExports:
 		done, err = r.context.WaitForExports(ctx)
 	case PhaseReleased:
-		r.context.observeExportRequest(r.context.Appliance)
+		r.context.observeExportRequest()
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
@@ -192,7 +189,7 @@ func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, er
 			Message:  "Copy appliance disks have been released.",
 		})
 	case PhaseDeployCompleted:
-		r.context.observeExportRequest(r.context.Appliance)
+		r.context.observeExportRequest()
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
@@ -269,74 +266,5 @@ func (r *ExportRunner) restartOrchestrator(ctx context.Context) (done bool, err 
 		return
 	}
 	done = true
-	return
-}
-
-func (r *ApplianceContext) observeExportRequest(appliance *api.CopyAppliance) {
-	if appliance.Spec.ExportRequest != nil {
-		appliance.Status.ObservedExportRequest = appliance.Spec.ExportRequest.DeepCopy()
-	}
-}
-
-// WaitForExports reports whether the appliance has published the disk exports
-// the migration reads from, and records them.
-func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.Appliance.Status.Addresses)
-	if !ok {
-		err = liberr.New(
-			"the appliance reports no address to reach it on",
-			"appliance", r.Appliance.Name)
-		return
-	}
-	ca, certificate, key, err := r.ClientTLS()
-	if err != nil {
-		return
-	}
-	client, err := announce.NewClient(ca, certificate, key)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-
-	exports, err := client.Disks(ctx, r.announceAddr(address))
-	if err != nil {
-		if r.announceStarting(err) {
-			r.Log.Info("The appliance is not announcing its exports yet.",
-				"address", address)
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err, "address", address)
-		return
-	}
-
-	attached := r.Appliance.Spec.AttachedDisks()
-	if len(exports) < len(attached) {
-		r.Log.Info("The appliance has not exported every disk yet.",
-			"address", address,
-			"exported", len(exports),
-			"attached", len(attached))
-		return
-	}
-	matched, err := matchExports(attached, exports)
-	if err != nil {
-		err = liberr.Wrap(err, "address", address)
-		return
-	}
-	r.Appliance.Status.Exports = matched
-	r.Log.Info("The appliance is exporting its disks.",
-		"address", address, "exports", len(matched))
-	done = true
-	return
-}
-
-// announceStarting reports whether the query failed because the announce
-// endpoint is not up yet: nothing listening, a connection dropped before the
-// reply, or a timeout.
-func (r *ApplianceContext) announceStarting(err error) (ok bool) {
-	var timeout interface{ Timeout() bool }
-	ok = isStarting(err) ||
-		errors.Is(err, syscall.ECONNREFUSED) ||
-		(errors.As(err, &timeout) && timeout.Timeout())
 	return
 }

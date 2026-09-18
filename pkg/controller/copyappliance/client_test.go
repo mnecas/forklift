@@ -41,6 +41,42 @@ func guestNIC(network, mac string, ips ...string) types.GuestNicInfo {
 	return nic
 }
 
+// Both the wait and the login go through this, so an appliance that reports
+// nothing must read as "not yet" and not as an empty address to dial.
+func TestApplianceAddress(t *testing.T) {
+	tests := []struct {
+		name      string
+		addresses []api.ApplianceAddress
+		want      string
+		wantOK    bool
+	}{
+		{"the address the guest reports",
+			[]api.ApplianceAddress{
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+			},
+			"192.0.2.10", true},
+		// One adapter is reported once per address it holds, and the appliance
+		// answers on any of them.
+		{"an adapter with more than one address gives the first",
+			[]api.ApplianceAddress{
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+				{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "2001:db8::1"},
+			},
+			"192.0.2.10", true},
+		{"no addresses at all", nil, "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := applianceAddress(tc.addresses)
+
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("applianceAddress(%+v) = (%q, %v), want (%q, %v)",
+					tc.addresses, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
 // What the guest reports is not what the appliance can be reached at. An
 // adapter is described before it holds an address, and it gives itself a
 // link-local one on the way to holding a real one.

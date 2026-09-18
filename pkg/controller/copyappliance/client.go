@@ -2,13 +2,16 @@ package copyappliance
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
+	"syscall"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/fault"
@@ -305,6 +308,19 @@ func isRoutable(address string) (ok bool) {
 	return
 }
 
+// applianceAddress returns the address to reach the appliance at. The appliance
+// has one network, so the choice is only between the addresses the guest holds
+// on it; the first is the one the guest listed first, and it answers on any of
+// them.
+func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool) {
+	if len(addresses) == 0 {
+		return
+	}
+	address = addresses[0].IP
+	ok = true
+	return
+}
+
 // VM wraps a recorded moRef as a virtual machine. It costs no round trip: the
 // object is a reference, not a fetch.
 func (r *ApplianceContext) VM(moRef string) (vm *object.VirtualMachine) {
@@ -472,6 +488,76 @@ func (r *ApplianceContext) DestroyVM(ctx context.Context, vm *object.VirtualMach
 		return
 	}
 	return
+}
+
+// WaitForExports reports whether the appliance has published the disk exports
+// the migration reads from, and records them.
+func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err error) {
+	address, ok := applianceAddress(r.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.Appliance.Name)
+		return
+	}
+	ca, certificate, key, err := r.ClientTLS()
+	if err != nil {
+		return
+	}
+	client, err := announce.NewClient(ca, certificate, key)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+
+	exports, err := client.Disks(ctx, r.announceAddr(address))
+	if err != nil {
+		if r.announceStarting(err) {
+			r.Log.Info("The appliance is not announcing its exports yet.",
+				"address", address)
+			err = nil
+			return
+		}
+		err = liberr.Wrap(err, "address", address)
+		return
+	}
+
+	attached := r.Appliance.Spec.AttachedDisks()
+	if len(exports) < len(attached) {
+		r.Log.Info("The appliance has not exported every disk yet.",
+			"address", address,
+			"exported", len(exports),
+			"attached", len(attached))
+		return
+	}
+	matched, err := matchExports(attached, exports)
+	if err != nil {
+		err = liberr.Wrap(err, "address", address)
+		return
+	}
+	r.Appliance.Status.Exports = matched
+	r.Log.Info("The appliance is exporting its disks.",
+		"address", address, "exports", len(matched))
+	done = true
+	return
+}
+
+// announceStarting reports whether the query failed because the announce
+// endpoint is not up yet: nothing listening, a connection dropped before the
+// reply, or a timeout.
+func (r *ApplianceContext) announceStarting(err error) (ok bool) {
+	var timeout interface{ Timeout() bool }
+	ok = isStarting(err) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		(errors.As(err, &timeout) && timeout.Timeout())
+	return
+}
+
+// observeExportRequest records the export request the controller has converged.
+func (r *ApplianceContext) observeExportRequest() {
+	if r.Appliance.Spec.ExportRequest != nil {
+		r.Appliance.Status.ObservedExportRequest = r.Appliance.Spec.ExportRequest.DeepCopy()
+	}
 }
 
 func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.VirtualMachine) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
