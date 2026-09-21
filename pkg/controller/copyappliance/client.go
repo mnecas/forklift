@@ -249,9 +249,7 @@ func (r *ApplianceContext) TaskResult(info *types.TaskInfo) (done bool, result a
 	return
 }
 
-// GuestAddresses reports the addresses the appliance VM's guest has given
-// vCenter. A guest that is still booting, or that is not running VMware Tools,
-// reports none; that is something to wait for, not a failure.
+// GuestAddresses returns any IP addresses the guest tools are reporting.
 func (r *ApplianceContext) GuestAddresses(ctx context.Context, vm *object.VirtualMachine) (addresses []api.ApplianceAddress, err error) {
 	var managedVM mo.VirtualMachine
 	err = vm.Properties(
@@ -267,15 +265,8 @@ func (r *ApplianceContext) GuestAddresses(ctx context.Context, vm *object.Virtua
 	if managedVM.Guest == nil {
 		return
 	}
-	addresses = collectAddresses(managedVM.Guest.Net)
-	return
-}
 
-// collectAddresses converts what the guest reported into the addresses worth
-// recording. An adapter is described once per address it holds, the same shape
-// the inventory collector keeps guest networks in.
-func collectAddresses(nics []types.GuestNicInfo) (addresses []api.ApplianceAddress) {
-	for _, nic := range nics {
+	for _, nic := range managedVM.Guest.Net {
 		if nic.IpConfig == nil {
 			continue
 		}
@@ -293,9 +284,6 @@ func collectAddresses(nics []types.GuestNicInfo) (addresses []api.ApplianceAddre
 	return
 }
 
-// isRoutable reports whether an address the guest gave is one another host
-// could reach. An interface that has not finished configuring gives itself a
-// link-local address, which is not an address the appliance can be found at.
 func isRoutable(address string) (ok bool) {
 	ip := net.ParseIP(address)
 	if ip == nil {
@@ -321,8 +309,7 @@ func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool
 	return
 }
 
-// VM wraps a recorded moRef as a virtual machine. It costs no round trip: the
-// object is a reference, not a fetch.
+// VM creates a VM object from a moRef.
 func (r *ApplianceContext) VM(moRef string) (vm *object.VirtualMachine) {
 	ref := types.ManagedObjectReference{
 		Type:  "VirtualMachine",
