@@ -11,6 +11,7 @@ import (
 
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"golang.org/x/crypto/ssh"
+	core "k8s.io/api/core/v1"
 )
 
 // applianceSSHPort is the port sshd listens on in the appliance image.
@@ -26,6 +27,144 @@ const sshPrivateKeyData = "private-key"
 const sshTimeout = 30 * time.Second
 
 const SSHFileTransferTimeout = 30 * time.Minute
+
+type SSHClient struct {
+	Client     *ssh.Client
+	conn       net.Conn
+	User       string
+	Address    string
+	Port       string
+	AuthMethod ssh.AuthMethod
+}
+
+func NewSSHClient(user string, address string, port string, secret *core.Secret) (client *SSHClient, err error) {
+	key, found := secret.Data[sshPrivateKeyData]
+	if !found {
+		err = liberr.New(
+			"the appliance secret has no "+sshPrivateKeyData,
+			"namespace", secret.Namespace,
+			"name", secret.Name)
+		return
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	authMethod := ssh.PublicKeys(signer)
+	client = &SSHClient{
+		User:       user,
+		Address:    address,
+		Port:       port,
+		AuthMethod: authMethod,
+	}
+	return
+}
+
+func (r *SSHClient) Connect(ctx context.Context) (err error) {
+	if r.Client == nil {
+		err = r.Close()
+		if err != nil {
+			return
+		}
+	}
+	config := &ssh.ClientConfig{
+		User:            r.User,
+		Auth:            []ssh.AuthMethod{r.AuthMethod},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	addr := net.JoinHostPort(r.Address, r.Port)
+	dialer := &net.Dialer{}
+	netConn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return
+	}
+	cc, chans, reqs, err := ssh.NewClientConn(netConn, addr, config)
+	if err != nil {
+		_ = netConn.Close()
+		err = liberr.Wrap(err, "address", addr, "user", config.User)
+		return
+	}
+	r.conn = netConn
+	r.Client = ssh.NewClient(cc, chans, reqs)
+	return
+}
+
+// RunCommands runs each command in turn over one login and stops at the first
+// that fails. The command's output is carried into the error: a remote failure
+// says nothing useful without it.
+func (r *SSHClient) RunCommands(commands ...string) (err error) {
+	for _, command := range commands {
+		session, sErr := r.Client.NewSession()
+		if sErr != nil {
+			err = liberr.Wrap(sErr, "command", command)
+			return
+		}
+		output, cErr := session.CombinedOutput(command)
+		_ = session.Close()
+		if cErr != nil {
+			err = liberr.New(
+				"command failed",
+				"command", command,
+				"error", cErr.Error(),
+				"output", string(output))
+			return
+		}
+	}
+	return
+}
+
+func (r *SSHClient) RunWithStdin(command string, in io.Reader) (err error) {
+	session, err := r.Client.NewSession()
+	if err != nil {
+		err = liberr.Wrap(err, "command", command)
+		return
+	}
+	defer func() {
+		_ = session.Close()
+	}()
+	stderr := &bytes.Buffer{}
+	session.Stderr = stderr
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		err = liberr.Wrap(err, "command", command)
+		return
+	}
+	err = session.Start(command)
+	if err != nil {
+		err = liberr.Wrap(err, "command", command)
+		return
+	}
+	_, cErr := io.Copy(stdin, in)
+	closeErr := stdin.Close()
+	wErr := session.Wait()
+
+	switch {
+	case wErr != nil:
+		err = liberr.New(
+			"command failed",
+			"command", command,
+			"error", wErr.Error(),
+			"output", stderr.String())
+	case cErr != nil:
+		err = liberr.Wrap(cErr, "command", command)
+	case closeErr != nil:
+		err = liberr.Wrap(closeErr, "command", command)
+	}
+	return
+}
+
+func (r *SSHClient) SetTimeout(timeout time.Duration) (err error) {
+	err = r.conn.SetDeadline(time.Now().Add(timeout))
+	return
+}
+
+func (r *SSHClient) Close() (err error) {
+	err = r.Client.Close()
+	err = liberr.Wrap(err)
+	return
+}
 
 // SSHClient logs in to the appliance for as long as a login and a handful of
 // short commands take. See SSHLoginFor.
