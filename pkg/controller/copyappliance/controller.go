@@ -90,21 +90,24 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		r.Log.V(2).Info("Conditions.", "all", appliance.Status.Conditions)
 	}()
 
-	deleting := !appliance.DeletionTimestamp.IsZero()
-	if !deleting &&
-		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) &&
-		!NeedsExportConvergence(appliance) {
-		// Nothing left to do. Connecting would cost a vCenter login per watch
-		// event for a pass that cannot change anything.
+	if !r.NeedsReconcile(appliance) {
+		r.Log.Info("Nothing to do.")
 		return
 	}
+	//if !deleting &&
+	//	(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) &&
+	//	!NeedsExportConvergence(appliance) &&
+	//	!IsExportPhase(appliance.Status.Phase) {
+	//	// Nothing left to do.
+	//	return
+	//}
 
 	appliance.Status.BeginStagingConditions()
-
+	deleting := !appliance.DeletionTimestamp.IsZero()
 	switch {
 	case deleting:
 		err = r.Teardown(ctx, appliance)
-	case !deleting && RoutesToExportRunner(appliance):
+	case RoutesToExportRunner(appliance):
 		err = r.AddFinalizer(ctx, appliance)
 		if err != nil {
 			return
@@ -117,7 +120,6 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		}
 		err = r.Deploy(ctx, appliance)
 	}
-
 	appliance.Status.EndStagingConditions()
 
 	// The status is written even when the pass failed. The runner advanced the
@@ -147,6 +149,12 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		}
 	}
 	return
+}
+
+func (r Reconciler) NeedsReconcile(appliance *api.CopyAppliance) bool {
+	deleting := !appliance.DeletionTimestamp.IsZero()
+	terminalPhase := appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased
+	return deleting || !terminalPhase || NeedsExportConvergence(appliance)
 }
 
 // requeueFor returns how long to wait before the next pass. Every wait here is
