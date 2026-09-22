@@ -144,11 +144,9 @@ func BuildCheck(provider *api.Provider, toehold *api.ToeholdTemplate) (appliance
 
 // buildCheck is BuildCheck over an already-resolved inventory client.
 //
-// There is no source VM to place the appliance from, so it is placed from the
-// toehold template, which is a VM in the datacenter, folder and datastore the
-// clone lands in anyway. The inventory collects templates, and reading one by
-// moRef reaches the Get handler rather than the List handler that filters them
-// out, so placement resolves it like any other VM.
+// There is no source VM to place the appliance from, so datacenter and
+// datastore come from the toehold template VM (by moref). The clone folder is
+// taken from toehold.Spec.Folder so appliances land with the template.
 func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
 	moRef := toehold.Status.Template.Moref
 	if moRef == "" {
@@ -166,6 +164,7 @@ func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.Toeho
 	// template's own root vmdk; a check appliance exports nothing.
 	appliance.Spec.AttachDisks = nil
 	WithTemplate(appliance, TemplateInventoryPath(toehold))
+	appliance.Spec.Folder = toehold.Spec.Folder
 	// There is no source VM. The label would carry the template's ID, which
 	// reads as an appliance serving a VM that is not being migrated.
 	delete(appliance.Labels, LabelVM)

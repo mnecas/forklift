@@ -18,3 +18,12 @@ func TestFormatBytes(t *testing.T) {
 		t.Fatalf("unexpected format: %s", formatBytes(1057482752))
 	}
 }
+
+func TestNormalizeInventoryPathKeepsAbsolute(t *testing.T) {
+	if got := normalizeInventoryPath(" /Datacenter/vm/toehold-test "); got != "/Datacenter/vm/toehold-test" {
+		t.Fatalf("got %q, want leading slash preserved", got)
+	}
+	if got := normalizeInventoryPath("vm/toehold-test"); got != "vm/toehold-test" {
+		t.Fatalf("got %q, want relative path unchanged", got)
+	}
+}
