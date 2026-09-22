@@ -3,8 +3,11 @@ package copyappliance
 import (
 	"context"
 	"errors"
+	"io"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -301,12 +304,32 @@ func (r *DeployRunner) injectImage(client *SSHClient, img v1.Image) (done bool, 
 		"image", r.context.Appliance.Spec.ContainerImage,
 		"as", tag.Name())
 
-	err = r.context.streamImage(client, img, tag)
+	err = r.streamImage(client, img, tag)
 	if err != nil {
 		return
 	}
 	r.context.Log.Info("Done streaming the exporter image.", "image", tag.Name())
 	done = true
+	return
+}
+
+// streamImage writes the image into the appliance's podman store as a docker
+// archive on the load command's standard input.
+func (r *DeployRunner) streamImage(client *SSHClient, img v1.Image, ref name.Tag) (err error) {
+	reader, writer := io.Pipe()
+	go func() {
+		// A failure part way through arrives at the load side as a read error,
+		// rather than as a truncated archive that podman would reject for the
+		// wrong reason.
+		_ = writer.CloseWithError(tarball.Write(ref, img, writer))
+	}()
+	// Closing the read half is what unblocks the writer when the load command
+	// gives up before the archive is finished.
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	err = client.RunWithStdin(AppliancePodmanLoadCommand, reader)
 	return
 }
 

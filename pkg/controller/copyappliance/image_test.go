@@ -61,7 +61,9 @@ func TestStreamImage(t *testing.T) {
 			t.Fatalf("makeTag: %v", err)
 		}
 
-		err = ac.streamImage(client, img, ref)
+		runner := DeployRunner{context: ac}
+
+		err = runner.streamImage(client, img, ref)
 		if err != nil {
 			t.Fatalf("streamImage: %v", err)
 		}
@@ -124,7 +126,9 @@ func TestStreamImage(t *testing.T) {
 			t.Fatalf("makeTag: %v", err)
 		}
 
-		err = ac.streamImage(client, img, ref)
+		runner := DeployRunner{context: ac}
+
+		err = runner.streamImage(client, img, ref)
 		if err == nil {
 			t.Fatal("streamImage succeeded against an appliance that refused the load")
 		}
