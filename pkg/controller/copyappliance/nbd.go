@@ -18,8 +18,8 @@ func NbdURI(host string, port int32) string {
 	return fmt.Sprintf("nbd://%s:%d", host, port)
 }
 
-// baseVMDKPath strips a VMware snapshot suffix from a backing file path.
-func baseVMDKPath(path string) string {
+// BaseVMDKPath strips a VMware snapshot suffix from a backing file path.
+func BaseVMDKPath(path string) string {
 	if path == "" {
 		return path
 	}
@@ -59,7 +59,7 @@ func ExportNbdConnections(appliance *api.CopyAppliance) (map[string]string, erro
 		}
 		uri := NbdURI(host, export.Port)
 		connections[export.VMDKPath] = uri
-		if base := baseVMDKPath(export.VMDKPath); base != export.VMDKPath {
+		if base := BaseVMDKPath(export.VMDKPath); base != export.VMDKPath {
 			connections[base] = uri
 		}
 	}

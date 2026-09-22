@@ -30,9 +30,6 @@ func withToeholdSettings(t *testing.T) {
 	t.Cleanup(func() { settings.Settings = previous })
 	Settings.Features.Toehold = true
 	Settings.Toehold.BaseDiskContainerImage = "registry.example/rhel:9"
-	Settings.Toehold.Datastore = "ds1"
-	Settings.Toehold.Folder = "/DC0/vm"
-	Settings.Toehold.Network = "VM Network"
 	Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
 }
 
@@ -42,7 +39,14 @@ func checkProvider() *api.Provider {
 	vsphere := api.VSphere
 	return &api.Provider{
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter", UID: "provider-uid"},
-		Spec:       api.ProviderSpec{Type: &vsphere},
+		Spec: api.ProviderSpec{
+			Type: &vsphere,
+			Settings: map[string]string{
+				api.ToeholdDatastore: "ds1",
+				api.ToeholdFolder:    "/DC0/vm",
+				api.ToeholdNetwork:   "VM Network",
+			},
+		},
 	}
 }
 
@@ -256,7 +260,7 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			name:          "an unconfigured feature says so rather than waiting forever",
 			unconfigured:  true,
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   settings.ToeholdDatastore,
+			wantMessage:   "Provider.spec.settings." + api.ToeholdDatastore,
 			wantAppliance: "gone",
 		},
 	}
@@ -264,11 +268,11 @@ func TestToeholdApplianceCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			withToeholdSettings(t)
-			if tt.unconfigured {
-				Settings.Toehold.Datastore = ""
-				Settings.Toehold.Network = ""
-			}
 			provider := checkProvider()
+			if tt.unconfigured {
+				Settings.Toehold.BaseDiskContainerImage = ""
+				provider.Spec.Settings = nil
+			}
 			if tt.recorded != nil {
 				recorded := *tt.recorded
 				recorded.Type = ToeholdApplianceChecked

@@ -332,15 +332,9 @@ spec:
                 type: integer
               copy_appliance_container_image:
                 description: |-
-                  ImageStreamTag naming the nbd-container image loaded onto copy appliances
-                  (e.g. "copy-appliance:latest"). Resolved in the controller namespace.
-                type: string
-              copy_appliance_resource_pool:
-                description: |-
-                  Default vCenter resource pool for copy appliance VM clones. Inventory path
-                  (e.g. "/Datacenter/host/my-cluster/Resources"). Used when a CopyAppliance
-                  spec omits resourcePool. The template is not placed in a pool; only the
-                  cloned appliance VM is.
+                  Fully-qualified nbd-container image loaded onto copy appliances
+                  (e.g. "quay.io/kubev2v/nbd-container:latest"), or an ImageStreamTag in the
+                  controller namespace (e.g. "copy-appliance:latest").
                 type: string
               copy_appliance_ssh_user:
                 default: root
@@ -733,20 +727,13 @@ spec:
                   the operator automatically sets this from the release payload.
                 type: string
               toehold_base_disk_container_image:
-                description: Base containerdisk image for toehold templates.
+                description: |-
+                  Fully-qualified base containerdisk image for toehold templates
+                  (e.g. "registry.redhat.io/rhel9/rhel-guest-image:latest").
                 type: string
               toehold_builder_image_fqin:
                 description: Toehold builder image. Optional. If left empty, the operator
                   automatically sets this from the release payload.
-                type: string
-              toehold_datastore:
-                description: Default vCenter datastore for toehold templates.
-                type: string
-              toehold_folder:
-                description: Default vCenter folder for toehold templates.
-                type: string
-              toehold_network:
-                description: Default port group for toehold templates.
                 type: string
               toehold_template_cpu:
                 default: "2"

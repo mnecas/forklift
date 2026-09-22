@@ -155,9 +155,24 @@ func (r *DeployRunner) WaitForClone(ctx context.Context) (done bool, err error) 
 }
 
 // WaitForNetwork reports whether the appliance can be reached, and records the
-// addresses the guest reports itself on.
+// addresses the guest reports itself on. CloneSpec.PowerOn is asynchronous to
+// the clone task, so a powered-off VM may still be coming up; a failed power-on
+// task is reported instead of waiting forever for an address.
 func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error) {
 	vm := r.context.VM(r.context.Appliance.Status.MoRef)
+
+	state, err := vm.PowerState(ctx)
+	if err != nil {
+		err = liberr.Wrap(err, "vm", r.context.Appliance.Status.MoRef)
+		return
+	}
+	if state == types.VirtualMachinePowerStatePoweredOff {
+		if fault := r.context.recentTaskFault(ctx, vm); fault != "" {
+			err = liberr.New("appliance VM failed to power on: " + fault)
+		}
+		return
+	}
+
 	addresses, err := r.context.GuestAddresses(ctx, vm)
 	if err != nil {
 		return
@@ -199,10 +214,6 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 	defer func() {
 		_ = client.Close()
 	}()
-
-	if err = r.context.EnsurePodmanWrapper(client); err != nil {
-		return
-	}
 
 	installed, err := r.context.OrchestratorInstalled(client, unit, certs)
 	if err != nil {
@@ -264,9 +275,6 @@ func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
 	defer func() {
 		_ = client.Close()
 	}()
-	if err = r.context.EnsurePodmanWrapper(client); err != nil {
-		return
-	}
 	// Check if the image is already present in the podman registry
 	loaded := r.context.Appliance.Status.ExporterImage
 	if loaded != "" {
@@ -296,7 +304,7 @@ func (r *DeployRunner) injectImage(client *ssh.Client, img v1.Image) (done bool,
 	// what to ask about.
 	r.context.Appliance.Status.ExporterImage = tag.Name()
 	r.context.Log.Info("Starting to stream the exporter image.",
-		"imageStreamTag", r.context.Appliance.Spec.ContainerImage,
+		"image", r.context.Appliance.Spec.ContainerImage,
 		"as", tag.Name())
 
 	err = r.context.streamImage(client, img, tag)

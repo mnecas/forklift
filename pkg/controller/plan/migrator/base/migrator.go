@@ -235,9 +235,7 @@ func (r *BaseMigrator) Pipeline(vm plan.VM) (pipeline []*plan.Step, err error) {
 						Progress:    libitr.Progress{Total: 1},
 					},
 				})
-		case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance,
-			api.PhaseReleaseCopyAppliance, api.PhaseWaitForCopyApplianceReleased,
-			api.PhaseRefreshCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+		case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance:
 			pipeline = appendApplianceDeploymentStep(pipeline)
 		case api.PhaseTeardownCopyAppliance:
 			pipeline = appendApplianceTeardownStep(pipeline)
@@ -290,7 +288,9 @@ func (r *BaseMigrator) Step(status *plan.VMStatus) (step string) {
 		step = DiskAllocation
 	case api.PhaseCopyDisks, api.PhaseCopyingPaused, api.PhaseRemovePreviousSnapshot,
 		api.PhaseWaitForPreviousSnapshotRemoval, api.PhaseCreateSnapshot, api.PhaseWaitForSnapshot,
-		api.PhaseStoreSnapshotDeltas, api.PhaseAddCheckpoint, api.PhaseConvertOpenstackSnapshot:
+		api.PhaseStoreSnapshotDeltas, api.PhaseAddCheckpoint, api.PhaseConvertOpenstackSnapshot,
+		api.PhaseReleaseCopyAppliance, api.PhaseWaitForCopyApplianceReleased,
+		api.PhaseRefreshCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
 		step = DiskTransfer
 	case api.PhaseCreateDataVolumes:
 		// When executing Preflight Inspection, this phase maps to the appropriate
@@ -328,9 +328,7 @@ func (r *BaseMigrator) Step(status *plan.VMStatus) (step string) {
 		step = PreflightInspection
 	case api.PhaseWaitForFinalSnapshotRemoval:
 		step = WaitForSnapshotConsolidation
-	case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance,
-		api.PhaseReleaseCopyAppliance, api.PhaseWaitForCopyApplianceReleased,
-		api.PhaseRefreshCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+	case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance:
 		step = ApplianceDeployment
 	case api.PhaseTeardownCopyAppliance:
 		step = ApplianceTeardown
@@ -350,9 +348,9 @@ func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
 			{Name: api.PhaseWaitForInitialSnapshot},
 			{Name: api.PhaseStoreInitialSnapshotDeltas, All: VSphere},
 			{Name: api.PhasePreflightInspection, All: RunInspection},
-			{Name: api.PhaseCreateDataVolumes},
 			{Name: api.PhaseCreateCopyAppliance},
 			{Name: api.PhaseWaitForCopyAppliance},
+			{Name: api.PhaseCreateDataVolumes},
 			// Precopy loop start
 			{Name: api.PhaseCopyDisks},
 			{Name: api.PhaseCopyingPaused},

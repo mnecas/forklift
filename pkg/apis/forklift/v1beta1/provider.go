@@ -91,6 +91,11 @@ const (
 	AzureSnapshotRG    = "snapshotResourceGroup"
 	AzureTargetRegion  = "targetRegion"
 	AzureSnapshotClass = "volumeSnapshotClassName"
+	// vSphere toehold / copy-appliance placement (per provider).
+	ToeholdDatastore           = "toeholdDatastore"
+	ToeholdFolder              = "toeholdFolder"
+	ToeholdNetwork             = "toeholdNetwork"
+	CopyApplianceResourcePool  = "copyApplianceResourcePool"
 )
 
 // Nutanix Prism endpoint types.
@@ -230,4 +235,12 @@ func (p *Provider) UseVddkAioOptimization() bool {
 // Whether this Hyper-V provider is configured for Failover Cluster mode.
 func (p *Provider) IsHyperVCluster() bool {
 	return p.Type() == HyperV && p.Spec.Settings[ManagementType] == HyperVCluster
+}
+
+// Setting returns a provider settings value, or empty if unset.
+func (p *Provider) Setting(key string) string {
+	if p == nil || p.Spec.Settings == nil {
+		return ""
+	}
+	return p.Spec.Settings[key]
 }

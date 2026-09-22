@@ -19,6 +19,8 @@ const (
 	NetDvSwitch    = "DvSwitch"
 	// Cluster.
 	ComputeResource = "ComputeResource"
+	// ResourcePool.
+	VirtualApp = "VirtualApp"
 	// Storage Protocol Type
 	ProtocolUnknown      ProtocolType = "Unknown"      // Unrecognized or unsupported
 	ProtocolFibreChannel ProtocolType = "FibreChannel" // High-speed network tech
@@ -149,6 +151,10 @@ type Cluster struct {
 	DrsEnabled  bool   `sql:""`
 	DrsBehavior string `sql:""`
 	DrsVms      []Ref  `sql:""`
+}
+
+type ResourcePool struct {
+	Base
 }
 
 type Host struct {
