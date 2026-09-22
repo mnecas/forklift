@@ -233,35 +233,28 @@ func (r *ExportRunner) waitForAttach(ctx context.Context) (done bool, err error)
 }
 
 func (r *ExportRunner) restartOrchestrator(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
-	if !ok {
-		err = liberr.New(
-			"the appliance reports no address to reach it on",
-			"appliance", r.context.Appliance.Name)
-		return
-	}
+	address, _ := applianceAddress(r.context.Appliance.Status.Addresses)
 
-	client, answered, err := r.context.SSHLoginFor(ctx, address, SSHFileTransferTimeout)
+	orch, ready, err := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
-	if !answered {
+	if !ready {
 		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
 		return
 	}
 	defer func() {
-		_ = client.Close()
+		_ = orch.Close()
 	}()
 
-	err = r.context.RestartOrchestrator(client)
+	err = orch.Restart()
 	if err != nil {
-		if !r.context.Alive(client) {
+		if !IsExitError(err) {
 			r.context.Log.Info(
 				"Lost the connection to the appliance while restarting the supervisor.",
 				"address", address,
 				"error", err.Error())
 			err = nil
-			return
 		}
 		return
 	}

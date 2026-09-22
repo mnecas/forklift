@@ -9,7 +9,6 @@ import (
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/vmware/govmomi/vim25/types"
-	"golang.org/x/crypto/ssh"
 )
 
 // DeployRunner drives the appliance VM from nothing to running. It holds no
@@ -186,43 +185,29 @@ func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error
 // Configure installs the NBD orchestrator on the appliance and makes sure it is
 // running.
 func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
-	if !ok {
-		err = liberr.New(
-			"the appliance reports no address to reach it on",
-			"appliance", r.context.Appliance.Name)
-		return
-	}
+	address, _ := applianceAddress(r.context.Appliance.Status.Addresses)
 
-	unit, err := r.context.renderUnit()
+	orch, ready, err := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
-	certs, err := r.context.ServerTLS()
-	if err != nil {
-		return
-	}
-
-	client, answered, err := r.context.SSHLoginFor(ctx, address, SSHFileTransferTimeout)
-	if err != nil {
-		return
-	}
-	if !answered {
-		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+	if !ready {
+		r.context.Log.Info("The appliance is not answering on SSH yet.",
+			"address", address)
 		return
 	}
 	defer func() {
-		_ = client.Close()
+		_ = orch.Close()
 	}()
 
-	installed, err := r.context.OrchestratorInstalled(client, unit, certs)
+	installed, err := orch.Installed()
 	if err != nil {
 		return
 	}
 	if !installed {
-		err = r.context.InstallOrchestrator(client, unit, certs)
+		err = orch.Install()
 		if err != nil {
-			if !r.context.Alive(client) {
+			if !IsExitError(err) {
 				// The link went away part way through. Nothing is known to be
 				// wrong with the appliance, and a deploy that fails here cannot
 				// be restarted, so this is a wait rather than a failure.
@@ -239,19 +224,19 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 
-	active, err := r.context.OrchestratorActive(client)
+	active, err := orch.Active()
 	if err != nil {
 		return
 	}
 	if !active {
-		sErr := r.context.StartOrchestrator(client)
+		sErr := orch.Start()
 		if sErr != nil {
 			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
 				"address", address)
 		}
 		r.context.Log.Info("The appliance supervisor is not running.",
 			"address", address,
-			"journal", r.context.OrchestratorLog(client))
+			"journal", orch.Log())
 		return
 	}
 
@@ -264,11 +249,11 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 // into the appliance VM's container registry.
 // TODO: Find a way to do the image upload that doesn't block the reconciler.
 func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
-	client, answered, err := r.context.SSHClient(ctx, SSHFileTransferTimeout)
+	client, ready, err := r.context.SSHClient(ctx, SSHFileTransferTimeout)
 	if err != nil {
 		return
 	}
-	if !answered {
+	if !ready {
 		r.context.Log.Info("The appliance is not answering on SSH yet.")
 		return
 	}
@@ -278,8 +263,17 @@ func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
 	// Check if the image is already present in the podman registry
 	loaded := r.context.Appliance.Status.ExporterImage
 	if loaded != "" {
-		done, err = r.context.Probe(client, "podman image exists "+loaded)
-		if err != nil || done {
+		err = client.RunCommand("podman image exists " + loaded)
+		switch {
+		case err == nil:
+			// Already loaded; nothing to send.
+			done = true
+			return
+		case IsExitError(err):
+			// podman exits non-zero for an image it does not have, which is
+			// this question's other answer.
+			err = nil
+		default:
 			return
 		}
 	}
@@ -294,7 +288,7 @@ func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
 	return r.injectImage(client, img)
 }
 
-func (r *DeployRunner) injectImage(client *ssh.Client, img v1.Image) (done bool, err error) {
+func (r *DeployRunner) injectImage(client *SSHClient, img v1.Image) (done bool, err error) {
 	tag, err := makeTag(img)
 	if err != nil {
 		return
