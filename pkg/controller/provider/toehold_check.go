@@ -251,11 +251,11 @@ func toeholdCheckInputs(toehold *api.ToeholdTemplate) []string {
 func (r *Reconciler) toeholdCheckTemplate(
 	ctx context.Context,
 	provider *api.Provider) (toehold *api.ToeholdTemplate, pending string) {
-	if missing := unsetToeholdSettings(); len(missing) > 0 {
+	if missing := unsetToeholdSettings(provider); len(missing) > 0 {
 		// ensureToeholdTemplate returns silently in this case, so no template
 		// will ever appear. Saying so is better than waiting forever.
 		pending = fmt.Sprintf(
-			"The toehold feature is enabled but not configured; set %s on the ForkliftController.",
+			"The toehold feature is enabled but not configured; set %s.",
 			strings.Join(missing, ", "))
 		return
 	}
@@ -283,20 +283,31 @@ func (r *Reconciler) toeholdCheckTemplate(
 }
 
 // unsetToeholdSettings names the settings the toehold template controller needs
-// and does not have, in the form an administrator sets them.
-func unsetToeholdSettings() (missing []string) {
-	for name, value := range map[string]string{
+// and does not have. Placement comes from the Provider; the base disk image is
+// still a ForkliftController setting.
+func unsetToeholdSettings(provider *api.Provider) (missing []string) {
+	datastore, folder, network := toeholdPlacement(provider)
+	required := map[string]string{
 		settings.ToeholdBaseDiskContainerImage: Settings.Toehold.BaseDiskContainerImage,
-		settings.ToeholdDatastore:              Settings.Toehold.Datastore,
-		settings.ToeholdFolder:                 Settings.Toehold.Folder,
-		settings.ToeholdNetwork:                Settings.Toehold.Network,
-	} {
+		"Provider.spec.settings." + api.ToeholdDatastore: datastore,
+		"Provider.spec.settings." + api.ToeholdFolder:    folder,
+		"Provider.spec.settings." + api.ToeholdNetwork:   network,
+	}
+	for name, value := range required {
 		if value == "" {
 			missing = append(missing, name)
 		}
 	}
 	slices.Sort(missing)
 	return
+}
+
+// toeholdPlacement returns datastore/folder/network for a provider's toehold
+// template from Provider.spec.settings.
+func toeholdPlacement(provider *api.Provider) (datastore, folder, network string) {
+	return provider.Setting(api.ToeholdDatastore),
+		provider.Setting(api.ToeholdFolder),
+		provider.Setting(api.ToeholdNetwork)
 }
 
 // toeholdCheckKey is where a provider's check appliance lives.

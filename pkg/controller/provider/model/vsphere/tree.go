@@ -12,8 +12,9 @@ var (
 	ClusterKind    = libref.ToKind(Cluster{})
 	HostKind       = libref.ToKind(Host{})
 	NetKind        = libref.ToKind(Network{})
-	DsKind         = libref.ToKind(Datastore{})
-	VmKind         = libref.ToKind(VM{})
+	DsKind             = libref.ToKind(Datastore{})
+	VmKind             = libref.ToKind(VM{})
+	ResourcePoolKind   = libref.ToKind(ResourcePool{})
 )
 
 // Types.

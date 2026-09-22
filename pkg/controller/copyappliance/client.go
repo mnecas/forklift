@@ -12,7 +12,6 @@ import (
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
-	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/fault"
 	"github.com/vmware/govmomi/find"
@@ -129,12 +128,9 @@ func (r *ApplianceContext) CheckInstance() (err error) {
 func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err error) {
 	poolPath := r.Appliance.Spec.ResourcePool
 	if poolPath == "" {
-		poolPath = Settings.CopyAppliance.ResourcePool
-	}
-	if poolPath == "" {
 		err = liberr.New(
-			"resource pool is not configured; set copyAppliance.spec.resourcePool or " +
-				settings.CopyApplianceResourcePool)
+			"resource pool is not configured; set copyAppliance.spec.resourcePool or Provider.spec.settings." +
+				api.CopyApplianceResourcePool)
 		return
 	}
 	pool, err := r.finder.ResourcePool(ctx, poolPath)
@@ -282,6 +278,23 @@ func (r *ApplianceContext) GuestAddresses(ctx context.Context, vm *object.Virtua
 		}
 	}
 	return
+}
+
+// recentTaskFault returns the LocalizedMessage of the most recent failed task
+// on the VM, if any.
+func (r *ApplianceContext) recentTaskFault(ctx context.Context, vm *object.VirtualMachine) string {
+	var managedVM mo.VirtualMachine
+	if err := vm.Properties(ctx, vm.Reference(), []string{"recentTask"}, &managedVM); err != nil {
+		return ""
+	}
+	for _, taskRef := range managedVM.RecentTask {
+		info, err := r.GetTaskInfo(ctx, taskRef.Value)
+		if err != nil || info == nil || info.State != types.TaskInfoStateError || info.Error == nil {
+			continue
+		}
+		return info.Error.LocalizedMessage
+	}
+	return ""
 }
 
 func isRoutable(address string) (ok bool) {

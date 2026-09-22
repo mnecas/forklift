@@ -775,10 +775,9 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
 		return nil
 	}
+	datastore, folder, network := toeholdPlacement(provider)
 	if Settings.Toehold.BaseDiskContainerImage == "" ||
-		Settings.Toehold.Datastore == "" ||
-		Settings.Toehold.Folder == "" ||
-		Settings.Toehold.Network == "" {
+		datastore == "" || folder == "" || network == "" {
 		return nil
 	}
 
@@ -791,9 +790,9 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 			CPU:       Settings.Toehold.TemplateCPU,
 			MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
 		},
-		Datastore: Settings.Toehold.Datastore,
-		Folder:    Settings.Toehold.Folder,
-		Network:   Settings.Toehold.Network,
+		Datastore: datastore,
+		Folder:    folder,
+		Network:   network,
 		Images:    api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage},
 	}
 

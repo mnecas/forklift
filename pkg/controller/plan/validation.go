@@ -1888,7 +1888,7 @@ func (r *Reconciler) validateVddkImage(plan *api.Plan) (err error) {
 		}
 		err = r.validateVddkImageJob(job, plan)
 	}
-	if plan.IsWarm() && vddkImage == "" {
+	if plan.IsWarm() && vddkImage == "" && !settings.Settings.Features.Toehold {
 		plan.Status.SetCondition(libcnd.Condition{
 			Type:     VDDKInitImageUnavailable,
 			Status:   True,

@@ -86,9 +86,9 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		return
 	}
 	if Settings.CopyAppliance.ContainerImage == "" {
-		// Also deployment-specific: it names an image stream built into this
-		// cluster's registry. Without it the appliance boots with nothing to
-		// serve exports with.
+		// Also deployment-specific: it names the nbd-container FQIN (or an
+		// ImageStreamTag in this cluster). Without it the appliance boots with
+		// nothing to serve exports with.
 		err = liberr.New(
 			"the copy appliance container image is not configured; set " +
 				settings.CopyApplianceContainerImage)
@@ -108,7 +108,7 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		// and the network is not the source VM's: the template carries all of
 		// them, and the clone inherits them.
 	}
-	err = placement(inventory, vmRef, &spec)
+	err = placement(inventory, provider, vmRef, &spec)
 	if err != nil {
 		return
 	}
@@ -198,7 +198,7 @@ func WithTemplate(appliance *api.CopyAppliance, template string) {
 // placement fills in the placement fields of spec from where the source VM
 // lives. Every value is an inventory Path, which is built from the object's
 // real parent chain and so is in the form the govmomi finder expects.
-func placement(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
+func placement(inventory web.Client, provider *api.Provider, vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
 	vm := &model.VM{}
 	err = inventory.Find(vm, vmRef)
 	if err != nil {
@@ -233,8 +233,8 @@ func placement(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec)
 	if err != nil {
 		return
 	}
-	if Settings.CopyAppliance.ResourcePool != "" {
-		spec.ResourcePool = Settings.CopyAppliance.ResourcePool
+	if pool := provider.Setting(api.CopyApplianceResourcePool); pool != "" {
+		spec.ResourcePool = pool
 	} else {
 		spec.ResourcePool = cluster.Path + "/" + rootResourcePool
 	}

@@ -183,7 +183,8 @@ spec:
               resourcePool:
                 description: |-
                   Resource pool in which the appliance VM is created. When omitted, the
-                  controller uses ForkliftController.spec.copy_appliance_resource_pool.
+                  controller uses Provider.spec.settings.copyApplianceResourcePool (with a
+                  ForkliftController fallback).
                 type: string
               secret:
                 description: |-
@@ -331,6 +332,12 @@ spec:
                   - type
                   type: object
                 type: array
+              exporterImage:
+                description: |-
+                  The reference the container image is loaded under in the appliance's
+                  podman store. It carries the digest of the image that was loaded, so an
+                  appliance holding an earlier build of the same tag does not match.
+                type: string
               exports:
                 description: |-
                   The disk exports the appliance publishes, one per attached disk. Empty
@@ -369,12 +376,6 @@ spec:
                   - wwid
                   type: object
                 type: array
-              loadedImage:
-                description: |-
-                  The reference the container image is loaded under in the appliance's
-                  podman store. It carries the digest of the image that was loaded, so an
-                  appliance holding an earlier build of the same tag does not match.
-                type: string
               moRef:
                 description: The managed object reference ID of the created appliance
                   VM.
