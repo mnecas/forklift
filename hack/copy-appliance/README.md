@@ -28,26 +28,35 @@ secrets for T1 onward.
 
 ## 1. Enable toehold and copy appliance settings
 
-Patch the `ForkliftController` (or set these in the CR spec):
+Patch the `ForkliftController` for the feature gate and images (FQINs):
 
 ```yaml
 spec:
   feature_toehold: "true"
+  toehold_builder_image_fqin: quay.io/kubev2v/toehold-builder:latest
   toehold_base_disk_container_image: registry.redhat.io/rhel9/rhel-guest-image:latest
-  toehold_datastore: datastore1
-  toehold_folder: /Datacenter/vm
-  toehold_network: "VM Network"
-  copy_appliance_container_image: copy-appliance:latest
-  copy_appliance_resource_pool: /Datacenter/host/my-cluster/Resources
+  copy_appliance_container_image: quay.io/kubev2v/nbd-container:latest
 ```
 
-The controller deployment receives these as `FEATURE_TOEHOLD`, `TOEHOLD_*`, and `COPY_APPLIANCE_*` environment variables.
+Set placement on the **vSphere Provider** (`spec.settings`):
+
+```yaml
+spec:
+  settings:
+    toeholdDatastore: datastore1
+    toeholdFolder: /Datacenter/vm
+    toeholdNetwork: "VM Network"
+    copyApplianceResourcePool: /Datacenter/host/my-cluster/Resources
+```
+
+The controller deployment receives the images as `FEATURE_TOEHOLD`, `TOEHOLD_*`, and
+`COPY_APPLIANCE_CONTAINER_IMAGE` environment variables. Placement is read from the Provider.
 
 ### Resource pool (appliance clone, not template)
 
 The **toehold template** only defines the appliance shape (root disk, network, CPU/RAM). It is uploaded as a template object; the toehold uploader discovers a pool for the import internally.
 
-The **copy appliance VM** is a **clone** of that template. The clone is placed in the resource pool named by either `CopyAppliance.spec.resourcePool` or `ForkliftController.spec.copy_appliance_resource_pool` when the spec omits it.
+The **copy appliance VM** is a **clone** of that template. The clone is placed in the resource pool named by either `CopyAppliance.spec.resourcePool` or `Provider.spec.settings.copyApplianceResourcePool` when the spec omits it.
 
 Secrets are **not** configured manually. For each vSphere provider the controller creates:
 
@@ -71,7 +80,8 @@ make image
 #   openshift-mtv/copy-appliance:latest
 ```
 
-`copy_appliance_container_image` must match the ImageStreamTag the controller resolves in its namespace.
+`copy_appliance_container_image` should be a fully-qualified pull spec (FQIN).
+An ImageStreamTag in the controller namespace is still accepted.
 
 ### ImageStream `referencePolicy: Local` (required)
 
@@ -94,7 +104,8 @@ So for copy-appliance:
 
 1. Ship (or reconcile) an ImageStream in `openshift-mtv`, e.g. `copy-appliance:latest`, imported from `registry.redhat.io/migration-toolkit-virtualization/...`.
 2. Set **`referencePolicy: Local`** on that tag.
-3. Point `ForkliftController.spec.copy_appliance_container_image` at the tag (e.g. `copy-appliance:latest`).
+3. Point `ForkliftController.spec.copy_appliance_container_image` at the FQIN
+   (or ImageStreamTag).
 4. Nothing to document for TLS: the certificates are generated per provider into `toehold-ssh-keys-<provider>-private`, alongside the SSH keys.
 
 Example ImageStream fragment:
@@ -162,7 +173,7 @@ spec:
     name: toehold-ssh-keys-vcenter-private
     namespace: openshift-mtv
   containerImage: copy-appliance:latest
-  # resourcePool: optional when ForkliftController.spec.copy_appliance_resource_pool is set
+  # resourcePool: optional when Provider.spec.settings.copyApplianceResourcePool is set
   template: /Datacenter/vm/vcenter-toehold
   datastore: datastore1
   folder: /Datacenter/vm
@@ -281,7 +292,7 @@ make query HOST=<appliance-ip>
 | CopyAppliance stuck at `Configure` / SSH errors | Template rebuilt after SSH keys were created? `forceRebuild: true` on ToeholdTemplate? |
 | `WaitForExports` never completes | nbd-container image loaded? `toehold-ssh-keys-<provider>-private` holds the five `*.pem` keys? Firewall allows TCP 8443 and 10809+? |
 | LoadImage fails with unauthorized / manifest errors | ImageStreamTag `dockerImageReference` pointing at Quay or `registry.redhat.io`? Set `referencePolicy: Local` and confirm internal registry URL. |
-| CloneVM fails: resource pool not found | Set `ForkliftController.spec.copy_appliance_resource_pool` to the real vCenter inventory path, or set `CopyAppliance.spec.resourcePool`. |
+| CloneVM fails: resource pool not found | Set `Provider.spec.settings.copyApplianceResourcePool` to the real vCenter inventory path, or set `CopyAppliance.spec.resourcePool`. |
 | Disk hash mismatch / rebuild loop | Expected when SSH keys are first added; let rebuild finish |
 | Stuck in `ReleaseDisks` / `AttachDisks` | vSphere task failed? SCSI slots free on appliance? Source disk locked by snapshot? |
 | `Released` but re-export fails at `WaitForExports` | Run `systemctl status nbd-orchestrator` on guest; firewall 8443 / 10809+ |

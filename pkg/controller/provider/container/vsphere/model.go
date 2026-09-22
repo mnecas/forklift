@@ -126,6 +126,8 @@ func (b *Base) Ref(in types.AnyType) (ref model.Ref) {
 			ref.Kind = model.DsKind
 		case Host:
 			ref.Kind = model.HostKind
+		case ResourcePool, VirtualApp:
+			ref.Kind = model.ResourcePoolKind
 		case VirtualMachine:
 			ref.Kind = model.VmKind
 		default:
@@ -650,6 +652,20 @@ type DatastoreAdapter struct {
 // The adapter model.
 func (v *DatastoreAdapter) Model() model.Model {
 	return &v.model
+}
+
+// ResourcePool model adapter.
+type ResourcePoolAdapter struct {
+	Base
+	model model.ResourcePool
+}
+
+func (v *ResourcePoolAdapter) Model() model.Model {
+	return &v.model
+}
+
+func (v *ResourcePoolAdapter) Apply(u types.ObjectUpdate) {
+	v.Base.Apply(&v.model.Base, u)
 }
 
 // Apply the update to the model.

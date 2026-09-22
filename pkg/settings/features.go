@@ -22,7 +22,7 @@ const (
 	FeatureUseConversionCR              = "FEATURE_USE_CONVERSION_CR"
 	FeatureRetainPopulatorPods          = "FEATURE_RETAIN_POPULATOR_PODS"
 	FeatureXfsRepairIgnore              = "FEATURE_XFS_REPAIR_IGNORE"
-	FeatureToehold                        = "FEATURE_TOEHOLD"
+	FeatureToehold                      = "FEATURE_TOEHOLD"
 )
 
 // OpenShift version where the FeatureVmwareSystemSerialNumber feature is supported:

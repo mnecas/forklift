@@ -1,15 +1,12 @@
 package copyappliance
 
 import (
-	"errors"
 	"strings"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
-
-var errExportsIncomplete = errors.New("not all attached disks are exported yet")
 
 // matchExports pairs announced appliance exports with the disks the controller
 // asked vSphere to attach. Every attached disk must match exactly one export

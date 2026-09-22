@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -27,11 +28,12 @@ const serviceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/t
 // validates only the token.
 const registryUser = "serviceaccount"
 
-// ClusterRegistry reads container images from the cluster's internal image
-// registry. Images are named by ImageStreamTag in the controller's own
-// namespace and pulled with the controller's service account as the credential.
+// ClusterRegistry reads container images for copy appliances. Prefer a fully
+// qualified pull spec (FQIN). An ImageStreamTag in the controller namespace is
+// still accepted and resolved against the cluster's internal registry.
 type ClusterRegistry struct {
-	// Namespace is where the appliance image's ImageStream is built.
+	// Namespace is where ImageStreamTags are resolved when the configured
+	// image is not a pull spec.
 	Namespace string
 	// CAFile is the PEM file holding the CA that signed the registry's serving
 	// certificate. The service-serving signer is in no system trust store.
@@ -76,10 +78,17 @@ func newClusterRegistry(cfg *rest.Config, namespace, caFile, tokenFile string) (
 	return
 }
 
-// Image returns the metadata for the image the ImageStreamTag points at. Only
-// the manifest and the config are fetched; the layers are read on demand.
-func (r *ClusterRegistry) Image(ctx context.Context, tag string) (img v1.Image, err error) {
-	spec, err := r.PullSpec(ctx, tag)
+// Image returns the metadata for the configured appliance image. Only the
+// manifest and the config are fetched; the layers are read on demand.
+//
+// A value containing "/" is treated as a pull spec (FQIN) and fetched directly.
+// Otherwise it is treated as an ImageStreamTag in the controller namespace.
+func (r *ClusterRegistry) Image(ctx context.Context, image string) (img v1.Image, err error) {
+	if strings.Contains(image, "/") {
+		img, err = r.registryImage(ctx, image, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		return
+	}
+	spec, err := r.PullSpec(ctx, image)
 	if err != nil {
 		return
 	}

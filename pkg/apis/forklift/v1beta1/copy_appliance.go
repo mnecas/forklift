@@ -61,7 +61,7 @@ type CopyApplianceSpec struct {
 	// Datastore that holds the appliance VM home directory.
 	Datastore string `json:"datastore"`
 	// Resource pool in which the appliance VM is created. When omitted, the
-	// controller uses ForkliftController.spec.copy_appliance_resource_pool.
+	// controller uses Provider.spec.settings.copyApplianceResourcePool.
 	// +optional
 	ResourcePool string `json:"resourcePool,omitempty"`
 	// Inventory folder in which the appliance VM is created.

@@ -57,6 +57,7 @@ const (
 	DVSwitch        = "VmwareDistributedVirtualSwitch"
 	Datastore       = "Datastore"
 	ResourcePool    = "ResourcePool"
+	VirtualApp      = "VirtualApp"
 )
 
 // Fields
@@ -261,6 +262,28 @@ var TsDatacenterVApp = &types.TraversalSpec{
 	},
 }
 
+// ComputeResource root resource pool (standalone ESXi / non-cluster).
+var TsComputeResourcePool = &types.TraversalSpec{
+	Type: ComputeResource,
+	Path: fResourcePool,
+	SelectSet: []types.BaseSelectionSpec{
+		&types.SelectionSpec{
+			Name: TraverseVApps,
+		},
+	},
+}
+
+// ClusterComputeResource root resource pool.
+var TsClusterResourcePool = &types.TraversalSpec{
+	Type: Cluster,
+	Path: fResourcePool,
+	SelectSet: []types.BaseSelectionSpec{
+		&types.SelectionSpec{
+			Name: TraverseVApps,
+		},
+	},
+}
+
 // Root Folder traversal Spec
 var TsRootFolder = &types.TraversalSpec{
 	SelectionSpec: types.SelectionSpec{
@@ -273,6 +296,8 @@ var TsRootFolder = &types.TraversalSpec{
 			Name: TraverseFolders,
 		},
 		TsComputeResourceHost,
+		TsComputeResourcePool,
+		TsClusterResourcePool,
 		TsDatacenterVM,
 		TsDatacenterHost,
 		TsDatacenterNet,
@@ -1061,6 +1086,20 @@ func (r *Collector) propertySpec() []types.PropertySpec {
 				fIormConfiguration,
 			},
 		},
+		{ // ResourcePool
+			Type: ResourcePool,
+			PathSet: []string{
+				fName,
+				fParent,
+			},
+		},
+		{ // VirtualApp (ResourcePool subtype)
+			Type: VirtualApp,
+			PathSet: []string{
+				fName,
+				fParent,
+			},
+		},
 		{ // VM
 			Type:    VirtualMachine,
 			PathSet: r.vmPathSet(),
@@ -1259,6 +1298,23 @@ func (r *Collector) selectAdapter(u types.ObjectUpdate) (Adapter, bool) {
 			model: model.Datastore{
 				Base: model.Base{
 					ID: datastoreId,
+				},
+			},
+		}
+	case ResourcePool:
+		adapter = &ResourcePoolAdapter{
+			model: model.ResourcePool{
+				Base: model.Base{
+					ID: u.Obj.Value,
+				},
+			},
+		}
+	case VirtualApp:
+		adapter = &ResourcePoolAdapter{
+			model: model.ResourcePool{
+				Base: model.Base{
+					Variant: model.VirtualApp,
+					ID:      u.Obj.Value,
 				},
 			},
 		}

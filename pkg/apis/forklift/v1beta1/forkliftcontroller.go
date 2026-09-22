@@ -197,7 +197,8 @@ type ForkliftControllerSpec struct {
 
 	// Toehold template defaults
 
-	// Base containerdisk image for toehold templates.
+	// Fully-qualified base containerdisk image for toehold templates
+	// (e.g. "registry.redhat.io/rhel9/rhel-guest-image:latest").
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	ToeholdBaseDiskContainerImage string `json:"toehold_base_disk_container_image,omitempty"`
@@ -211,23 +212,12 @@ type ForkliftControllerSpec struct {
 	// +kubebuilder:default="4096"
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	ToeholdTemplateMemoryMiB string `json:"toehold_template_memory_mib,omitempty"`
-	// Default vCenter datastore for toehold templates.
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	ToeholdDatastore string `json:"toehold_datastore,omitempty"`
-	// Default vCenter folder for toehold templates.
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	ToeholdFolder string `json:"toehold_folder,omitempty"`
-	// Default port group for toehold templates.
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	ToeholdNetwork string `json:"toehold_network,omitempty"`
 
 	// Copy appliance defaults
 
-	// ImageStreamTag naming the nbd-container image loaded onto copy appliances
-	// (e.g. "copy-appliance:latest"). Resolved in the controller namespace.
+	// Fully-qualified nbd-container image loaded onto copy appliances
+	// (e.g. "quay.io/kubev2v/nbd-container:latest"), or an ImageStreamTag in the
+	// controller namespace (e.g. "copy-appliance:latest").
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	CopyApplianceContainerImage string `json:"copy_appliance_container_image,omitempty"`
@@ -236,13 +226,6 @@ type ForkliftControllerSpec struct {
 	// +kubebuilder:default="root"
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	CopyApplianceSSHUser string `json:"copy_appliance_ssh_user,omitempty"`
-	// Default vCenter resource pool for copy appliance VM clones. Inventory path
-	// (e.g. "/Datacenter/host/my-cluster/Resources"). Used when a CopyAppliance
-	// spec omits resourcePool. The template is not placed in a pool; only the
-	// cloned appliance VM is.
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	CopyApplianceResourcePool string `json:"copy_appliance_resource_pool,omitempty"`
 
 	// Controller Resource Configuration
 

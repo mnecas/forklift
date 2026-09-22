@@ -8,6 +8,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
+	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	"github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
@@ -1943,15 +1944,17 @@ var _ = Describe("excludeDisks", func() {
 })
 
 var _ = Describe("Copy appliance DataVolumes", func() {
-	It("creates warm DataVolumes without a copy appliance reference", func() {
+	const (
+		dsID         = "ds-1"
+		diskFile     = "[datastore1] test-vm/disk-0.vmdk"
+		storageClass = "test-sc"
+		nbdURI       = "nbd://10.0.0.5:10809"
+	)
+
+	warmCopyApplianceBuilder := func(objs ...runtime.Object) *Builder {
 		settings.Settings.Features.Toehold = true
 		settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
 
-		const (
-			dsID       = "ds-1"
-			diskFile   = "[datastore1] test-vm/disk-0.vmdk"
-			storageClass = "test-sc"
-		)
 		vm := model.VM{
 			ConnectionState: string(types.VirtualMachineConnectionStateConnected),
 			UUID:            "vm-uuid",
@@ -1966,8 +1969,9 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 				}},
 			},
 		}
-		builder := createBuilder()
+		builder := createBuilder(objs...)
 		builder.Plan.Spec.Warm = true
+		builder.Plan.Provider.Source.Spec.Type = (*v1beta1.ProviderType)(ptr.To(v1beta1.VSphere))
 		builder.Source.Inventory = &mockInventory{
 			ds: model.Datastore{Resource: model.Resource{ID: dsID}},
 			vm: vm,
@@ -1980,9 +1984,41 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 				}},
 			},
 		}
+		return builder
+	}
 
+	It("fails warm DataVolumes when the copy appliance is missing", func() {
+		builder := warmCopyApplianceBuilder()
+		_, err := builder.DataVolumes(
+			ref.Ref{ID: "test-vm-id"},
+			&core.Secret{ObjectMeta: meta.ObjectMeta{Name: "test-secret"}},
+			nil,
+			&cdi.DataVolume{},
+			nil,
+		)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("annotates warm DataVolumes with NBD when the copy appliance is ready", func() {
+		appliance := &v1beta1.CopyAppliance{
+			ObjectMeta: meta.ObjectMeta{
+				Name:      cacontroller.ApplianceName("123", "test-vm-id"),
+				Namespace: "test",
+			},
+			Spec: v1beta1.CopyApplianceSpec{
+				AttachDiskPaths: []string{diskFile},
+			},
+			Status: v1beta1.CopyApplianceStatus{
+				Addresses: []v1beta1.ApplianceAddress{{IP: "10.0.0.5"}},
+				Exports: []v1beta1.ApplianceExport{{
+					VMDKPath: diskFile,
+					Port:     10809,
+				}},
+			},
+		}
+		builder := warmCopyApplianceBuilder(appliance)
 		dvs, err := builder.DataVolumes(
-			ref.Ref{ID: vm.ID},
+			ref.Ref{ID: "test-vm-id"},
 			&core.Secret{ObjectMeta: meta.ObjectMeta{Name: "test-secret"}},
 			nil,
 			&cdi.DataVolume{},
@@ -1990,7 +2026,7 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dvs).To(HaveLen(1))
-		Expect(dvs[0].Annotations).NotTo(HaveKey(planbase.AnnVddkNbdConnection))
+		Expect(dvs[0].Annotations).To(HaveKeyWithValue(planbase.AnnVddkNbdConnection, nbdURI))
 	})
 })
 

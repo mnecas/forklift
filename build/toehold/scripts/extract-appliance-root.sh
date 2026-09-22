@@ -63,25 +63,7 @@ method=ignore
 EOF
 chmod 600 /etc/NetworkManager/system-connections/vsphere-dhcp.nmconnection
 
-if [[ -f /usr/local/bin/toehold-podman.sh ]]; then
-  install -m 755 /usr/local/bin/toehold-podman.sh /usr/local/bin/toehold-podman
-else
-  install -m 755 /dev/stdin /usr/local/bin/toehold-podman <<'EOF'
-#!/bin/bash
-set -euo pipefail
-root=/opt/toehold/appliance-root
-conf="${root}/etc/containers"
-export PATH="${root}/usr/bin:${root}/usr/sbin:${PATH}"
-if [[ -x "${root}/usr/bin/conmon" ]]; then
-  export CONMON_BINARY="${root}/usr/bin/conmon"
-fi
-exec env \
-  LD_LIBRARY_PATH="${root}/usr/lib64:${root}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-  CONTAINERS_STORAGE_CONF="${conf}/storage.conf" \
-  CONTAINERS_CONF="${conf}/containers.conf" \
-  CONTAINERS_POLICY="${conf}/policy.json" \
-  "${root}/usr/bin/podman" --storage-driver vfs "$@"
-EOF
-fi
+test -f /usr/local/bin/toehold-podman.sh
+install -m 755 /usr/local/bin/toehold-podman.sh /usr/local/bin/toehold-podman
 ln -sfn /usr/local/bin/toehold-podman /usr/local/bin/podman
 ln -sfn /usr/local/bin/toehold-podman /usr/bin/podman

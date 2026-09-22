@@ -75,6 +75,12 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 	if err != nil {
 		return liberr.Wrap(err)
 	}
+	// Warm CBT leaves the source tip locked; attach the parent base VMDK instead.
+	if r.Plan.IsWarm() {
+		for i := range appliance.Spec.AttachDisks {
+			appliance.Spec.AttachDisks[i].VMDKPath = cacontroller.BaseVMDKPath(appliance.Spec.AttachDisks[i].VMDKPath)
+		}
+	}
 	cacontroller.WithTemplate(appliance, cacontroller.TemplateInventoryPath(toehold))
 
 	appliance.Name = cacontroller.ApplianceName(r.Migration.UID, vm.ID)

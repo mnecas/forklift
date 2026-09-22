@@ -134,7 +134,7 @@ func (r *fakeInventory) vmParent(kind, id string) *fakeInventory {
 func TestPlacementFollowsTheSourceVM(t *testing.T) {
 	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	tests := []struct {
@@ -165,7 +165,7 @@ func TestPlacementWalksUpToTheDatacenter(t *testing.T) {
 		Folder:   "folder-apps",
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Folder != "/DC0/vm/apps/team" {
@@ -184,7 +184,7 @@ func TestPlacementDatacenterInAFolder(t *testing.T) {
 		Resource: model.Resource{ID: "dc-1", Path: "/east/DC0"},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Datacenter != "/east/DC0" {
@@ -208,7 +208,7 @@ func TestPlacementStandaloneHost(t *testing.T) {
 		},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.ResourcePool != "/DC0/host/esx1.example.com/Resources" {
@@ -289,7 +289,7 @@ func TestPlacementErrors(t *testing.T) {
 			inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
 			tc.setup(inventory)
 			spec := api.CopyApplianceSpec{}
-			err := placement(inventory, testRef, &spec)
+			err := placement(inventory, testProvider(), testRef, &spec)
 			if err == nil {
 				t.Fatalf("placement succeeded, want an error mentioning %q", tc.want)
 			}

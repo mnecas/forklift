@@ -11,5 +11,5 @@ exec env \
   LD_LIBRARY_PATH="${root}/usr/lib64:${root}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
   CONTAINERS_STORAGE_CONF="${conf}/storage.conf" \
   CONTAINERS_CONF="${conf}/containers.conf" \
-  CONTAINERS_POLICY="${conf}/policy.json" \
+  CONTAINERS_POLICY_JSON="${conf}/policy.json" \
   "${root}/usr/bin/podman" --storage-driver vfs "$@"

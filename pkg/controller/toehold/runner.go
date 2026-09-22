@@ -164,6 +164,9 @@ func (run *Runner) stageEnsureTemplate() error {
 	}
 	ref, err := run.pctx.Client.FindTemplate(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
 	if err != nil {
+		// Template may still exist under a previous folder; wipe by name so
+		// the rebuild can land in Spec.Folder.
+		_ = run.pctx.Client.DestroyVMIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
 		return run.requireBuild()
 	}
 	storedDisk, storedConfig, err := run.pctx.Client.TemplateHashesFromVM(run.ctx, ref.VM)

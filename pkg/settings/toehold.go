@@ -28,13 +28,10 @@ const (
 
 // Toehold settings for the toehold template controller and build pod.
 type Toehold struct {
-	BuilderImage          string
+	BuilderImage           string
 	BaseDiskContainerImage string
-	TemplateCPU           int32
-	TemplateMemoryMiB     int32
-	Datastore             string
-	Folder                string
-	Network               string
+	TemplateCPU            int32
+	TemplateMemoryMiB      int32
 }
 
 func (r *Toehold) Load() error {
@@ -45,8 +42,5 @@ func (r *Toehold) Load() error {
 	r.BaseDiskContainerImage = os.Getenv(ToeholdBaseDiskContainerImage)
 	r.TemplateCPU = int32(LookupInt(ToeholdTemplateCPU, 2))
 	r.TemplateMemoryMiB = int32(LookupInt(ToeholdTemplateMemoryMiB, 4096))
-	r.Datastore = os.Getenv(ToeholdDatastore)
-	r.Folder = os.Getenv(ToeholdFolder)
-	r.Network = os.Getenv(ToeholdNetwork)
 	return nil
 }

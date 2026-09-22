@@ -24,9 +24,9 @@ import (
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	basecontroller "github.com/kubev2v/forklift/pkg/controller/base"
+	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
-	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	utils "github.com/kubev2v/forklift/pkg/controller/plan/util"
 	"github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
@@ -741,14 +741,11 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 
 	var nbdConnections map[string]string
 	if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+		// Copy-appliance itineraries create the appliance before DataVolumes so
+		// NBD URIs are present at DV creation (no direct-VDDK interim window).
 		nbdConnections, err = r.nbdConnectionsForVM(vmRef)
 		if err != nil {
-			// Appliance may not exist yet when DataVolumes are created; NBD
-			// annotations are patched later in EnsureNbdConnections.
-			if !k8serr.IsNotFound(err) {
-				return
-			}
-			err = nil
+			return
 		}
 	}
 

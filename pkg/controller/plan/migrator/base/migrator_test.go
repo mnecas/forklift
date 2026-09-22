@@ -8,7 +8,7 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
-	plancontext 	"github.com/kubev2v/forklift/pkg/controller/plan/context"
+	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
 	"github.com/kubev2v/forklift/pkg/settings"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -266,16 +266,28 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	}
 	waitCount := 0
 	teardownCount := 0
-	for _, step := range itr.Pipeline {
+	createApplianceIdx := -1
+	createDVsIdx := -1
+	for i, step := range itr.Pipeline {
 		if step.Name == api.PhaseWaitForCopyAppliance {
 			waitCount++
 		}
 		if step.Name == api.PhaseTeardownCopyAppliance {
 			teardownCount++
 		}
+		if step.Name == api.PhaseCreateCopyAppliance {
+			createApplianceIdx = i
+		}
+		if step.Name == api.PhaseCreateDataVolumes {
+			createDVsIdx = i
+		}
 	}
 	if waitCount != 1 {
 		t.Fatalf("expected one WaitForCopyAppliance phase, got %d", waitCount)
+	}
+	if createApplianceIdx < 0 || createDVsIdx < 0 || createApplianceIdx >= createDVsIdx {
+		t.Fatalf("expected CreateCopyAppliance before CreateDataVolumes, got indices appliance=%d dvs=%d",
+			createApplianceIdx, createDVsIdx)
 	}
 	if teardownCount != 1 {
 		t.Fatalf("expected one teardown phase at cutover, got %d", teardownCount)
@@ -292,8 +304,32 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	if next.Name != api.PhaseWaitForRefreshedCopyAppliance {
 		t.Fatalf("expected next phase %q after refresh, got %q", api.PhaseWaitForRefreshedCopyAppliance, next.Name)
 	}
+	seen := map[string]int{}
+	for _, step := range list {
+		seen[step.Name]++
+		if seen[step.Name] > 1 {
+			t.Fatalf("duplicate phase %q; itinerary.Next requires unique names", step.Name)
+		}
+	}
 	if len(list) == 0 {
 		t.Fatal("expected non-empty filtered itinerary")
+	}
+}
+
+func TestStep_WarmCopyApplianceReleaseRefreshBelongToDiskTransfer(t *testing.T) {
+	settings.Settings.Features.Toehold = true
+	settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	migrator := newBaseMigratorWithProvider(t, &api.Plan{Spec: api.PlanSpec{Warm: true, MigrateSharedDisks: true}}, nil)
+
+	for _, phase := range []string{
+		api.PhaseReleaseCopyAppliance,
+		api.PhaseWaitForCopyApplianceReleased,
+		api.PhaseRefreshCopyAppliance,
+		api.PhaseWaitForRefreshedCopyAppliance,
+	} {
+		if got := migrator.Step(&plan.VMStatus{Phase: phase}); got != DiskTransfer {
+			t.Errorf("Step(%s) = %q, want DiskTransfer", phase, got)
+		}
 	}
 }
 

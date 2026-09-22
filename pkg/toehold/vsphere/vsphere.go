@@ -285,12 +285,14 @@ func (c *Client) Destroy(ctx context.Context, vm *object.VirtualMachine) error {
 }
 
 func (c *Client) findVM(ctx context.Context, folderPath, name string, template bool) (*VMRef, error) {
-	vm, err := c.Finder.VirtualMachine(ctx, name)
-	if err != nil {
-		path := strings.TrimPrefix(normalizeInventoryPath(folderPath), "/")
-		if path != "" {
-			vm, err = c.Finder.VirtualMachine(ctx, path+"/"+name)
-		}
+	// Prefer folder-scoped lookup so reuse does not pick up a same-named
+	// template that still sits in a different inventory folder.
+	var vm *object.VirtualMachine
+	var err error
+	if path := normalizeInventoryPath(folderPath); path != "" {
+		vm, err = c.Finder.VirtualMachine(ctx, path+"/"+name)
+	} else {
+		vm, err = c.Finder.VirtualMachine(ctx, name)
 	}
 	if err != nil {
 		return nil, err

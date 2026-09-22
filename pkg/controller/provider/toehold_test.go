@@ -12,14 +12,17 @@ func TestToeholdTemplateDesiredSpec(t *testing.T) {
 	Settings.Toehold.BaseDiskContainerImage = "registry.example/rhel:9"
 	Settings.Toehold.TemplateCPU = 4
 	Settings.Toehold.TemplateMemoryMiB = 8192
-	Settings.Toehold.Datastore = "ds1"
-	Settings.Toehold.Folder = "/dc/vm"
-	Settings.Toehold.Network = "VM Network"
 	Settings.Toehold.BuilderImage = "builder:latest"
 
 	provider := &api.Provider{}
 	provider.Name = "vcenter"
 	provider.Namespace = "openshift-mtv"
+	provider.Spec.Settings = map[string]string{
+		api.ToeholdDatastore: "ds1",
+		api.ToeholdFolder:    "/dc/vm",
+		api.ToeholdNetwork:   "VM Network",
+	}
+	datastore, folder, network := toeholdPlacement(provider)
 
 	desired := api.ToeholdTemplateSpec{
 		Provider:     core.ObjectReference{Name: provider.Name, Namespace: provider.Namespace},
@@ -29,9 +32,9 @@ func TestToeholdTemplateDesiredSpec(t *testing.T) {
 			CPU:       Settings.Toehold.TemplateCPU,
 			MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
 		},
-		Datastore: Settings.Toehold.Datastore,
-		Folder:    Settings.Toehold.Folder,
-		Network:   Settings.Toehold.Network,
+		Datastore: datastore,
+		Folder:    folder,
+		Network:   network,
 		Images:    api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage},
 	}
 	if desired.TemplateName != "vcenter-toehold" {
@@ -39,5 +42,9 @@ func TestToeholdTemplateDesiredSpec(t *testing.T) {
 	}
 	if desired.Resources.CPU != 4 {
 		t.Fatalf("unexpected cpu %d", desired.Resources.CPU)
+	}
+	if desired.Datastore != "ds1" || desired.Folder != "/dc/vm" || desired.Network != "VM Network" {
+		t.Fatalf("unexpected placement datastore=%q folder=%q network=%q",
+			desired.Datastore, desired.Folder, desired.Network)
 	}
 }

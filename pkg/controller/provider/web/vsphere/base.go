@@ -157,6 +157,20 @@ Walk:
 			}
 			parts = append(parts, b.Name)
 			node = b
+		case model.ResourcePoolKind:
+			b, cached := r.cache[parent]
+			if !cached {
+				m := &model.ResourcePool{}
+				m.WithRef(parent)
+				err = r.DB.Get(m)
+				if err != nil {
+					return
+				}
+				b = &m.Base
+				r.cache[parent] = b
+			}
+			parts = append(parts, b.Name)
+			node = b
 		default:
 			break Walk
 		}

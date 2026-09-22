@@ -12,8 +12,6 @@ func TestCopyApplianceDefaults(t *testing.T) {
 	if applied.SSHUser != DefaultCopyApplianceSSHUser {
 		t.Errorf("SSHUser = %q, want %q", applied.SSHUser, DefaultCopyApplianceSSHUser)
 	}
-	// Nor here: the image stream exists only in the deployment's own cluster,
-	// and the builder refuses to run until it is named.
 	if applied.ContainerImage != "" {
 		t.Errorf("ContainerImage = %q, want it unset", applied.ContainerImage)
 	}
@@ -22,7 +20,6 @@ func TestCopyApplianceDefaults(t *testing.T) {
 func TestCopyApplianceFromEnvironment(t *testing.T) {
 	t.Setenv(CopyApplianceSSHUser, "appliance")
 	t.Setenv(CopyApplianceContainerImage, "copy-appliance:latest")
-	t.Setenv(CopyApplianceResourcePool, "/Datacenter/host/cluster/Resources")
 
 	applied := CopyAppliance{}
 	if err := applied.Load(); err != nil {
@@ -33,8 +30,5 @@ func TestCopyApplianceFromEnvironment(t *testing.T) {
 	}
 	if applied.ContainerImage != "copy-appliance:latest" {
 		t.Errorf("ContainerImage = %q, want the configured image", applied.ContainerImage)
-	}
-	if applied.ResourcePool != "/Datacenter/host/cluster/Resources" {
-		t.Errorf("ResourcePool = %q, want the configured pool", applied.ResourcePool)
 	}
 }
