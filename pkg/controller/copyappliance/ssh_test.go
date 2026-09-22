@@ -305,18 +305,18 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
-func TestSSHLogin(t *testing.T) {
+func TestSSHClient(t *testing.T) {
 	t.Run("a login with the installed key succeeds", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)
 		ac := sshContext(t, private, server.addr)
 
-		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
+		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
 		if err != nil {
-			t.Fatalf("SSHLogin: %v", err)
+			t.Fatalf("SSHClient: %v", err)
 		}
-		if !answered || client == nil {
-			t.Fatalf("answered = %v, client = %v, want a logged-in client", answered, client)
+		if !ready || client == nil {
+			t.Fatalf("ready = %v, client = %v, want a logged-in client", ready, client)
 		}
 		_ = client.Close()
 	})
@@ -328,12 +328,12 @@ func TestSSHLogin(t *testing.T) {
 		server := startSSHServer(t, installed)
 		ac := sshContext(t, private, server.addr)
 
-		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
+		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
 		if err == nil {
-			t.Fatal("SSHLogin succeeded with a key the appliance does not know")
+			t.Fatal("SSHClient succeeded with a key the appliance does not know")
 		}
-		if answered || client != nil {
-			t.Errorf("answered = %v, client = %v, want neither", answered, client)
+		if ready || client != nil {
+			t.Errorf("ready = %v, client = %v, want neither", ready, client)
 		}
 	})
 
@@ -341,12 +341,12 @@ func TestSSHLogin(t *testing.T) {
 		private, _ := testKeyPair(t)
 		ac := sshContext(t, private, closedAddr(t))
 
-		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
+		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
 		if err != nil {
-			t.Fatalf("SSHLogin: %v, want a closed port to be something to wait for", err)
+			t.Fatalf("SSHClient: %v, want a closed port to be something to wait for", err)
 		}
-		if answered || client != nil {
-			t.Errorf("answered = %v, client = %v, want neither", answered, client)
+		if ready || client != nil {
+			t.Errorf("ready = %v, client = %v, want neither", ready, client)
 		}
 	})
 
@@ -361,9 +361,9 @@ func TestSSHLogin(t *testing.T) {
 			Data:       map[string][]byte{"public-key": []byte("ssh-ed25519 AAAA")},
 		}
 
-		_, _, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
+		_, _, err := ac.SSHClient(context.TODO(), sshTimeout)
 		if err == nil {
-			t.Fatal("SSHLogin succeeded with no private key in the secret")
+			t.Fatal("SSHClient succeeded with no private key in the secret")
 		}
 		if !errorMentions(t, err, sshPrivateKeyData) {
 			t.Errorf("error = %q, want it to name %q", err, sshPrivateKeyData)
@@ -376,9 +376,9 @@ func TestSSHLogin(t *testing.T) {
 		ac := sshContext(t, nil, closedAddr(t))
 		ac.ApplianceSecret = nil
 
-		_, _, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
+		_, _, err := ac.SSHClient(context.TODO(), sshTimeout)
 		if err == nil {
-			t.Fatal("SSHLogin succeeded with no secret at all")
+			t.Fatal("SSHClient succeeded with no secret at all")
 		}
 		if !errorMentions(t, err, ac.Appliance.Spec.Secret.Name) {
 			t.Errorf("error = %q, want it to name the secret", err)
@@ -386,38 +386,38 @@ func TestSSHLogin(t *testing.T) {
 	})
 }
 
-// The timeout SSHLoginFor is given is what the caller is prepared to spend on
-// the transfer the login is for, and LoadImage asks for thirty minutes of it.
-// The reconcile's own context has to be able to end it sooner: otherwise one
+// The timeout SSHClient is given is what the caller is prepared to spend on the
+// transfer the login is for, and LoadImage asks for thirty minutes of it. The
+// reconcile's own context has to be able to end it sooner: otherwise one
 // appliance that accepts connections and then says nothing holds a reconcile
 // worker for the whole half hour.
-func TestSSHLoginForHonoursTheContextDeadline(t *testing.T) {
+func TestSSHClientHonoursTheContextDeadline(t *testing.T) {
 	private, _ := testKeyPair(t)
 	ac := sshContext(t, private, silentAddr(t))
 	ctx, cancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 	defer cancel()
 
 	type result struct {
-		client   *ssh.Client
-		answered bool
-		err      error
+		client *SSHClient
+		ready  bool
+		err    error
 	}
 	finished := make(chan result, 1)
 	go func() {
-		client, answered, err := ac.SSHLoginFor(ctx, "127.0.0.1", SSHFileTransferTimeout)
-		finished <- result{client, answered, err}
+		client, ready, err := ac.SSHClient(ctx, SSHFileTransferTimeout)
+		finished <- result{client, ready, err}
 	}()
 
 	select {
 	case got := <-finished:
 		if got.err == nil {
-			t.Fatal("SSHLoginFor succeeded against an appliance that never said anything")
+			t.Fatal("SSHClient succeeded against an appliance that never said anything")
 		}
-		if got.answered || got.client != nil {
-			t.Errorf("answered = %v, client = %v, want neither", got.answered, got.client)
+		if got.ready || got.client != nil {
+			t.Errorf("ready = %v, client = %v, want neither", got.ready, got.client)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("SSHLoginFor is still waiting: the login is bounded by its own timeout only")
+		t.Fatal("SSHClient is still waiting: the login is bounded by its own timeout only")
 	}
 }
 
@@ -450,44 +450,15 @@ func silentAddr(t *testing.T) (addr string) {
 	return listener.Addr().String()
 }
 
-func TestRunCommands(t *testing.T) {
-	// login is a client on an appliance that refuses the named commands.
-	login := func(t *testing.T, failing ...string) (*ApplianceContext, *sshServer, *ssh.Client) {
-		t.Helper()
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public, failing...)
-		ac := sshContext(t, private, server.addr)
-		client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
-		if err != nil || !answered {
-			t.Fatalf("SSHLogin: (%v, %v)", answered, err)
-		}
-		t.Cleanup(func() { _ = client.Close() })
-		return ac, server, client
-	}
+func TestRunCommand(t *testing.T) {
+	t.Run("the command runs on the appliance", func(t *testing.T) {
+		_, server, client := applianceLogin(t)
 
-	t.Run("every command runs in order", func(t *testing.T) {
-		ac, server, client := login(t)
-
-		err := ac.RunCommands(client, "first", "second", "third")
+		err := client.RunCommand("configure")
 		if err != nil {
-			t.Fatalf("RunCommands: %v", err)
+			t.Fatalf("RunCommand: %v", err)
 		}
-		want := []string{"first", "second", "third"}
-		if !slices.Equal(server.Ran(), want) {
-			t.Errorf("ran %v, want %v", server.Ran(), want)
-		}
-	})
-
-	// The commands configure one appliance in sequence, so running the rest
-	// after one has failed would configure it half way and call it done.
-	t.Run("the first command to fail stops the rest", func(t *testing.T) {
-		ac, server, client := login(t, "second")
-
-		err := ac.RunCommands(client, "first", "second", "third")
-		if err == nil {
-			t.Fatal("RunCommands succeeded with a failing command")
-		}
-		want := []string{"first", "second"}
+		want := []string{"configure"}
 		if !slices.Equal(server.Ran(), want) {
 			t.Errorf("ran %v, want %v", server.Ran(), want)
 		}
@@ -495,11 +466,11 @@ func TestRunCommands(t *testing.T) {
 
 	// "Process exited with status 1" on its own tells an operator nothing.
 	t.Run("a failed command carries its output into the error", func(t *testing.T) {
-		ac, _, client := login(t, "configure")
+		_, _, client := applianceLogin(t, "configure")
 
-		err := ac.RunCommands(client, "configure")
+		err := client.RunCommand("configure")
 		if err == nil {
-			t.Fatal("RunCommands succeeded with a failing command")
+			t.Fatal("RunCommand succeeded with a failing command")
 		}
 		if !errorMentions(t, err, commandFailureOutput) {
 			t.Errorf("error = %q, want it to carry %q", err, commandFailureOutput)
@@ -512,14 +483,14 @@ func TestRunCommands(t *testing.T) {
 
 // applianceLogin is a logged-in client on an appliance that refuses the named
 // commands.
-func applianceLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshServer, *ssh.Client) {
+func applianceLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshServer, *SSHClient) {
 	t.Helper()
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public, failing...)
 	ac := sshContext(t, private, server.addr)
-	client, answered, err := ac.SSHLoginFor(context.TODO(), "127.0.0.1", sshTimeout)
-	if err != nil || !answered {
-		t.Fatalf("SSHLogin: (%v, %v)", answered, err)
+	client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
+	if err != nil || !ready {
+		t.Fatalf("SSHClient: (%v, %v)", ready, err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 	return ac, server, client
@@ -527,10 +498,10 @@ func applianceLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshSer
 
 func TestRunWithStdin(t *testing.T) {
 	t.Run("the payload arrives whole and unaltered", func(t *testing.T) {
-		ac, server, client := applianceLogin(t)
+		_, server, client := applianceLogin(t)
 		payload := []byte("\x00\x01 a payload with an embedded NUL and a \n in it\xff")
 
-		err := ac.RunWithStdin(client, "load", bytes.NewReader(payload))
+		err := client.RunWithStdin("load", bytes.NewReader(payload))
 		if err != nil {
 			t.Fatalf("RunWithStdin: %v", err)
 		}
@@ -547,13 +518,13 @@ func TestRunWithStdin(t *testing.T) {
 	// window. Writing it has to keep pace with the far side reading it rather
 	// than filling the window and stopping.
 	t.Run("a payload larger than one channel window does not stall", func(t *testing.T) {
-		ac, server, client := applianceLogin(t)
+		_, server, client := applianceLogin(t)
 		payload := make([]byte, 4<<20)
 		if _, err := rand.Read(payload); err != nil {
 			t.Fatalf("generate payload: %v", err)
 		}
 
-		err := ac.RunWithStdin(client, "load", bytes.NewReader(payload))
+		err := client.RunWithStdin("load", bytes.NewReader(payload))
 		if err != nil {
 			t.Fatalf("RunWithStdin: %v", err)
 		}
@@ -566,9 +537,9 @@ func TestRunWithStdin(t *testing.T) {
 	// "Process exited with status 1" on its own tells an operator nothing, and
 	// this is the one command whose failure they will have to act on.
 	t.Run("a failed command carries its output into the error", func(t *testing.T) {
-		ac, _, client := applianceLogin(t, "load")
+		_, _, client := applianceLogin(t, "load")
 
-		err := ac.RunWithStdin(client, "load", strings.NewReader("payload"))
+		err := client.RunWithStdin("load", strings.NewReader("payload"))
 		if err == nil {
 			t.Fatal("RunWithStdin succeeded against a command that failed")
 		}
@@ -581,46 +552,51 @@ func TestRunWithStdin(t *testing.T) {
 	})
 }
 
-// A probe asks a question, so the two answers have to be told apart from not
-// getting one. Treating "no" as a failure would fail every deploy that has not
-// loaded its image yet, which is all of them.
-func TestProbe(t *testing.T) {
-	t.Run("a command that exits zero answers yes", func(t *testing.T) {
-		ac, _, client := applianceLogin(t)
+// A command the caller asked as a question has two answers, and both of them
+// come back from RunCommand the same way a lost connection does. IsExitError is
+// what tells them apart: reading "no" as a failure would fail every deploy that
+// has not loaded its image yet, which is all of them, and reading a lost
+// connection as "no" would have the caller act on an answer nobody gave.
+func TestIsExitError(t *testing.T) {
+	const command = "podman image exists something"
 
-		ok, err := ac.Probe(client, "podman image exists something")
+	t.Run("a command that exits zero has nothing to classify", func(t *testing.T) {
+		_, _, client := applianceLogin(t)
+
+		err := client.RunCommand(command)
+
 		if err != nil {
-			t.Fatalf("Probe: %v", err)
-		}
-		if !ok {
-			t.Error("ok = false, want the appliance to have answered yes")
+			t.Fatalf("RunCommand: %v", err)
 		}
 	})
 
-	t.Run("a command that exits non-zero answers no and is not a failure", func(t *testing.T) {
-		ac, _, client := applianceLogin(t, "podman image exists something")
+	t.Run("a command that exits non-zero has answered", func(t *testing.T) {
+		_, _, client := applianceLogin(t, command)
 
-		ok, err := ac.Probe(client, "podman image exists something")
-		if err != nil {
-			t.Fatalf("Probe: %v, want a non-zero exit to be an answer", err)
-		}
-		if ok {
-			t.Error("ok = true, want the appliance to have answered no")
-		}
-	})
+		err := client.RunCommand(command)
 
-	t.Run("a connection that has gone away is not an answer", func(t *testing.T) {
-		ac, _, client := applianceLogin(t)
-		if err := client.Close(); err != nil {
-			t.Fatalf("close: %v", err)
-		}
-
-		ok, err := ac.Probe(client, "podman image exists something")
 		if err == nil {
-			t.Fatal("Probe succeeded over a closed connection")
+			t.Fatal("RunCommand succeeded against a command that failed")
 		}
-		if ok {
-			t.Error("ok = true, want no answer at all")
+		if !IsExitError(err) {
+			t.Errorf("IsExitError(%v) = false, want a non-zero exit read as an answer", err)
+		}
+	})
+
+	// Dropped rather than closed from this side: the appliance going away part
+	// way through is what the caller has to tell from an answer, and a link this
+	// side has already given up on is not that.
+	t.Run("a connection that has gone away is not an answer", func(t *testing.T) {
+		_, server, client := applianceLogin(t)
+		server.dropOn(command)
+
+		err := client.RunCommand(command)
+
+		if err == nil {
+			t.Fatal("RunCommand succeeded over a connection that went away")
+		}
+		if IsExitError(err) {
+			t.Errorf("IsExitError(%v) = true, want no answer at all", err)
 		}
 	})
 }
@@ -794,9 +770,9 @@ func TestConfigure(t *testing.T) {
 		}
 	})
 
-	// Without the certificates the appliance cannot serve anything, and the
-	// controller cannot read what it serves. Sending everything else first and
-	// discovering it afterwards would leave a half-installed appliance.
+	// The secret holds both the login key and the certificates, so there is
+	// nothing to do on an appliance without one and nothing it could be left
+	// half-installed with.
 	t.Run("an appliance whose secret is missing fails before logging in", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)

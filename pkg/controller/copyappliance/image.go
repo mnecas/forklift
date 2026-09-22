@@ -8,7 +8,6 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"golang.org/x/crypto/ssh"
 )
 
 // ApplianceContainerImageName is where the image is filed in the appliance's podman
@@ -38,7 +37,7 @@ func makeTag(img v1.Image) (tag name.Tag, err error) {
 
 // streamImage writes the image into the appliance's podman store as a docker
 // archive on the load command's standard input.
-func (r *ApplianceContext) streamImage(client *ssh.Client, img v1.Image, ref name.Tag) (err error) {
+func (r *ApplianceContext) streamImage(client *SSHClient, img v1.Image, ref name.Tag) (err error) {
 	reader, writer := io.Pipe()
 	go func() {
 		// A failure part way through arrives at the load side as a read error,
@@ -52,6 +51,6 @@ func (r *ApplianceContext) streamImage(client *ssh.Client, img v1.Image, ref nam
 		_ = reader.Close()
 	}()
 
-	err = r.RunWithStdin(client, AppliancePodmanLoadCommand, reader)
+	err = client.RunWithStdin(AppliancePodmanLoadCommand, reader)
 	return
 }

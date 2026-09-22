@@ -2,6 +2,7 @@ package copyappliance
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -33,10 +34,10 @@ const testOrchestratorBinary = "#!/bin/sh\n# not really a binary\n"
 
 func TestRenderUnit(t *testing.T) {
 	t.Run("the unit describes this appliance", func(t *testing.T) {
-		ac := sshContext(t, nil, "127.0.0.1:22")
+		ac, _, orch := orchestratorLogin(t)
 		ac.Appliance.Status.ExporterImage = testLoadedImage
 
-		unit, err := ac.renderUnit()
+		unit, err := orch.renderUnit()
 		if err != nil {
 			t.Fatalf("renderUnit: %v", err)
 		}
@@ -63,9 +64,9 @@ func TestRenderUnit(t *testing.T) {
 	// The image reference is the one thing the unit cannot be written without,
 	// so rendering has to refuse rather than produce "-image=".
 	t.Run("an appliance with no loaded image has no unit", func(t *testing.T) {
-		ac := sshContext(t, nil, "127.0.0.1:22")
+		_, _, orch := orchestratorLogin(t)
 
-		_, err := ac.renderUnit()
+		_, err := orch.renderUnit()
 
 		if err == nil {
 			t.Error("rendered a unit for an appliance with no image")
@@ -73,14 +74,21 @@ func TestRenderUnit(t *testing.T) {
 	})
 }
 
-func TestInstallOrchestrator(t *testing.T) {
-	ac, server, client := applianceLogin(t)
+func TestOrchestratorInstall(t *testing.T) {
+	ac, server, orch := orchestratorLogin(t)
 	ac.Appliance.Status.ExporterImage = testLoadedImage
-	unit, certs := testInstallInputs(t, ac)
-
-	err := ac.InstallOrchestrator(client, unit, certs)
+	unit, err := orch.renderUnit()
 	if err != nil {
-		t.Fatalf("InstallOrchestrator: %v", err)
+		t.Fatalf("renderUnit: %v", err)
+	}
+	certs, err := ac.ServerTLS()
+	if err != nil {
+		t.Fatalf("ServerTLS: %v", err)
+	}
+
+	err = orch.Install()
+	if err != nil {
+		t.Fatalf("Install: %v", err)
 	}
 
 	t.Run("the certificates are the ones from the secret", func(t *testing.T) {
@@ -139,13 +147,30 @@ func TestInstallOrchestrator(t *testing.T) {
 			}
 		}
 	})
+
+	// The install configures one appliance in sequence, so running the rest
+	// after one step has failed would configure it half way and call it done.
+	t.Run("the first step to fail stops the rest", func(t *testing.T) {
+		enable := "systemctl enable " + orchestratorUnit
+		ac, server, orch := orchestratorLogin(t, enable)
+		ac.Appliance.Status.ExporterImage = testLoadedImage
+
+		err := orch.Install()
+
+		if err == nil {
+			t.Fatal("Install succeeded against an appliance that refused a step")
+		}
+		if unwanted := "systemctl restart " + orchestratorUnit; slices.Contains(server.Ran(), unwanted) {
+			t.Errorf("%q was run after an earlier step had failed; ran %v", unwanted, server.Ran())
+		}
+	})
 }
 
-func TestRestartOrchestrator(t *testing.T) {
-	ac, server, client := applianceLogin(t)
-	err := ac.RestartOrchestrator(client)
+func TestOrchestratorRestart(t *testing.T) {
+	_, server, orch := orchestratorLogin(t)
+	err := orch.Restart()
 	if err != nil {
-		t.Fatalf("RestartOrchestrator: %v", err)
+		t.Fatalf("Restart: %v", err)
 	}
 	ran := server.Ran()
 	for _, want := range []string{
@@ -160,14 +185,13 @@ func TestRestartOrchestrator(t *testing.T) {
 
 func TestOrchestratorInstalled(t *testing.T) {
 	t.Run("an appliance that matches is already installed", func(t *testing.T) {
-		ac, _, client := applianceLogin(t)
+		ac, _, orch := orchestratorLogin(t)
 		ac.Appliance.Status.ExporterImage = testLoadedImage
-		unit, certs := testInstallInputs(t, ac)
 
-		installed, err := ac.OrchestratorInstalled(client, unit, certs)
+		installed, err := orch.Installed()
 
 		if err != nil {
-			t.Fatalf("OrchestratorInstalled: %v", err)
+			t.Fatalf("Installed: %v", err)
 		}
 		if !installed {
 			t.Error("an appliance that answered yes was read as not installed")
@@ -178,14 +202,13 @@ func TestOrchestratorInstalled(t *testing.T) {
 	// first deploy and an appliance holding an older build both look.
 	t.Run("an appliance that does not match is not installed", func(t *testing.T) {
 		probe := installedProbe(t)
-		ac, _, client := applianceLogin(t, probe)
+		ac, _, orch := orchestratorLogin(t, probe)
 		ac.Appliance.Status.ExporterImage = testLoadedImage
-		unit, certs := testInstallInputs(t, ac)
 
-		installed, err := ac.OrchestratorInstalled(client, unit, certs)
+		installed, err := orch.Installed()
 
 		if err != nil {
-			t.Fatalf("OrchestratorInstalled: %v", err)
+			t.Fatalf("Installed: %v", err)
 		}
 		if installed {
 			t.Error("an appliance that answered no was read as installed")
@@ -195,37 +218,46 @@ func TestOrchestratorInstalled(t *testing.T) {
 
 // --- fixtures ---
 
-// testInstallInputs is what Configure would have worked out before logging in.
-func testInstallInputs(t *testing.T, ac *ApplianceContext) (unit string, certs map[string][]byte) {
+// orchestratorLogin is the supervisor on an appliance that refuses the named
+// commands.
+func orchestratorLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshServer, *Orchestrator) {
 	t.Helper()
-	unit, err := ac.renderUnit()
-	if err != nil {
-		t.Fatalf("renderUnit: %v", err)
+	private, public := testKeyPair(t)
+	server := startSSHServer(t, public, failing...)
+	ac := sshContext(t, private, server.addr)
+	orch, ready, err := NewOrchestrator(context.TODO(), ac, sshTimeout)
+	if err != nil || !ready {
+		t.Fatalf("NewOrchestrator: (%v, %v)", ready, err)
 	}
-	certs, err = ac.ServerTLS()
-	if err != nil {
-		t.Fatalf("ServerTLS: %v", err)
-	}
-	return
+	t.Cleanup(func() { _ = orch.Close() })
+	return ac, server, orch
 }
 
 // installedProbe is the command Configure asks "is this already installed?"
-// with, so that a test can tell the appliance to answer no to it. It does not
-// depend on the appliance's address, which is what lets it be worked out before
-// there is a server to point at.
+// with, so that a test can tell the appliance to answer no to it. The manifest
+// covers the binary, the unit and the certificates and not the address, so the
+// throwaway appliance it is worked out on gives the same answer as the one it
+// will be asked on.
 func installedProbe(t *testing.T) (command string) {
 	t.Helper()
-	ac := sshContext(t, nil, "127.0.0.1:22")
+	ac, _, orch := orchestratorLogin(t)
 	ac.Appliance.Status.ExporterImage = testLoadedImage
-	unit, certs := testInstallInputs(t, ac)
-	manifest, err := ac.manifest(unit, certs)
+	unit, err := orch.renderUnit()
+	if err != nil {
+		t.Fatalf("renderUnit: %v", err)
+	}
+	certs, err := ac.ServerTLS()
+	if err != nil {
+		t.Fatalf("ServerTLS: %v", err)
+	}
+	manifest, err := orch.manifest(unit, certs)
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
 	return "printf '%s' " + shellQuote(manifest) + " | sha256sum --status -c -"
 }
 
-// writeCommand and installBinaryCommand mirror what InstallOrchestrator sends,
+// writeCommand and installBinaryCommand mirror what Install sends,
 // so a test can ask the appliance what it was given for a particular file.
 func writeCommand(path, umask string) (command string) {
 	return "(umask " + umask + " && cat > " + path + ")"
