@@ -671,7 +671,7 @@ func TestConfigure(t *testing.T) {
 	t.Run("a connection lost part way through the install is not a failure", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public, installedProbe(t))
-		server.dropOn(writeCommand(applianceCertsDir+"/"+tlsCACert, "077"))
+		server.dropOn(writeCommand(applianceCertsDir + "/" + tlsCACert))
 		runner := DeployRunner{context: configureContext(t, private, server.addr)}
 
 		done, err := runner.Configure(context.TODO())

@@ -198,10 +198,8 @@ func (r *Orchestrator) Install() (err error) {
 	if err != nil {
 		return
 	}
-	// umask rather than a chmod afterwards: nbdkit refuses a server key any
-	// wider than the owner, and this way there is no moment where it is.
 	for _, name := range []string{tlsCACert, tlsServerCert, tlsServerKey} {
-		err = r.ssh.RunWithStdin("(umask 077 && cat > "+applianceCertsDir+"/"+name+")",
+		err = r.ssh.RunWithStdin("cat > "+applianceCertsDir+"/"+name,
 			bytes.NewReader(certs[name]))
 		if err != nil {
 			return
@@ -217,7 +215,7 @@ func (r *Orchestrator) Install() (err error) {
 	defer func() {
 		_ = binary.Close()
 	}()
-	err = r.ssh.RunWithStdin("(umask 022 && cat > "+orchestratorStaging+") && "+
+	err = r.ssh.RunWithStdin("cat > "+orchestratorStaging+" && "+
 		"chmod 0755 "+orchestratorStaging+" && "+
 		"mv -f "+orchestratorStaging+" "+orchestratorBinary,
 		binary)
@@ -225,7 +223,7 @@ func (r *Orchestrator) Install() (err error) {
 		return
 	}
 
-	err = r.ssh.RunWithStdin("(umask 022 && cat > "+orchestratorService+")",
+	err = r.ssh.RunWithStdin("cat > "+orchestratorService,
 		strings.NewReader(unit))
 	if err != nil {
 		return

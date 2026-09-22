@@ -93,7 +93,7 @@ func TestOrchestratorInstall(t *testing.T) {
 
 	t.Run("the certificates are the ones from the secret", func(t *testing.T) {
 		for _, name := range []string{tlsCACert, tlsServerCert, tlsServerKey} {
-			got, ran := server.Stdin(writeCommand(applianceCertsDir+"/"+name, "077"))
+			got, ran := server.Stdin(writeCommand(applianceCertsDir + "/" + name))
 			if !ran {
 				t.Errorf("%s was never written", name)
 				continue
@@ -104,11 +104,13 @@ func TestOrchestratorInstall(t *testing.T) {
 		}
 	})
 
-	// nbdkit refuses a server key any wider than its owner and crash-loops on
-	// one, so the mode is not housekeeping.
-	t.Run("the private key is never world readable", func(t *testing.T) {
-		if _, ran := server.Stdin(writeCommand(applianceCertsDir+"/"+tlsServerKey, "077")); !ran {
-			t.Error("the server key was not written under a 077 umask")
+	// The directory mode is the only thing keeping the server key away from
+	// other users on the appliance; the files themselves are written with
+	// whatever mode the login's umask gives.
+	t.Run("the certificates go into a directory only their owner can enter", func(t *testing.T) {
+		want := "install -d -m 0700 " + applianceCertsDir
+		if !slices.Contains(server.Ran(), want) {
+			t.Errorf("%q was not run; ran %v", want, server.Ran())
 		}
 	})
 
@@ -123,7 +125,7 @@ func TestOrchestratorInstall(t *testing.T) {
 	})
 
 	t.Run("the unit is the rendered one", func(t *testing.T) {
-		got, ran := server.Stdin(writeCommand(orchestratorService, "022"))
+		got, ran := server.Stdin(writeCommand(orchestratorService))
 		if !ran {
 			t.Fatal("the unit was never written")
 		}
@@ -259,12 +261,12 @@ func installedProbe(t *testing.T) (command string) {
 
 // writeCommand and installBinaryCommand mirror what Install sends,
 // so a test can ask the appliance what it was given for a particular file.
-func writeCommand(path, umask string) (command string) {
-	return "(umask " + umask + " && cat > " + path + ")"
+func writeCommand(path string) (command string) {
+	return "cat > " + path
 }
 
 func installBinaryCommand() (command string) {
-	return "(umask 022 && cat > " + orchestratorStaging + ") && " +
+	return "cat > " + orchestratorStaging + " && " +
 		"chmod 0755 " + orchestratorStaging + " && " +
 		"mv -f " + orchestratorStaging + " " + orchestratorBinary
 }
