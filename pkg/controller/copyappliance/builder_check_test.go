@@ -45,9 +45,9 @@ func TestBuildCheck(t *testing.T) {
 	if appliance.Spec.Template != "/DC0/vm/templates/vcenter-toehold" {
 		t.Errorf("Template = %q, want the toehold template's inventory path", appliance.Spec.Template)
 	}
-	// Placement still has to happen; it just comes from the template.
-	if appliance.Spec.Folder != "/DC0/vm/apps" || appliance.Spec.Datastore != "/DC0/datastore/datastore1" {
-		t.Errorf("placement = (%q, %q), want the template's",
+	// Folder comes from the toehold spec; datastore still from the template VM.
+	if appliance.Spec.Folder != "/DC0/vm/templates" || appliance.Spec.Datastore != "/DC0/datastore/datastore1" {
+		t.Errorf("placement = (%q, %q), want toehold folder and template datastore",
 			appliance.Spec.Folder, appliance.Spec.Datastore)
 	}
 	if appliance.Spec.Secret.Name != "toehold-ssh-keys-vcenter-private" {

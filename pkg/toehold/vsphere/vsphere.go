@@ -408,10 +408,11 @@ func (c *Client) datastoreFreeSpace(ctx context.Context, datastore *object.Datas
 	return props.Summary.FreeSpace, props.Summary.Accessible, nil
 }
 
+// normalizeInventoryPath trims space but keeps a leading "/".
+// With Finder.SetDatacenter, paths like "Datacenter/vm/child" fail while
+// "/Datacenter/vm/child" and "vm/child" succeed; stripping "/" broke nested folders.
 func normalizeInventoryPath(folder string) string {
-	p := strings.TrimSpace(folder)
-	p = strings.TrimPrefix(p, "/")
-	return p
+	return strings.TrimSpace(folder)
 }
 
 func requiredDatastoreFreeBytes(pf InventoryPreflight) int64 {
