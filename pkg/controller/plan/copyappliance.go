@@ -82,6 +82,8 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 		}
 	}
 	cacontroller.WithTemplate(appliance, cacontroller.TemplateInventoryPath(toehold))
+	// Clone into the toehold folder so appliances sit with the template.
+	appliance.Spec.Folder = toehold.Spec.Folder
 
 	appliance.Name = cacontroller.ApplianceName(r.Migration.UID, vm.ID)
 	appliance.Namespace = provider.Namespace
