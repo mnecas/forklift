@@ -2,20 +2,46 @@ package copyappliance
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sort"
 	"strings"
 	"text/template"
+	"time"
 
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"golang.org/x/crypto/ssh"
 )
+
+// Orchestrator is the NBD supervisor on the appliance, reached over an SSH
+// login. The login is bound once rather than handed to each verb.
+type Orchestrator struct {
+	context *ApplianceContext
+	ssh     *SSHClient
+}
+
+// NewOrchestrator logs in to the appliance and returns its supervisor, reporting
+// whether the appliance answered. The caller owns the result and must Close it.
+func NewOrchestrator(ctx context.Context, ac *ApplianceContext, timeout time.Duration) (orch *Orchestrator, ready bool, err error) {
+	client, ready, err := ac.SSHClient(ctx, timeout)
+	if err != nil || !ready {
+		return
+	}
+	orch = &Orchestrator{
+		context: ac,
+		ssh:     client,
+	}
+	return
+}
+
+// Close the login the supervisor is reached over.
+func (r *Orchestrator) Close() (err error) {
+	return r.ssh.Close()
+}
 
 // Where the orchestrator's pieces live on the appliance.
 const (
@@ -65,12 +91,13 @@ var orchestratorUnitText = template.Must(
 // renderUnit returns the systemd unit for this appliance. The image is the one
 // LoadImage put in the appliance's podman store, which is why the unit is
 // rendered per appliance rather than shipped as a fixed file.
-func (r *ApplianceContext) renderUnit() (unit string, err error) {
-	image := r.Appliance.Status.ExporterImage
+func (r *Orchestrator) renderUnit() (unit string, err error) {
+	appliance := r.context.Appliance
+	image := appliance.Status.ExporterImage
 	if image == "" {
 		err = liberr.New(
 			"the appliance has no loaded image to supervise",
-			"appliance", r.Appliance.Name)
+			"appliance", appliance.Name)
 		return
 	}
 	buffer := &bytes.Buffer{}
@@ -84,7 +111,7 @@ func (r *ApplianceContext) renderUnit() (unit string, err error) {
 		Binary:       orchestratorBinary,
 		CertsDir:     applianceCertsDir,
 		Image:        image,
-		AnnouncePort: r.announcePort(),
+		AnnouncePort: r.context.announcePort(),
 		BasePort:     applianceBasePort,
 	})
 	if err != nil {
@@ -95,75 +122,46 @@ func (r *ApplianceContext) renderUnit() (unit string, err error) {
 	return
 }
 
-// ServerTLS is the half of the TLS material the appliance needs: the CA to
-// verify clients against, and the certificate and key it serves with. The
-// client half stays in the cluster. Keyed by the file name each lands under in
-// applianceCertsDir.
-func (r *ApplianceContext) ServerTLS() (files map[string][]byte, err error) {
-	return r.tlsData(tlsCACert, tlsServerCert, tlsServerKey)
-}
-
-// ClientTLS is the half the controller keeps, to query the appliance's export
-// list with.
-func (r *ApplianceContext) ClientTLS() (ca, certificate, key []byte, err error) {
-	files, err := r.tlsData(tlsCACert, tlsClientCert, tlsClientKey)
-	if err != nil {
-		return
-	}
-	return files[tlsCACert], files[tlsClientCert], files[tlsClientKey], nil
-}
-
-// tlsData reads the named keys out of the appliance's secret, and reports which
-// one is missing rather than that something is.
-func (r *ApplianceContext) tlsData(keys ...string) (files map[string][]byte, err error) {
-	ref := r.Appliance.Spec.Secret
-	if r.ApplianceSecret == nil {
-		err = liberr.New(
-			"the appliance secret is missing",
-			"namespace", ref.Namespace,
-			"name", ref.Name)
-		return
-	}
-	files = make(map[string][]byte, len(keys))
-	for _, key := range keys {
-		value, found := r.ApplianceSecret.Data[key]
-		if !found || len(value) == 0 {
-			files = nil
-			err = liberr.New(
-				"the appliance secret has no "+key,
-				"namespace", r.ApplianceSecret.Namespace,
-				"name", r.ApplianceSecret.Name)
-			return
-		}
-		files[key] = value
-	}
-	return
-}
-
-// OrchestratorInstalled reports whether the appliance already holds exactly
-// what InstallOrchestrator would put there: the same binary, the same unit and
-// the same certificates. It asks in one command, over checksums, so the answer
-// costs nothing next to sending ~10MB again.
+// Installed reports whether the appliance already holds exactly what Install
+// would put there: the same binary, the same unit and the same certificates. It
+// asks in one command, over checksums, so the answer costs nothing next to
+// sending ~10MB again.
 //
 // This is deliberately separate from whether the service is running. Collapsing
 // the two would mean an appliance whose orchestrator cannot start gets the whole
 // install pushed again on every pass, and every push restarts the service and
 // tears down the exports it was supervising.
-func (r *ApplianceContext) OrchestratorInstalled(client *ssh.Client, unit string, certs map[string][]byte) (ok bool, err error) {
+func (r *Orchestrator) Installed() (ok bool, err error) {
+	unit, err := r.renderUnit()
+	if err != nil {
+		return
+	}
+	certs, err := r.context.ServerTLS()
+	if err != nil {
+		return
+	}
 	manifest, err := r.manifest(unit, certs)
 	if err != nil {
 		return
 	}
-	// sha256sum reads the manifest on its standard input and exits non-zero if
-	// any line does not match, which is an answer and so wants Probe.
-	return r.Probe(client, "printf '%s' "+shellQuote(manifest)+" | sha256sum --status -c -")
+	err = r.ssh.RunCommand(
+		"printf '%s' " + shellQuote(manifest) + " | sha256sum --status -c -")
+	switch {
+	case err == nil:
+		ok = true
+	case IsExitError(err):
+		// sha256sum reads the manifest on its standard input and exits non-zero
+		// if any line does not match, which is this question's other answer.
+		err = nil
+	}
+	return
 }
 
 // manifest is the sha256sum check file describing everything the install puts
 // on the appliance, in a fixed order so the same install always renders the
 // same manifest.
-func (r *ApplianceContext) manifest(unit string, certs map[string][]byte) (manifest string, err error) {
-	binarySum, err := fileSum(r.orchestratorSource())
+func (r *Orchestrator) manifest(unit string, certs map[string][]byte) (manifest string, err error) {
+	binarySum, err := fileSum(r.source())
 	if err != nil {
 		return
 	}
@@ -183,93 +181,123 @@ func (r *ApplianceContext) manifest(unit string, certs map[string][]byte) (manif
 	return
 }
 
-// InstallOrchestrator puts the certificates, the binary and the unit on the
-// appliance and starts the service. Enabling it is what makes the supervisor
-// come back when the appliance reboots, which is the whole reason for running
-// it under systemd rather than just launching it.
-func (r *ApplianceContext) InstallOrchestrator(client *ssh.Client, unit string, certs map[string][]byte) (err error) {
-	err = r.RunCommands(client, "install -d -m 0700 "+applianceCertsDir)
+// Install puts the certificates, the binary and the unit on the appliance and
+// starts the service. Enabling it is what makes the supervisor come back when
+// the appliance reboots, which is the whole reason for running it under systemd
+// rather than just launching it.
+func (r *Orchestrator) Install() (err error) {
+	unit, err := r.renderUnit()
+	if err != nil {
+		return
+	}
+	certs, err := r.context.ServerTLS()
+	if err != nil {
+		return
+	}
+	err = r.ssh.RunCommand("install -d -m 0700 " + applianceCertsDir)
 	if err != nil {
 		return
 	}
 	// umask rather than a chmod afterwards: nbdkit refuses a server key any
 	// wider than the owner, and this way there is no moment where it is.
 	for _, name := range []string{tlsCACert, tlsServerCert, tlsServerKey} {
-		err = r.RunWithStdin(client,
-			"(umask 077 && cat > "+applianceCertsDir+"/"+name+")",
+		err = r.ssh.RunWithStdin("(umask 077 && cat > "+applianceCertsDir+"/"+name+")",
 			bytes.NewReader(certs[name]))
 		if err != nil {
 			return
 		}
 	}
 
-	binary, err := os.Open(r.orchestratorSource())
+	source := r.source()
+	binary, err := os.Open(source)
 	if err != nil {
-		err = liberr.Wrap(err, "path", r.orchestratorSource())
+		err = liberr.Wrap(err, "path", source)
 		return
 	}
 	defer func() {
 		_ = binary.Close()
 	}()
-	err = r.RunWithStdin(client,
-		"(umask 022 && cat > "+orchestratorStaging+") && "+
-			"chmod 0755 "+orchestratorStaging+" && "+
-			"mv -f "+orchestratorStaging+" "+orchestratorBinary,
+	err = r.ssh.RunWithStdin("(umask 022 && cat > "+orchestratorStaging+") && "+
+		"chmod 0755 "+orchestratorStaging+" && "+
+		"mv -f "+orchestratorStaging+" "+orchestratorBinary,
 		binary)
 	if err != nil {
 		return
 	}
 
-	err = r.RunWithStdin(client,
-		"(umask 022 && cat > "+orchestratorService+")",
+	err = r.ssh.RunWithStdin("(umask 022 && cat > "+orchestratorService+")",
 		strings.NewReader(unit))
 	if err != nil {
 		return
 	}
 
-	return r.RunCommands(client,
+	// The commands configure one appliance in sequence, so running the rest
+	// after one has failed would configure it half way and call it done.
+	for _, command := range []string{
 		"systemctl daemon-reload",
-		"systemctl enable "+orchestratorUnit,
+		"systemctl enable " + orchestratorUnit,
 		// Clears a start limit tripped by an earlier install, which would
 		// otherwise make every restart below exit non-zero for good.
-		"systemctl reset-failed "+orchestratorUnit,
-		"systemctl restart "+orchestratorUnit)
+		"systemctl reset-failed " + orchestratorUnit,
+		"systemctl restart " + orchestratorUnit,
+	} {
+		err = r.ssh.RunCommand(command)
+		if err != nil {
+			return
+		}
+	}
+	return
 }
 
-// OrchestratorActive reports whether the supervisor is running. This is not
-// proof that it works -- systemd reports a Type=simple unit active as soon as it
-// has forked, and a crash loop is active for part of every cycle. The proof is
-// the appliance answering with its exports, which is what WaitForExports is for;
-// this only keeps Configure from reporting success over a service that is
-// plainly down.
-func (r *ApplianceContext) OrchestratorActive(client *ssh.Client) (ok bool, err error) {
-	return r.Probe(client, "systemctl is-active --quiet "+orchestratorUnit)
+// Active reports whether the supervisor is running. This is not proof that it
+// works -- systemd reports a Type=simple unit active as soon as it has forked,
+// and a crash loop is active for part of every cycle. The proof is the appliance
+// answering with its exports, which is what WaitForExports is for; this only
+// keeps Configure from reporting success over a service that is plainly down.
+func (r *Orchestrator) Active() (ok bool, err error) {
+	err = r.ssh.RunCommand("systemctl is-active --quiet " + orchestratorUnit)
+	switch {
+	case err == nil:
+		ok = true
+	case IsExitError(err):
+		// is-active exits non-zero for a unit that is not running, which is
+		// this question's other answer.
+		err = nil
+	}
+	return
 }
 
-// StartOrchestrator starts an already-installed supervisor that is not running.
-// It starts rather than restarts: a restart would tear down the exports of a
-// service that is in fact up, and reset-failed first because a unit that has
-// tripped systemd's start limit stays failed and refuses to start at all.
-func (r *ApplianceContext) StartOrchestrator(client *ssh.Client) (err error) {
-	return r.RunCommands(client,
-		"systemctl reset-failed "+orchestratorUnit,
-		"systemctl start "+orchestratorUnit)
+// Start starts an already-installed supervisor that is not running. It starts
+// rather than restarts: a restart would tear down the exports of a service that
+// is in fact up, and reset-failed first because a unit that has tripped
+// systemd's start limit stays failed and refuses to start at all.
+func (r *Orchestrator) Start() (err error) {
+	return r.systemctl("start")
 }
 
-// RestartOrchestrator restarts the supervisor so it rediscovers block devices
-// after disks are hot-attached to the appliance VM.
-func (r *ApplianceContext) RestartOrchestrator(client *ssh.Client) (err error) {
-	return r.RunCommands(client,
-		"systemctl reset-failed "+orchestratorUnit,
-		"systemctl restart "+orchestratorUnit)
+// Restart restarts the supervisor so it rediscovers block devices after disks
+// are hot-attached to the appliance VM.
+func (r *Orchestrator) Restart() (err error) {
+	return r.systemctl("restart")
 }
 
-// OrchestratorLog is the tail of the supervisor's journal, for logging when it
-// will not come up. Best effort: this runs on the path where something is
-// already wrong, and failing to collect the evidence must not replace the
-// problem being reported.
-func (r *ApplianceContext) OrchestratorLog(client *ssh.Client) (tail string) {
-	session, err := client.NewSession()
+// systemctl clears a tripped start limit and then runs the verb. A unit that
+// has tripped the limit stays failed and refuses both verbs until it is reset.
+func (r *Orchestrator) systemctl(verb string) (err error) {
+	err = r.ssh.RunCommand("systemctl reset-failed " + orchestratorUnit)
+	if err != nil {
+		return
+	}
+	err = r.ssh.RunCommand("systemctl " + verb + " " + orchestratorUnit)
+	return
+}
+
+// Log is the tail of the supervisor's journal, for logging when it will not
+// come up. Best effort: this runs on the path where something is already wrong,
+// and failing to collect the evidence must not replace the problem being
+// reported.
+func (r *Orchestrator) Log() (tail string) {
+	session, err := r.ssh.Client.NewSession()
 	if err != nil {
 		return "(no journal)"
 	}
@@ -287,25 +315,9 @@ func (r *ApplianceContext) OrchestratorLog(client *ssh.Client) (tail string) {
 	return
 }
 
-// announceAddr is the address to query the appliance's export list at.
-func (r *ApplianceContext) announceAddr(address string) (addr string) {
-	return net.JoinHostPort(address, r.announcePort())
-}
-
-// announcePort is the port the appliance announces its exports on. Empty means
-// the port the orchestrator defaults to, which is the only one an appliance is
-// installed with; a test appliance is on whatever it was given.
-func (r *ApplianceContext) announcePort() (port string) {
-	port = r.announcePortOverride
-	if port == "" {
-		port = applianceAnnouncePort
-	}
-	return
-}
-
-// orchestratorSource is the binary to ship to the appliance.
-func (r *ApplianceContext) orchestratorSource() (path string) {
-	path = r.orchestratorPath
+// source is the binary to ship to the appliance.
+func (r *Orchestrator) source() (path string) {
+	path = r.context.orchestratorPath
 	if path == "" {
 		path = controllerOrchestrator
 	}

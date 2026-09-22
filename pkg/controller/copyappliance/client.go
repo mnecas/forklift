@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"syscall"
+	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
@@ -604,6 +605,117 @@ func (r *ApplianceContext) buildAttachDiskChanges(ctx context.Context, devices o
 			Device:        disk,
 		}
 		changes = append(changes, change)
+	}
+	return
+}
+
+// SSHClient logs in to the appliance, and reports whether it answered. The
+// caller owns the returned client and must Close it.
+func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration) (client *SSHClient, ready bool, err error) {
+	address, ok := applianceAddress(r.Appliance.Status.Addresses)
+	if !ok {
+		err = liberr.New(
+			"the appliance reports no address to reach it on",
+			"appliance", r.Appliance.Name)
+		return
+	}
+	if r.ApplianceSecret == nil {
+		// Named from the spec rather than the secret, which is the whole
+		// problem: this is where an operator finds out which one to create.
+		ref := r.Appliance.Spec.Secret
+		err = liberr.New(
+			"the appliance secret is missing",
+			"namespace", ref.Namespace,
+			"name", ref.Name)
+		return
+	}
+	client, err = NewSSHClient(
+		Settings.CopyAppliance.SSHUser, address, r.sshLoginPort(), r.ApplianceSecret)
+	if err != nil {
+		return
+	}
+	ready, err = client.Connect(ctx)
+	if err != nil || !ready {
+		client = nil
+		return
+	}
+	err = client.SetTimeout(timeout)
+	if err != nil {
+		_ = client.Close()
+		client = nil
+		ready = false
+	}
+	return
+}
+
+// sshLoginPort is the port the appliance's sshd answers on. Empty means the
+// standard port, which is the only one an appliance image is built with; a test
+// appliance is on whatever it was given.
+func (r *ApplianceContext) sshLoginPort() (port string) {
+	port = r.sshPort
+	if port == "" {
+		port = ApplianceSSHPort
+	}
+	return
+}
+
+// announceAddr is the address to query the appliance's export list at.
+func (r *ApplianceContext) announceAddr(address string) (addr string) {
+	return net.JoinHostPort(address, r.announcePort())
+}
+
+// announcePort is the port the appliance announces its exports on. Empty means
+// the port the orchestrator defaults to, which is the only one an appliance is
+// installed with; a test appliance is on whatever it was given.
+func (r *ApplianceContext) announcePort() (port string) {
+	port = r.announcePortOverride
+	if port == "" {
+		port = applianceAnnouncePort
+	}
+	return
+}
+
+// ServerTLS is the half of the TLS material the appliance needs: the CA to
+// verify clients against, and the certificate and key it serves with. The
+// client half stays in the cluster. Keyed by the file name each lands under in
+// applianceCertsDir.
+func (r *ApplianceContext) ServerTLS() (files map[string][]byte, err error) {
+	return r.tlsData(tlsCACert, tlsServerCert, tlsServerKey)
+}
+
+// ClientTLS is the half the controller keeps, to query the appliance's export
+// list with.
+func (r *ApplianceContext) ClientTLS() (ca, certificate, key []byte, err error) {
+	files, err := r.tlsData(tlsCACert, tlsClientCert, tlsClientKey)
+	if err != nil {
+		return
+	}
+	return files[tlsCACert], files[tlsClientCert], files[tlsClientKey], nil
+}
+
+// tlsData reads the named keys out of the appliance's secret, and reports which
+// one is missing rather than that something is.
+func (r *ApplianceContext) tlsData(keys ...string) (files map[string][]byte, err error) {
+	ref := r.Appliance.Spec.Secret
+	if r.ApplianceSecret == nil {
+		err = liberr.New(
+			"the appliance secret is missing",
+			"namespace", ref.Namespace,
+			"name", ref.Name)
+		return
+	}
+	files = make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		value, found := r.ApplianceSecret.Data[key]
+		if !found || len(value) == 0 {
+			files = nil
+			err = liberr.New(
+				"the appliance secret has no "+key,
+				"namespace", r.ApplianceSecret.Namespace,
+				"name", r.ApplianceSecret.Name)
+			return
+		}
+		files[key] = value
 	}
 	return
 }
