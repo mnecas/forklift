@@ -206,25 +206,27 @@ func (r *Runner) lastLog(ctx context.Context, name string) string {
 // existingPort returns the published host port of an already-running container for the
 // given WWID, if one exists.
 //
-// Only a running container counts. A container for this WWID in any other state is the
-// remnant of a shutdown that never got to run: a host that lost power, or a SIGKILL.
-// Reusing it is not an option, because a stopped container publishes no port and so has
-// nothing to announce, and leaving it alone is worse than useless -- it holds the name the
-// replacement needs. So it is removed here and the caller creates a fresh one. Without
-// this the appliance comes back from an unclean reboot exporting nothing, permanently:
-// every later start finds the same remnant and makes the same non-decision.
+// Only a healthy running container counts (verifyUp). A crash-looping or non-running
+// remnant is removed so the caller can create a fresh one.
 func (r *Runner) existingPort(ctx context.Context, wwid string) (int, bool, error) {
 	running, err := r.containers(ctx, wwid, "running")
 	if err != nil {
 		return 0, false, err
 	}
 	if len(running) > 0 {
-		// At most one is expected; take the first.
-		port, err := r.publishedPort(ctx, running[0])
+		name := running[0]
+		port, err := r.publishedPort(ctx, name)
 		if err != nil {
 			return 0, false, err
 		}
-		return port, true, nil
+		if err := r.verifyUp(ctx, name); err == nil {
+			return port, true, nil
+		}
+		if out, err := exec.CommandContext(ctx, "podman", "rm", "-f", name).CombinedOutput(); err != nil {
+			return 0, false, fmt.Errorf("removing dead container %s: %w: %s",
+				name, err, strings.TrimSpace(string(out)))
+		}
+		return 0, false, nil
 	}
 
 	stale, err := r.containers(ctx, wwid, "")
