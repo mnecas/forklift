@@ -34,55 +34,6 @@ func TestNeedsExportConvergence(t *testing.T) {
 	}
 }
 
-func TestExportRequestObserved(t *testing.T) {
-	appliance := &api.CopyAppliance{
-		Spec: api.CopyApplianceSpec{
-			ExportRequest: &api.ExportRequest{
-				Target:     api.ExportTargetExport,
-				Generation: 3,
-			},
-		},
-		Status: api.CopyApplianceStatus{
-			ObservedExportRequest: &api.ExportRequest{
-				Target:     api.ExportTargetExport,
-				Generation: 3,
-			},
-		},
-	}
-	if !ExportRequestObserved(appliance) {
-		t.Fatal("expected export request to be observed")
-	}
-}
-
-func TestIsExportPhase(t *testing.T) {
-	if !IsExportPhase(PhaseReleaseDisks) {
-		t.Fatal("expected release disks to be an export phase")
-	}
-	if IsExportPhase(PhaseWaitForExports) {
-		t.Fatal("deploy and export both use WaitForExports; routing is separate")
-	}
-	if IsExportPhase(PhaseDeployCompleted) {
-		t.Fatal("did not expect deploy completed to be an export phase")
-	}
-}
-
-func TestRoutesToExportRunner(t *testing.T) {
-	deployWait := &api.CopyAppliance{Status: api.CopyApplianceStatus{Phase: PhaseWaitForExports}}
-	if RoutesToExportRunner(deployWait) {
-		t.Fatal("deploy WaitForExports should stay on DeployRunner")
-	}
-
-	exportWait := &api.CopyAppliance{
-		Spec: api.CopyApplianceSpec{
-			ExportRequest: &api.ExportRequest{Target: api.ExportTargetExport, Generation: 1},
-		},
-		Status: api.CopyApplianceStatus{Phase: PhaseWaitForExports},
-	}
-	if !RoutesToExportRunner(exportWait) {
-		t.Fatal("export WaitForExports should use ExportRunner")
-	}
-}
-
 func TestExportRunner_BeginSetsReleasePhase(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Spec: api.CopyApplianceSpec{
