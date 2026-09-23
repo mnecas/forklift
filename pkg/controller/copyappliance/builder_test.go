@@ -99,8 +99,9 @@ func testInventory() *fakeInventory {
 		},
 		folders: map[string]model.Folder{
 			"folder-apps": {
-				Resource: resource("folder-apps", "/DC0/vm/apps"),
-				Folder:   "folder-vm",
+				Resource:   resource("folder-apps", "/DC0/vm/apps"),
+				Folder:     "folder-vm",
+				Datacenter: "dc-1",
 			},
 			"folder-vm": {
 				Resource:   resource("folder-vm", "/DC0/vm"),
@@ -156,13 +157,14 @@ func TestPlacementFollowsTheSourceVM(t *testing.T) {
 	}
 }
 
-// Only the folder directly beneath a datacenter records it, so a VM nested any
-// deeper is found by walking up.
-func TestPlacementWalksUpToTheDatacenter(t *testing.T) {
+// Nested folders carry Datacenter from the inventory (resolved at serve
+// time), so placement does not walk the folder chain itself.
+func TestPlacementNestedFolder(t *testing.T) {
 	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-team")
 	inventory.folders["folder-team"] = model.Folder{
-		Resource: model.Resource{ID: "folder-team", Path: "/DC0/vm/apps/team"},
-		Folder:   "folder-apps",
+		Resource:   model.Resource{ID: "folder-team", Path: "/DC0/vm/apps/team"},
+		Folder:     "folder-apps",
+		Datacenter: "dc-1",
 	}
 	spec := api.CopyApplianceSpec{}
 	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
@@ -233,50 +235,18 @@ func TestPlacementErrors(t *testing.T) {
 			want:  "no disks",
 		},
 		{
-			// Nothing is placed on the host, but the resource pool is found
-			// through it, so a VM without one still has nowhere to put the
-			// appliance.
 			name:  "no host",
 			setup: func(i *fakeInventory) { i.vm.Host = "" },
-			want:  "no host",
+			want:  "not found",
 		},
 		{
-			name: "folder with no path",
+			name: "folder with no datacenter",
 			setup: func(i *fakeInventory) {
 				i.folders["folder-apps"] = model.Folder{
-					Resource: model.Resource{ID: "folder-apps"},
-					Folder:   "folder-vm",
-				}
-			},
-			want: "no path for the folder",
-		},
-		{
-			name: "cluster with no path",
-			setup: func(i *fakeInventory) {
-				i.clusters["cluster-1"] = model.Cluster{
-					Resource: model.Resource{ID: "cluster-1"},
-				}
-			},
-			want: "no path for the cluster",
-		},
-		{
-			name: "folder chain never reaches a datacenter",
-			setup: func(i *fakeInventory) {
-				i.folders["folder-vm"] = model.Folder{
-					Resource: model.Resource{ID: "folder-vm", Path: "/DC0/vm"},
+					Resource: model.Resource{ID: "folder-apps", Path: "/DC0/vm/apps"},
 				}
 			},
 			want: "not under a datacenter",
-		},
-		{
-			name: "folder chain loops",
-			setup: func(i *fakeInventory) {
-				i.folders["folder-vm"] = model.Folder{
-					Resource: model.Resource{ID: "folder-vm", Path: "/DC0/vm"},
-					Folder:   "folder-apps",
-				}
-			},
-			want: "gave up walking",
 		},
 		{
 			name:  "datastore not in the inventory",

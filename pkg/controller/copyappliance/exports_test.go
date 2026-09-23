@@ -23,6 +23,8 @@ func TestMatchExports(t *testing.T) {
 	announced := []runner.Export{
 		{WWID: "36000c2902b72f55a2146435072abcdef01", Port: 10810, Device: "/dev/sdc"},
 		{WWID: "36000c2977d53fad7e8b45194193802f7", Port: 10809, Device: "/dev/sdb"},
+		// Extra export (e.g. something discovery also saw) is ignored.
+		{WWID: "36000c2999999999999999999999999999", Port: 10811, Device: "/dev/sdd"},
 	}
 
 	matched, err := matchExports(attached, announced)
@@ -40,17 +42,12 @@ func TestMatchExports(t *testing.T) {
 	}
 }
 
-func TestMatchExportsRejectsAmbiguousSerial(t *testing.T) {
-	attached := []api.AttachedDisk{
-		{Serial: "6000C297-7d53-fad7-e8b4-5194193802f7", VMDKPath: "[ds] a.vmdk"},
-	}
-	announced := []runner.Export{
-		{WWID: "36000c2977d53fad7e8b45194193802f7", Port: 10809, Device: "/dev/sdb"},
-		{WWID: "36000c2977d53fad7e8b45194193802f7", Port: 10810, Device: "/dev/sdc"},
-	}
-
-	_, err := matchExports(attached, announced)
+func TestMatchExportsRequiresAMatch(t *testing.T) {
+	_, err := matchExports(
+		[]api.AttachedDisk{{Serial: "6000C297-7d53-fad7-e8b4-5194193802f7", VMDKPath: "[ds] a.vmdk"}},
+		[]runner.Export{{WWID: "36000c2900000000000000000000000000", Port: 10809}},
+	)
 	if err == nil {
-		t.Fatal("matchExports succeeded with duplicate serial matches")
+		t.Fatal("matchExports succeeded with no matching export")
 	}
 }

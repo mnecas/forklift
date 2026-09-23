@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+
+	"github.com/vmware/govmomi/vmdk"
 )
 
 // DescriptorOptions configures OVF generation.
@@ -209,4 +211,16 @@ func diskID(opts DescriptorOptions) string {
 		h = h[:8]
 	}
 	return "vdisk-" + h
+}
+
+// DiskCapacity returns the virtual size of a stream-optimized VMDK.
+func DiskCapacity(path string) (int64, error) {
+	info, err := vmdk.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("vmdk stat %s: %w", path, err)
+	}
+	if info.Capacity <= 0 {
+		return 0, fmt.Errorf("invalid virtual size for %s", path)
+	}
+	return int64(info.Capacity), nil
 }

@@ -185,3 +185,40 @@ Walk:
 
 	return
 }
+
+// Datacenter returns the ID of the datacenter that owns the folder. Nested
+// folders only store their parent folder in the DB; walk Parent until a
+// Datacenter is found (same chain Path uses).
+func (r *PathBuilder) Datacenter(folder *model.Folder) string {
+	if folder.Datacenter != "" {
+		return folder.Datacenter
+	}
+	if r.cache == nil {
+		r.cache = map[model.Ref]*model.Base{}
+	}
+	node := model.Model(folder)
+	for {
+		parent := node.GetParent()
+		switch parent.Kind {
+		case model.DatacenterKind:
+			return parent.ID
+		case model.FolderKind:
+			b, cached := r.cache[parent]
+			if !cached {
+				m := &model.Folder{}
+				m.WithRef(parent)
+				if err := r.DB.Get(m); err != nil {
+					return ""
+				}
+				b = &m.Base
+				r.cache[parent] = b
+			}
+			if b.GetParent().Kind == "" {
+				return ""
+			}
+			node = b
+		default:
+			return ""
+		}
+	}
+}

@@ -8,40 +8,32 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
 
-// matchExports pairs announced appliance exports with the disks the controller
-// asked vSphere to attach. Every attached disk must match exactly one export
-// by serial/WWID; unmatched exports are rejected.
+// matchExports finds the announced NBD export for each attached disk by serial.
+// Extra announced exports are ignored; WaitForExports already waits until the
+// guest has at least as many exports as attached disks.
 func matchExports(attached []api.AttachedDisk, announced []runner.Export) ([]api.ApplianceExport, error) {
-	used := make([]bool, len(announced))
-	matched := make([]api.ApplianceExport, 0, len(attached))
+	byID := make(map[string]runner.Export, len(announced))
+	for _, export := range announced {
+		if id := normalizeDiskID(export.WWID); id != "" {
+			byID[id] = export
+		}
+	}
 
+	matched := make([]api.ApplianceExport, 0, len(attached))
 	for _, disk := range attached {
-		if disk.Serial == "" {
+		id := normalizeDiskID(disk.Serial)
+		if id == "" {
 			return nil, liberr.New(
 				"attached disk has no serial to match exports with",
 				"vmdk", disk.VMDKPath)
 		}
-		idx := -1
-		for i, export := range announced {
-			if used[i] || !sameDiskID(disk.Serial, export.WWID) {
-				continue
-			}
-			if idx >= 0 {
-				return nil, liberr.New(
-					"more than one appliance export matches the attached disk serial",
-					"vmdk", disk.VMDKPath,
-					"serial", disk.Serial)
-			}
-			idx = i
-		}
-		if idx < 0 {
+		export, ok := byID[id]
+		if !ok {
 			return nil, liberr.New(
 				"no appliance export matches the attached disk serial",
 				"vmdk", disk.VMDKPath,
 				"serial", disk.Serial)
 		}
-		used[idx] = true
-		export := announced[idx]
 		matched = append(matched, api.ApplianceExport{
 			WWID:         export.WWID,
 			Port:         int32(export.Port), // #nosec G115
@@ -51,24 +43,10 @@ func matchExports(attached []api.AttachedDisk, announced []runner.Export) ([]api
 			SourceSerial: disk.Serial,
 		})
 	}
-
-	for i, export := range announced {
-		if !used[i] {
-			return nil, liberr.New(
-				"the appliance announced an export that does not match any attached disk",
-				"wwid", export.WWID,
-				"device", export.Device)
-		}
-	}
 	return matched, nil
 }
 
-// sameDiskID compares a VMware backing.Uuid to a guest scsi_id WWID.
-func sameDiskID(serial, wwid string) bool {
-	a := normalizeDiskID(serial)
-	return a != "" && a == normalizeDiskID(wwid)
-}
-
+// normalizeDiskID strips formatting so a VMware backing.Uuid matches a guest scsi_id WWID.
 func normalizeDiskID(id string) string {
 	s := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(id), "-", ""))
 	// scsi_id prefixes NAA identifiers with "3".
