@@ -13,4 +13,3 @@ spec:
   datastore: datastore1
   folder: /Datacenter/vm
   network: "VM Network"
-  forceRebuild: false

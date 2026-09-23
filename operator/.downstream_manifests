@@ -4988,8 +4988,7 @@ spec:
               resourcePool:
                 description: |-
                   Resource pool in which the appliance VM is created. When omitted, the
-                  controller uses Provider.spec.settings.copyApplianceResourcePool (with a
-                  ForkliftController fallback).
+                  controller uses Provider.spec.settings.copyApplianceResourcePool.
                 type: string
               secret:
                 description: |-
@@ -12714,9 +12713,6 @@ spec:
               folder:
                 description: vCenter folder path (e.g. /Datacenter/vm).
                 type: string
-              forceRebuild:
-                description: Skip reuse checks and always rebuild the template.
-                type: boolean
               images:
                 description: Container image overrides.
                 properties:
@@ -12909,6 +12905,9 @@ spec:
                 - Running
                 - Succeeded
                 - Failed
+                type: string
+              rebuildRequestedAt:
+                description: Last accepted rebuild-requested-at annotation.
                 type: string
               stage:
                 description: ToeholdTemplateStage is the fine-grained pipeline position

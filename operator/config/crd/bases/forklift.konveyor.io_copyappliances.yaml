@@ -183,8 +183,7 @@ spec:
               resourcePool:
                 description: |-
                   Resource pool in which the appliance VM is created. When omitted, the
-                  controller uses Provider.spec.settings.copyApplianceResourcePool (with a
-                  ForkliftController fallback).
+                  controller uses Provider.spec.settings.copyApplianceResourcePool.
                 type: string
               secret:
                 description: |-
