@@ -19,13 +19,13 @@ package provider
 import (
 	"context"
 	"crypto/rand"
-	"reflect"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -598,49 +598,52 @@ func (r *Reconciler) ensureToeholdSSHKeys(provider *api.Provider) error {
 		// A secret predating the merge of the two appliance secrets holds only
 		// the SSH key. Fill in the TLS material rather than regenerating the key
 		// pair, whose public half is already built into the toehold template.
-		return r.ensureToeholdTLS(existing)
-	}
-	if !k8serr.IsNotFound(err) {
+		if err := r.ensureToeholdTLS(existing); err != nil {
+			return err
+		}
+	} else if !k8serr.IsNotFound(err) {
 		return fmt.Errorf("failed to check for existing toehold SSH private key secret: %w", err)
+	} else {
+		r.Log.Info("Generating toehold SSH keys for vSphere provider", "provider", provider.Name)
+		privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return fmt.Errorf("failed to generate RSA key: %w", err)
+		}
+
+		privateKeyPEM := &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		}
+		privateKeyBytes := pem.EncodeToMemory(privateKeyPEM)
+
+		publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
+		if err != nil {
+			return fmt.Errorf("failed to create SSH public key: %w", err)
+		}
+		publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
+
+		// The TLS material goes in with the key rather than in a later update: the
+		// reconciler reads through the informer cache, where a secret just created
+		// is not there to be read back yet.
+		privateData, err := toeholdTLS()
+		if err != nil {
+			return fmt.Errorf("failed to generate toehold TLS material: %w", err)
+		}
+		privateData["private-key"] = privateKeyBytes
+
+		err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, privateData, provider, "toehold-ssh-keys")
+		if err != nil {
+			return fmt.Errorf("failed to store toehold private key: %w", err)
+		}
+		err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, map[string][]byte{"public-key": publicKeyBytes}, provider, "toehold-ssh-keys")
+		if err != nil {
+			return fmt.Errorf("failed to store toehold public key: %w", err)
+		}
+		r.Log.Info("Toehold SSH keys generated and stored successfully", "provider", provider.Name)
 	}
 
-	r.Log.Info("Generating toehold SSH keys for vSphere provider", "provider", provider.Name)
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return fmt.Errorf("failed to generate RSA key: %w", err)
-	}
-
-	privateKeyPEM := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	}
-	privateKeyBytes := pem.EncodeToMemory(privateKeyPEM)
-
-	publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
-	if err != nil {
-		return fmt.Errorf("failed to create SSH public key: %w", err)
-	}
-	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
-
-	// The TLS material goes in with the key rather than in a later update: the
-	// reconciler reads through the informer cache, where a secret just created
-	// is not there to be read back yet.
-	privateData, err := toeholdTLS()
-	if err != nil {
-		return fmt.Errorf("failed to generate toehold TLS material: %w", err)
-	}
-	privateData["private-key"] = privateKeyBytes
-
-	err = r.storeSSHKeySecret(provider.Namespace, privateSecretName, privateData, provider, "toehold-ssh-keys")
-	if err != nil {
-		return fmt.Errorf("failed to store toehold private key: %w", err)
-	}
-	err = r.storeSSHKeySecret(provider.Namespace, publicSecretName, map[string][]byte{"public-key": publicKeyBytes}, provider, "toehold-ssh-keys")
-	if err != nil {
-		return fmt.Errorf("failed to store toehold public key: %w", err)
-	}
-
-	r.Log.Info("Toehold SSH keys generated and stored successfully", "provider", provider.Name)
+	provider.Status.ToeholdSSHPrivateSecret = privateSecretName
+	provider.Status.ToeholdSSHPublicSecret = publicSecretName
 	return nil
 }
 

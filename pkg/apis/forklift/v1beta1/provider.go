@@ -92,10 +92,10 @@ const (
 	AzureTargetRegion  = "targetRegion"
 	AzureSnapshotClass = "volumeSnapshotClassName"
 	// vSphere toehold / copy-appliance placement (per provider).
-	ToeholdDatastore           = "toeholdDatastore"
-	ToeholdFolder              = "toeholdFolder"
-	ToeholdNetwork             = "toeholdNetwork"
-	CopyApplianceResourcePool  = "copyApplianceResourcePool"
+	ToeholdDatastore          = "toeholdDatastore"
+	ToeholdFolder             = "toeholdFolder"
+	ToeholdNetwork            = "toeholdNetwork"
+	CopyApplianceResourcePool = "copyApplianceResourcePool"
 )
 
 // Nutanix Prism endpoint types.
@@ -154,6 +154,12 @@ type ProviderStatus struct {
 	// Used to detect when credentials have been rotated.
 	// +optional
 	SecretResourceVersion string `json:"secretResourceVersion,omitempty"`
+	// Name of the secret with the toehold SSH private key and TLS material.
+	// +optional
+	ToeholdSSHPrivateSecret string `json:"toeholdSSHPrivateSecret,omitempty"`
+	// Name of the secret with the toehold SSH public key.
+	// +optional
+	ToeholdSSHPublicSecret string `json:"toeholdSSHPublicSecret,omitempty"`
 }
 
 // +genclient
