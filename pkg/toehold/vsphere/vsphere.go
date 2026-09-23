@@ -377,18 +377,16 @@ func (c *Client) findImportHost(ctx context.Context, datastore *object.Datastore
 			o.Runtime.PowerState == types.HostSystemPowerStateStandBy {
 			continue
 		}
-		if net != nil {
-			if _, ok := net.(*object.Network); ok {
-				found := false
-				for _, n := range o.Network {
-					if n.Value == netRef.Value {
-						found = true
-						break
-					}
+		if _, ok := net.(*object.Network); ok {
+			found := false
+			for _, n := range o.Network {
+				if n.Value == netRef.Value {
+					found = true
+					break
 				}
-				if !found {
-					continue
-				}
+			}
+			if !found {
+				continue
 			}
 		}
 		return host, nil

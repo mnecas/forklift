@@ -123,7 +123,6 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	done, pipeErr := runner.Run()
 	if isRequeue(pipeErr) {
 		result.RequeueAfter = base.SlowReQ
-		pipeErr = nil
 	} else if pipeErr != nil {
 		r.fail(toehold, pipeErr)
 	} else if done {
