@@ -70,6 +70,25 @@ func TestExistingPort(t *testing.T) {
 		}
 	})
 
+	t.Run("a running container with restarts is removed rather than reused", func(t *testing.T) {
+		podman := stubPodman(t)
+		podman.running(testContainer)
+		podman.port("10809")
+		t.Setenv("PODMAN_STATE", "running 1")
+
+		port, ok, err := New(testConfig()).existingPort(context.TODO(), testDevice.WWID)
+
+		if err != nil {
+			t.Fatalf("existingPort: %v", err)
+		}
+		if ok {
+			t.Errorf("existingPort = (%d, true), want a crash-looping export not reused", port)
+		}
+		if _, ran := podman.ran("rm -f " + testContainer); !ran {
+			t.Errorf("the dead container was not removed; ran %v", podman.commands())
+		}
+	})
+
 	// This is what an appliance looks like after a power loss or a SIGKILL: the
 	// containers outlive the supervisor as "exited". A stopped container
 	// publishes no port, so it cannot be announced, and it holds the name the
@@ -150,7 +169,7 @@ ps)
 	;;
 inspect)
 	if [ "$2" = "--format" ]; then
-		printf 'running 0\n'
+		printf '%s\n' "${PODMAN_STATE:-running 0}"
 		exit 0
 	fi
 	case " $PODMAN_RUNNING " in
@@ -174,6 +193,7 @@ func stubPodman(t *testing.T) *podmanStub {
 	t.Setenv("PODMAN_RUNNING", "")
 	t.Setenv("PODMAN_ALL", "")
 	t.Setenv("PODMAN_PORT", "10809")
+	t.Setenv("PODMAN_STATE", "running 0")
 	return stub
 }
 

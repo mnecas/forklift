@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# nbdkit uses --cgroups=disabled and joins this cgroup; cgroup kill on restart leaves dead exports.
+KillMode=process
 ExecStart={{.Binary}} -certs-dir={{.CertsDir}} -image={{.Image}} -listen=:{{.AnnouncePort}} -base-port={{.BasePort}}
 Restart=always
 RestartSec=5

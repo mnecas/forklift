@@ -52,6 +52,7 @@ func TestRenderUnit(t *testing.T) {
 			// which is the reason for using systemd at all.
 			"WantedBy=multi-user.target",
 			"Restart=always",
+			"KillMode=process",
 		} {
 			if !strings.Contains(unit, want) {
 				t.Errorf("the unit does not carry %q:\n%s", want, unit)
