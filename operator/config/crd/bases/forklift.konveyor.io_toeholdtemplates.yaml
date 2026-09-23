@@ -97,9 +97,6 @@ spec:
               folder:
                 description: vCenter folder path (e.g. /Datacenter/vm).
                 type: string
-              forceRebuild:
-                description: Skip reuse checks and always rebuild the template.
-                type: boolean
               images:
                 description: Container image overrides.
                 properties:
@@ -292,6 +289,9 @@ spec:
                 - Running
                 - Succeeded
                 - Failed
+                type: string
+              rebuildRequestedAt:
+                description: Last accepted rebuild-requested-at annotation.
                 type: string
               stage:
                 description: ToeholdTemplateStage is the fine-grained pipeline position

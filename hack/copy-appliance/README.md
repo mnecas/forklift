@@ -289,7 +289,7 @@ make query HOST=<appliance-ip>
 |---------|-------|
 | Toehold build fails on SSH secret | Provider reconciled with `feature_toehold=true`? `toehold-ssh-keys-*-public` exists? |
 | CopyAppliance stuck at `WaitForNetwork` | VMware Tools reporting guest IP? Template network matches vSphere port group? |
-| CopyAppliance stuck at `Configure` / SSH errors | Template rebuilt after SSH keys were created? `forceRebuild: true` on ToeholdTemplate? |
+| CopyAppliance stuck at `Configure` / SSH errors | Template rebuilt after SSH keys were created? Annotate ToeholdTemplate with `forklift.konveyor.io/rebuild-requested-at`? |
 | `WaitForExports` never completes | nbd-container image loaded? `toehold-ssh-keys-<provider>-private` holds the five `*.pem` keys? Firewall allows TCP 8443 and 10809+? |
 | LoadImage fails with unauthorized / manifest errors | ImageStreamTag `dockerImageReference` pointing at Quay or `registry.redhat.io`? Set `referencePolicy: Local` and confirm internal registry URL. |
 | CloneVM fails: resource pool not found | Set `Provider.spec.settings.copyApplianceResourcePool` to the real vCenter inventory path, or set `CopyAppliance.spec.resourcePool`. |
@@ -301,6 +301,6 @@ make query HOST=<appliance-ip>
 ## Rebuild template after SSH key changes
 
 ```bash
-oc patch toeholdtemplate <provider>-toehold -n openshift-mtv \
-  --type=merge -p '{"spec":{"forceRebuild":true}}'
+oc annotate toeholdtemplate <provider>-toehold -n openshift-mtv \
+  forklift.konveyor.io/rebuild-requested-at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
 ```

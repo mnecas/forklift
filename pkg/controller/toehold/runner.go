@@ -158,8 +158,9 @@ func (run *Runner) stageEnsureTemplate() error {
 		run.pctx = pctx
 	}
 	defer run.pctx.Client.Close(run.ctx)
-	if run.toehold.Spec.ForceRebuild {
+	if run.toehold.RebuildRequested() {
 		_ = run.pctx.Client.DestroyVMIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
+		run.toehold.Status.RebuildRequestedAt = run.toehold.Annotations[api.AnnRebuildRequestedAt]
 		return run.requireBuild()
 	}
 	ref, err := run.pctx.Client.FindTemplate(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
