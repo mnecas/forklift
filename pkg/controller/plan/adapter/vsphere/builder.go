@@ -324,18 +324,23 @@ func (r *Builder) PodEnvironment(vmRef ref.Ref, sourceSecret *core.Secret) (env 
 }
 
 // nbdDiskURIsForVM returns ordered nbd:// URIs for virt-v2v when a copy appliance
-// is exporting the VM's disks. Empty means fall back to VDDK/libvirt input.
-//
-// Lookup is driven by the appliance CR (if present) rather than only the feature
-// gate, so conversion matches an appliance that the cold itinerary already deployed.
+// is exporting the VM's disks. Empty when CDI already transferred (!useV2vForTransfer)
+// or when there is no appliance — conversion must not require NBD after release.
 func (r *Builder) nbdDiskURIsForVM(vmRef ref.Ref, vm *model.VM) ([]string, error) {
 	if r.Migration == nil || r.Migration.UID == "" {
+		return nil, nil
+	}
+	useV2vForTransfer, err := r.Plan.ShouldUseV2vForTransfer(vmRef)
+	if err != nil {
+		return nil, err
+	}
+	if !useV2vForTransfer {
 		return nil, nil
 	}
 	connections, err := r.nbdConnectionsForVM(vmRef)
 	if err != nil {
 		notFound := k8serr.IsNotFound(err) || k8serr.IsNotFound(liberr.Unwrap(err))
-		if notFound && !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+		if notFound {
 			return nil, nil
 		}
 		return nil, err
