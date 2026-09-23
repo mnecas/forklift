@@ -7,7 +7,6 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
 	core "k8s.io/api/core/v1"
@@ -29,8 +28,35 @@ func credsSecretName(toehold *api.ToeholdTemplate) string {
 	return toehold.Name + credsSecretSuffix
 }
 
-func toeholdSSHPublicSecretName(toehold *api.ToeholdTemplate) (string, error) {
-	return util.GenerateToeholdSSHPublicSecretName(toehold.Spec.Provider.Name)
+func (r Reconciler) loadToeholdSSHPublicKey(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
+	providerNS := toehold.Spec.Provider.Namespace
+	if providerNS == "" {
+		providerNS = toehold.Namespace
+	}
+	provider := &api.Provider{}
+	err := r.Get(ctx, client.ObjectKey{
+		Namespace: providerNS,
+		Name:      toehold.Spec.Provider.Name,
+	}, provider)
+	if err != nil {
+		return "", liberr.Wrap(err, "provider", toehold.Spec.Provider.Name)
+	}
+	name := provider.Status.ToeholdSSHPublicSecret
+	if name == "" {
+		return "", liberr.New(
+			"provider has no toehold SSH public secret yet",
+			"provider", provider.Name)
+	}
+	secret := &core.Secret{}
+	err = r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, secret)
+	if err != nil {
+		return "", liberr.Wrap(err, "secret", name)
+	}
+	publicKey, ok := secret.Data["public-key"]
+	if !ok || len(publicKey) == 0 {
+		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
+	}
+	return string(publicKey), nil
 }
 
 func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) error {
@@ -130,11 +156,8 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		}
 	}
 
-	sshPublicSecretName, err := toeholdSSHPublicSecretName(toehold)
+	sshPublicSecretName, err := r.ensureSSHPublicSecret(ctx, toehold)
 	if err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	if err = r.ensureSSHPublicSecret(ctx, toehold); err != nil {
 		return nil, err
 	}
 	sshPublicKey, err := r.loadToeholdSSHPublicKey(ctx, toehold)
@@ -170,27 +193,39 @@ func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 
 // ensureSSHPublicSecret copies the provider's toehold SSH public key into the
 // build namespace. Pods can only mount secrets from their own namespace.
-func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate) error {
-	name, err := toeholdSSHPublicSecretName(toehold)
-	if err != nil {
-		return liberr.Wrap(err)
+func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
+	providerNS := toehold.Spec.Provider.Namespace
+	if providerNS == "" {
+		providerNS = toehold.Namespace
 	}
-	source := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{
-		Namespace: toehold.Spec.Provider.Namespace,
-		Name:      name,
-	}, source)
+	provider := &api.Provider{}
+	err := r.Get(ctx, client.ObjectKey{
+		Namespace: providerNS,
+		Name:      toehold.Spec.Provider.Name,
+	}, provider)
 	if err != nil {
-		return liberr.Wrap(err, "secret", name)
+		return "", liberr.Wrap(err, "provider", toehold.Spec.Provider.Name)
+	}
+	name := provider.Status.ToeholdSSHPublicSecret
+	if name == "" {
+		return "", liberr.New(
+			"provider has no toehold SSH public secret yet",
+			"provider", provider.Name)
+	}
+
+	source := &core.Secret{}
+	err = r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, source)
+	if err != nil {
+		return "", liberr.Wrap(err, "secret", name)
 	}
 	publicKey, ok := source.Data["public-key"]
 	if !ok || len(publicKey) == 0 {
-		return liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
+		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
 	}
 
 	targetNS := toehold.TargetNS()
-	if targetNS == toehold.Spec.Provider.Namespace {
-		return nil
+	if targetNS == provider.Namespace {
+		return name, nil
 	}
 
 	target := &core.Secret{}
@@ -207,40 +242,20 @@ func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.Toeh
 			},
 		}
 		if err = r.setOwner(toehold, target); err != nil {
-			return liberr.Wrap(err)
+			return "", liberr.Wrap(err)
 		}
-		return liberr.Wrap(r.Create(ctx, target))
+		return name, liberr.Wrap(r.Create(ctx, target))
 	}
 	if err != nil {
-		return liberr.Wrap(err)
+		return "", liberr.Wrap(err)
 	}
 	target.Data = map[string][]byte{
 		"public-key": publicKey,
 	}
 	if err = r.setOwner(toehold, target); err != nil {
-		return liberr.Wrap(err)
-	}
-	return liberr.Wrap(r.Update(ctx, target))
-}
-
-func (r Reconciler) loadToeholdSSHPublicKey(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
-	secretName, err := toeholdSSHPublicSecretName(toehold)
-	if err != nil {
 		return "", liberr.Wrap(err)
 	}
-	secret := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{
-		Namespace: toehold.Spec.Provider.Namespace,
-		Name:      secretName,
-	}, secret)
-	if err != nil {
-		return "", liberr.Wrap(err, "secret", secretName)
-	}
-	publicKey, ok := secret.Data["public-key"]
-	if !ok || len(publicKey) == 0 {
-		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", secretName)
-	}
-	return string(publicKey), nil
+	return name, liberr.Wrap(r.Update(ctx, target))
 }
 
 func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName, sshPublicSecretName, sshPublicKey string) *core.Pod {

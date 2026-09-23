@@ -9,26 +9,26 @@ import (
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
-	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
+	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
+	vimtypes "github.com/vmware/govmomi/vim25/types"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	vimtypes "github.com/vmware/govmomi/vim25/types"
 )
 
 var flagNeedsBuild libitr.Flag = 0x01
 
 // Runner executes the toehold template itinerary.
 type Runner struct {
-	ctx        context.Context
-	r          *Reconciler
-	toehold    *api.ToeholdTemplate
-	pctx       *providerContext
-	diskHash      string
-	configHash    string
-	sshPublicKey  string
-	skipBuild     bool
+	ctx          context.Context
+	r            *Reconciler
+	toehold      *api.ToeholdTemplate
+	pctx         *providerContext
+	diskHash     string
+	configHash   string
+	sshPublicKey string
+	skipBuild    bool
 }
 
 type runnerPredicate struct {
@@ -129,7 +129,7 @@ func (run *Runner) stagePrerequisites() error {
 	if err != nil {
 		return err
 	}
-	if err = run.r.ensureSSHPublicSecret(run.ctx, run.toehold); err != nil {
+	if _, err = run.r.ensureSSHPublicSecret(run.ctx, run.toehold); err != nil {
 		pctx.Client.Close(run.ctx)
 		return err
 	}

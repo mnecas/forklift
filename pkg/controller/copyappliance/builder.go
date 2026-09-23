@@ -12,7 +12,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,9 +26,6 @@ const (
 	AppForklift   = "forklift"
 )
 
-// generateNamePrefix is the metadata.generateName of a built CopyAppliance.
-const generateNamePrefix = "copy-appliance-"
-
 // ApplianceName returns the stable CopyAppliance name for a migration VM.
 func ApplianceName(migrationUID types.UID, vmID string) string {
 	sum := sha256.Sum256([]byte(vmID))
@@ -38,7 +34,7 @@ func ApplianceName(migrationUID types.UID, vmID string) string {
 	if len(migShort) > 8 {
 		migShort = migShort[:8]
 	}
-	return fmt.Sprintf("%s%s-%s", generateNamePrefix, migShort, vmShort)
+	return fmt.Sprintf("copy-appliance-%s-%s", migShort, vmShort)
 }
 
 // rootResourcePool is the name vSphere gives the root resource pool of every
@@ -80,11 +76,6 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 			provider.Name, provider.Type()))
 		return
 	}
-	secretName, err := util.GenerateToeholdSSHPrivateSecretName(provider.Name)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
 	if Settings.CopyAppliance.ContainerImage == "" {
 		// Also deployment-specific: it names the nbd-container FQIN (or an
 		// ImageStreamTag in this cluster). Without it the appliance boots with
@@ -94,6 +85,12 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 				settings.CopyApplianceContainerImage)
 		return
 	}
+	if provider.Status.ToeholdSSHPrivateSecret == "" {
+		err = liberr.New(
+			"provider has no toehold SSH private secret yet",
+			"provider", provider.Name)
+		return
+	}
 	spec := api.CopyApplianceSpec{
 		Provider: core.ObjectReference{
 			Namespace: provider.Namespace,
@@ -101,7 +98,7 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		},
 		Secret: core.ObjectReference{
 			Namespace: provider.Namespace,
-			Name:      secretName,
+			Name:      provider.Status.ToeholdSSHPrivateSecret,
 		},
 		ContainerImage: Settings.CopyAppliance.ContainerImage,
 		// The appliance's shape, root disk and network are not configured here,
@@ -115,8 +112,7 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 
 	appliance = &api.CopyAppliance{
 		ObjectMeta: meta.ObjectMeta{
-			Namespace:    provider.Namespace,
-			GenerateName: generateNamePrefix,
+			Namespace: provider.Namespace,
 			Labels: map[string]string{
 				LabelApp:      AppForklift,
 				LabelProvider: string(provider.UID),
@@ -163,14 +159,13 @@ func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.Toeho
 	// at, which here is the template. Leaving it would hand the appliance the
 	// template's own root vmdk; a check appliance exports nothing.
 	appliance.Spec.AttachDisks = nil
-	WithTemplate(appliance, TemplateInventoryPath(toehold))
+	appliance.Spec.Template = path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
 	appliance.Spec.Folder = toehold.Spec.Folder
 	// There is no source VM. The label would carry the template's ID, which
 	// reads as an appliance serving a VM that is not being migrated.
 	delete(appliance.Labels, LabelVM)
 	// Named rather than generated: there is one check appliance per provider,
 	// and the next pass has to find this one rather than create another.
-	appliance.GenerateName = ""
 	appliance.Name = CheckName(provider.Name)
 	return
 }
@@ -182,16 +177,6 @@ func CheckName(providerName string) string {
 		return name
 	}
 	return providerName[:maxVMNameLength-len(checkNameSuffix)] + checkNameSuffix
-}
-
-// TemplateInventoryPath returns the vSphere inventory path of the toehold template.
-func TemplateInventoryPath(toehold *api.ToeholdTemplate) string {
-	return path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
-}
-
-// WithTemplate sets the clone template inventory path on a built appliance.
-func WithTemplate(appliance *api.CopyAppliance, template string) {
-	appliance.Spec.Template = template
 }
 
 // placement fills in the placement fields of spec from where the source VM

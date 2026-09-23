@@ -47,6 +47,10 @@ func checkProvider() *api.Provider {
 				api.ToeholdNetwork:   "VM Network",
 			},
 		},
+		Status: api.ProviderStatus{
+			ToeholdSSHPrivateSecret: "toehold-ssh-keys-vcenter-private",
+			ToeholdSSHPublicSecret:  "toehold-ssh-keys-vcenter-public",
+		},
 	}
 }
 

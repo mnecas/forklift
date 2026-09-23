@@ -83,10 +83,10 @@ func testInventory() *fakeInventory {
 				Host: "host-1",
 				Disks: []vspheremodel.Disk{
 					{
-						Key:      2000,
-						File:     "[datastore1] web-01/disk-0.vmdk",
-						Serial:   "6000C297-7d53-fad7-e8b4-5194193802f7",
-						Capacity: 16 << 30,
+						Key:       2000,
+						File:      "[datastore1] web-01/disk-0.vmdk",
+						Serial:    "6000C297-7d53-fad7-e8b4-5194193802f7",
+						Capacity:  16 << 30,
 						Datastore: vspheremodel.Ref{Kind: vspheremodel.DsKind, ID: "ds-1"},
 					},
 				},
@@ -309,6 +309,10 @@ func testProvider() *api.Provider {
 			UID:       types.UID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
 		},
 		Spec: api.ProviderSpec{Type: &vsphere},
+		Status: api.ProviderStatus{
+			ToeholdSSHPrivateSecret: "toehold-ssh-keys-vcenter-private",
+			ToeholdSSHPublicSecret:  "toehold-ssh-keys-vcenter-public",
+		},
 	}
 }
 
@@ -340,13 +344,12 @@ func TestBuild(t *testing.T) {
 	if appliance.Namespace != "forklift" {
 		t.Errorf("Namespace = %q, want the provider's", appliance.Namespace)
 	}
-	// The appliance VM's name derives from metadata.uid, which the API server
-	// assigns, so the CR cannot be named ahead of the Create.
+	// Callers set metadata.name; the appliance VM is cloned under that name.
 	if appliance.Name != "" {
-		t.Errorf("Name = %q, want it left to GenerateName", appliance.Name)
+		t.Errorf("Name = %q, want the caller to set it", appliance.Name)
 	}
-	if appliance.GenerateName != generateNamePrefix {
-		t.Errorf("GenerateName = %q, want %q", appliance.GenerateName, generateNamePrefix)
+	if appliance.GenerateName != "" {
+		t.Errorf("GenerateName = %q, want empty", appliance.GenerateName)
 	}
 	wantLabels := map[string]string{
 		LabelApp:      AppForklift,
