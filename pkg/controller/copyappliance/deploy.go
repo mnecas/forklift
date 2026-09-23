@@ -105,7 +105,7 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 		}
 		done, err = r.Configure(ctx)
 	case PhaseWaitForExports:
-		done, err = r.WaitForExports(ctx)
+		done, err = r.context.WaitForExports(ctx)
 	case PhaseDeployCompleted:
 		r.context.observeExportRequest()
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
@@ -331,12 +331,6 @@ func (r *DeployRunner) streamImage(client *SSHClient, img v1.Image, ref name.Tag
 
 	err = client.RunWithStdin(AppliancePodmanLoadCommand, reader)
 	return
-}
-
-// WaitForExports reports whether the appliance has published the disk exports
-// the migration reads from, and records them.
-func (r *DeployRunner) WaitForExports(ctx context.Context) (done bool, err error) {
-	return r.context.WaitForExports(ctx)
 }
 
 // Itinerary is the ordered pipeline of deploy phases. PhaseDeployFailed is not
