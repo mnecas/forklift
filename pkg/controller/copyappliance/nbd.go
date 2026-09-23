@@ -14,8 +14,12 @@ import (
 var snapshotVMDKPattern = regexp.MustCompile(`-\d{6}\.vmdk$`)
 
 // NbdURI builds a TCP NBD connection URI for an appliance export.
-func NbdURI(host string, port int32) string {
-	return fmt.Sprintf("nbd://%s:%d", host, port)
+func NbdURI(host string, port int32, ssl bool) string {
+	scheme := "nbd"
+	if ssl {
+		scheme = "nbds"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 }
 
 // BaseVMDKPath strips a VMware snapshot suffix from a backing file path.
@@ -27,7 +31,7 @@ func BaseVMDKPath(path string) string {
 }
 
 // ExportNbdConnections maps each attached VMDK path to its NBD connection URI.
-func ExportNbdConnections(appliance *api.CopyAppliance) (map[string]string, error) {
+func ExportNbdConnections(appliance *api.CopyAppliance, ssl bool) (map[string]string, error) {
 	if appliance == nil {
 		return nil, liberr.New("copy appliance is not set")
 	}
@@ -57,7 +61,7 @@ func ExportNbdConnections(appliance *api.CopyAppliance) (map[string]string, erro
 		if export.VMDKPath == "" {
 			return nil, liberr.New("copy appliance export is missing a VMDK path")
 		}
-		uri := NbdURI(host, export.Port)
+		uri := NbdURI(host, export.Port, ssl)
 		connections[export.VMDKPath] = uri
 		if base := BaseVMDKPath(export.VMDKPath); base != export.VMDKPath {
 			connections[base] = uri

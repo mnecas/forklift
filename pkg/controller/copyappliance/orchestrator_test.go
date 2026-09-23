@@ -59,6 +59,9 @@ func TestRenderUnit(t *testing.T) {
 				t.Errorf("the unit does not carry %q:\n%s", want, unit)
 			}
 		}
+		if strings.Contains(unit, " -tls") {
+			t.Errorf("plain unit should not enable -tls:\n%s", unit)
+		}
 	})
 
 	// The image reference is the one thing the unit cannot be written without,

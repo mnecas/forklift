@@ -1,6 +1,6 @@
 // Command nbd-orchestrator discovers non-root block devices on the host, starts one
-// plain-TCP nbdkit container per device (read-only), and serves a mutual-TLS HTTPS
-// endpoint announcing the exported disks.
+// nbdkit container per device (read-only), and serves a mutual-TLS HTTPS endpoint
+// announcing the exported disks. NBD itself is plain TCP unless -tls is set.
 package main
 
 import (
@@ -26,18 +26,19 @@ func main() {
 	listen := flag.String("listen", ":8443", "address for the HTTPS announce server")
 	basePort := flag.Int("base-port", 10809, "first host port to allocate for exports")
 	publishIP := flag.String("publish-ip", "0.0.0.0", "host IP to bind published NBD ports to")
+	tls := flag.Bool("tls", false, "require mutual TLS on nbdkit NBD exports")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	if err := run(logger, *certsDir, *image, *listen, *basePort, *publishIP); err != nil {
+	if err := run(logger, *certsDir, *image, *listen, *basePort, *publishIP, *tls); err != nil {
 		logger.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publishIP string) error {
-	// Resolve the cert dir to an absolute path for the announce server.
+func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publishIP string, tls bool) error {
+	// Resolve the cert dir to an absolute path for the announce server and nbdkit mounts.
 	absCertsDir, err := filepath.Abs(certsDir)
 	if err != nil {
 		return fmt.Errorf("resolving certs dir %q: %w", certsDir, err)
@@ -59,13 +60,15 @@ func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publ
 	if err != nil {
 		return err
 	}
-	logger.Info("discovered devices", "count", len(devices))
+	logger.Info("discovered devices", "count", len(devices), "tls", tls)
 
 	// 2. Start (or reuse) one container per device.
 	r := runner.New(runner.Config{
 		Image:     image,
 		BasePort:  basePort,
 		PublishIP: publishIP,
+		CertsDir:  certsDir,
+		TLS:       tls,
 	})
 	exports, err := r.Reconcile(ctx, devices)
 	if err != nil {

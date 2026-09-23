@@ -1597,7 +1597,7 @@ func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
 		return liberr.Wrap(err)
 	}
 
-	connections, err := cacontroller.ExportNbdConnections(appliance)
+	connections, err := cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
 	if err != nil {
 		return liberr.Wrap(err)
 	}
