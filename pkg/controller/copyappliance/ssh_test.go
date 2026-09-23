@@ -36,8 +36,6 @@ type sshServer struct {
 	dropping map[string]bool
 	mutex    sync.Mutex
 	ran      []sshCommand
-	// once stops the appliance listening after one connection.
-	once bool
 }
 
 // sshCommand is one command the appliance was asked to run and everything it
@@ -89,21 +87,9 @@ func startSSHServer(t *testing.T, authorized ssh.PublicKey, failing ...string) *
 				return
 			}
 			go server.serve(conn, config)
-			if server.stopping() {
-				_ = listener.Close()
-				return
-			}
 		}
 	}()
 	return server
-}
-
-// stopAfterOne makes the appliance stop listening once it has taken one
-// connection, which is sshd going away between two steps of the same pass.
-func (r *sshServer) stopAfterOne() {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-	r.once = true
 }
 
 // dropOn makes the appliance drop the connection when it is asked to run this
@@ -112,12 +98,6 @@ func (r *sshServer) dropOn(command string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.dropping[command] = true
-}
-
-func (r *sshServer) stopping() bool {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-	return r.once
 }
 
 // Ran is the commands the appliance was asked to run, in the order it was asked.

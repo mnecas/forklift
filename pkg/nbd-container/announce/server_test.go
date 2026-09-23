@@ -37,7 +37,7 @@ func TestAnnounceRequiresClientCert(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go srv.http.Serve(ln)
+	go func() { _ = srv.http.Serve(ln) }()
 	addr := ln.Addr().String()
 
 	caPool := x509.NewCertPool()
