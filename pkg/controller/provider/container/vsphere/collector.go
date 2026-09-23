@@ -154,6 +154,7 @@ const (
 	fConsolidationNeeded      = "runtime.consolidationNeeded"
 	fSnapshot                 = "snapshot"
 	fIsTemplate               = "config.template"
+	fAnnotation               = "config.annotation"
 	fGuestNet                 = "guest.net"
 	fGuestDisk                = "guest.disk"
 	fGuestIpStack             = "guest.ipStack"
@@ -1141,6 +1142,7 @@ func (r *Collector) vmPathSet() []string {
 		fConnectionState,
 		fConsolidationNeeded,
 		fIsTemplate,
+		fAnnotation,
 		fSnapshot,
 		fChangeTracking,
 		fGuestIpStack,
