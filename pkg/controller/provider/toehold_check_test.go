@@ -261,10 +261,8 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			wantAppliance: "gone",
 		},
 		{
-			name:          "a missing template is waited on",
+			name:          "a missing template does not block the provider",
 			noTemplate:    true,
-			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "Waiting for the toehold template",
 			wantAppliance: "gone",
 		},
 	}

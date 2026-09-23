@@ -769,8 +769,7 @@ func (r *Reconciler) cleanupProviderServer(ctx context.Context, provider *api.Pr
 }
 
 // toeholdTemplateName is the name of a provider's toehold template. The
-// appliance check reads the template this function creates, so the two have to
-// agree on where it is.
+// appliance check and UI create agree on this name.
 func toeholdTemplateName(provider *api.Provider) string {
 	return provider.Name + "-toehold"
 }
@@ -781,6 +780,8 @@ func toeholdPlacement(provider *api.Provider) (datastore, folder, network string
 		provider.Setting(api.ToeholdNetwork)
 }
 
+// ensureToeholdTemplate syncs placement and ForkliftController image settings
+// onto an existing ToeholdTemplate. Creation is left to the user (console/API).
 func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Provider) error {
 	if provider.Status.HasBlockerCondition() ||
 		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
@@ -793,6 +794,15 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 	}
 
 	name := toeholdTemplateName(provider)
+	existing := &api.ToeholdTemplate{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, existing)
+	if k8serr.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
 	desired := api.ToeholdTemplateSpec{
 		Provider:     v1.ObjectReference{Name: provider.Name, Namespace: provider.Namespace},
 		TemplateName: name,
@@ -805,22 +815,6 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 		Folder:    folder,
 		Network:   network,
 		Images:    api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage},
-	}
-
-	existing := &api.ToeholdTemplate{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, existing)
-	if k8serr.IsNotFound(err) {
-		template := &api.ToeholdTemplate{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: provider.Namespace},
-			Spec:       desired,
-		}
-		if err = k8sutil.SetControllerReference(provider, template, r.scheme); err != nil {
-			return err
-		}
-		return r.Create(ctx, template)
-	}
-	if err != nil {
-		return err
 	}
 	if reflect.DeepEqual(existing.Spec, desired) && metav1.IsControlledBy(existing, provider) {
 		return nil
@@ -846,6 +840,10 @@ func (r *Reconciler) ensureToeholdApplianceCheck(ctx context.Context, provider *
 
 	toehold := &api.ToeholdTemplate{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: toeholdTemplateName(provider)}, toehold)
+	if k8serr.IsNotFound(err) {
+		// Template is created explicitly (UI/API); do not block the provider.
+		return
+	}
 	if err != nil || toehold.Status.Phase != api.ToeholdTemplatePhaseSucceeded || toehold.Status.Template.Moref == "" {
 		provider.Status.SetCondition(libcnd.Condition{
 			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
