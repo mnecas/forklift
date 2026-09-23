@@ -1031,7 +1031,8 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				break
 			}
 			r.NextPhase(vm)
-		case api.PhaseWaitForCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance:
+		case api.PhaseWaitForCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance,
+			api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
@@ -1059,7 +1060,8 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				step.MarkCompleted()
 			}
 			r.NextPhase(vm)
-		case api.PhaseReleaseCopyAppliance:
+		case api.PhaseReleaseCopyAppliance, api.PhaseReleaseCopyApplianceBeforeCutover,
+			api.PhaseReleaseCopyApplianceBeforeFinalSnap:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
@@ -1072,7 +1074,8 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				break
 			}
 			r.NextPhase(vm)
-		case api.PhaseWaitForCopyApplianceReleased:
+		case api.PhaseWaitForCopyApplianceReleased, api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+			api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
@@ -1089,7 +1092,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				return
 			}
 			r.NextPhase(vm)
-		case api.PhaseRefreshCopyAppliance:
+		case api.PhaseRefreshCopyAppliance, api.PhaseRefreshCopyApplianceBeforeFinalize:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))

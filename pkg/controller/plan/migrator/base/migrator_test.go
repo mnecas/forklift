@@ -259,6 +259,12 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 		api.PhaseWaitForCopyApplianceReleased,
 		api.PhaseRefreshCopyAppliance,
 		api.PhaseWaitForRefreshedCopyAppliance,
+		api.PhaseReleaseCopyApplianceBeforeCutover,
+		api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+		api.PhaseRefreshCopyApplianceBeforeFinalize,
+		api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize,
+		api.PhaseReleaseCopyApplianceBeforeFinalSnap,
+		api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap,
 	} {
 		if !phases[phase] {
 			t.Fatalf("expected warm copy appliance itinerary to include %q", phase)
@@ -304,6 +310,34 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	if next.Name != api.PhaseWaitForRefreshedCopyAppliance {
 		t.Fatalf("expected next phase %q after refresh, got %q", api.PhaseWaitForRefreshedCopyAppliance, next.Name)
 	}
+
+	wantCutoverOrder := []string{
+		api.PhaseWaitForPowerOff,
+		api.PhaseReleaseCopyApplianceBeforeCutover,
+		api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+		api.PhaseRemovePenultimateSnapshot,
+		api.PhaseWaitForPenultimateSnapshotRemoval,
+		api.PhaseCreateFinalSnapshot,
+		api.PhaseWaitForFinalSnapshot,
+		api.PhaseRefreshCopyApplianceBeforeFinalize,
+		api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize,
+		api.PhaseAddFinalCheckpoint,
+		api.PhaseFinalize,
+		api.PhaseReleaseCopyApplianceBeforeFinalSnap,
+		api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap,
+		api.PhaseRemoveFinalSnapshot,
+	}
+	idx := map[string]int{}
+	for i, step := range list {
+		idx[step.Name] = i
+	}
+	for i := 1; i < len(wantCutoverOrder); i++ {
+		prev, cur := wantCutoverOrder[i-1], wantCutoverOrder[i]
+		if idx[prev] >= idx[cur] {
+			t.Fatalf("cutover order: %q (idx %d) should precede %q (idx %d)", prev, idx[prev], cur, idx[cur])
+		}
+	}
+
 	seen := map[string]int{}
 	for _, step := range list {
 		seen[step.Name]++
@@ -329,6 +363,18 @@ func TestStep_WarmCopyApplianceReleaseRefreshBelongToDiskTransfer(t *testing.T) 
 	} {
 		if got := migrator.Step(&plan.VMStatus{Phase: phase}); got != DiskTransfer {
 			t.Errorf("Step(%s) = %q, want DiskTransfer", phase, got)
+		}
+	}
+	for _, phase := range []string{
+		api.PhaseReleaseCopyApplianceBeforeCutover,
+		api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+		api.PhaseRefreshCopyApplianceBeforeFinalize,
+		api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize,
+		api.PhaseReleaseCopyApplianceBeforeFinalSnap,
+		api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap,
+	} {
+		if got := migrator.Step(&plan.VMStatus{Phase: phase}); got != Cutover {
+			t.Errorf("Step(%s) = %q, want Cutover", phase, got)
 		}
 	}
 }

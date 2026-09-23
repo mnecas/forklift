@@ -301,7 +301,10 @@ func (r *BaseMigrator) Step(status *plan.VMStatus) (step string) {
 			step = Initialize
 		}
 	case api.PhaseRemovePenultimateSnapshot, api.PhaseWaitForPenultimateSnapshotRemoval, api.PhaseCreateFinalSnapshot,
-		api.PhaseWaitForFinalSnapshot, api.PhaseAddFinalCheckpoint, api.PhaseFinalize, api.PhaseRemoveFinalSnapshot:
+		api.PhaseWaitForFinalSnapshot, api.PhaseAddFinalCheckpoint, api.PhaseFinalize, api.PhaseRemoveFinalSnapshot,
+		api.PhaseReleaseCopyApplianceBeforeCutover, api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+		api.PhaseRefreshCopyApplianceBeforeFinalize, api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize,
+		api.PhaseReleaseCopyApplianceBeforeFinalSnap, api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap:
 		step = Cutover
 	case api.PhaseCreateGuestConversionPod, api.PhaseConvertGuest:
 		step = ImageConversion
@@ -362,12 +365,19 @@ func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
 			{Name: api.PhaseStorePowerState},
 			{Name: api.PhasePowerOffSource},
 			{Name: api.PhaseWaitForPowerOff},
+			// Detach before snapshot remove so the base VMDK is not locked for consolidation.
+			{Name: api.PhaseReleaseCopyApplianceBeforeCutover},
+			{Name: api.PhaseWaitForCopyApplianceReleasedBeforeCutover},
 			{Name: api.PhaseRemovePenultimateSnapshot, All: VSphere},
 			{Name: api.PhaseWaitForPenultimateSnapshotRemoval, All: VSphere},
 			{Name: api.PhaseCreateFinalSnapshot},
 			{Name: api.PhaseWaitForFinalSnapshot},
+			{Name: api.PhaseRefreshCopyApplianceBeforeFinalize},
+			{Name: api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize},
 			{Name: api.PhaseAddFinalCheckpoint},
 			{Name: api.PhaseFinalize},
+			{Name: api.PhaseReleaseCopyApplianceBeforeFinalSnap},
+			{Name: api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap},
 			{Name: api.PhaseRemoveFinalSnapshot, All: VSphere},
 			{Name: api.PhaseCreateGuestConversionPod, All: RequiresConversion},
 			{Name: api.PhaseConvertGuest, All: RequiresConversion},
