@@ -114,7 +114,7 @@ func (r *Orchestrator) renderUnit() (unit string, err error) {
 		Image:        image,
 		AnnouncePort: r.context.announcePort(),
 		BasePort:     applianceBasePort,
-		TLS:          r.NbdSsl,
+		TLS:          r.context.NbdSsl,
 	})
 	if err != nil {
 		err = liberr.Wrap(err)
