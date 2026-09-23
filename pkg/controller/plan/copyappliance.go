@@ -154,7 +154,7 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (ready bool, err err
 			cacontroller.NeedsExportConvergence(appliance) {
 			return false, nil
 		}
-		_, err = cacontroller.ExportNbdConnections(appliance)
+		_, err = cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
 		if err != nil {
 			return false, liberr.Wrap(err)
 		}

@@ -35,6 +35,8 @@ type ApplianceContext struct {
 	ApplianceSecret *core.Secret
 	VCenter         *govmomi.Client
 	Log             logging.LevelLogger
+	// NbdSsl requires mutual TLS on nbdkit exports (provider toeholdNbdSsl).
+	NbdSsl bool
 	// sshPort is the port the appliance's sshd answers on. Empty means the
 	// standard port, which is the only one an appliance image is built with;
 	// a test appliance is on whatever it was given.
@@ -58,6 +60,7 @@ func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, prov
 		Secret:          secret,
 		ApplianceSecret: applianceSecret,
 		Log:             log,
+		NbdSsl:          provider.ToeholdNbdSsl(),
 	}
 	ac.VCenter, err = base.ConnectGovmomi(
 		ctx,

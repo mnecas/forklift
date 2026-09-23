@@ -107,12 +107,14 @@ func (r *Orchestrator) renderUnit() (unit string, err error) {
 		Image        string
 		AnnouncePort string
 		BasePort     int
+		TLS          bool
 	}{
 		Binary:       orchestratorBinary,
 		CertsDir:     applianceCertsDir,
 		Image:        image,
 		AnnouncePort: r.context.announcePort(),
 		BasePort:     applianceBasePort,
+		TLS:          r.NbdSsl,
 	})
 	if err != nil {
 		err = liberr.Wrap(err)

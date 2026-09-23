@@ -95,6 +95,7 @@ const (
 	ToeholdDatastore          = "toeholdDatastore"
 	ToeholdFolder             = "toeholdFolder"
 	ToeholdNetwork            = "toeholdNetwork"
+	ToeholdNbdSsl             = "toeholdNbdSsl"
 	CopyApplianceResourcePool = "copyApplianceResourcePool"
 )
 
@@ -249,4 +250,9 @@ func (p *Provider) Setting(key string) string {
 		return ""
 	}
 	return p.Spec.Settings[key]
+}
+
+// ToeholdNbdSsl reports whether mutual TLS is required for copy-appliance NBD exports.
+func (p *Provider) ToeholdNbdSsl() bool {
+	return p.Setting(ToeholdNbdSsl) == "true"
 }
