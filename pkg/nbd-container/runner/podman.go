@@ -42,6 +42,8 @@ type Config struct {
 	Image     string // container image, e.g. localhost/nbd-container
 	BasePort  int    // first host port to allocate
 	PublishIP string // host IP to bind published ports to (e.g. 0.0.0.0)
+	CertsDir  string // host TLS certs directory; empty disables NBD TLS
+	TLS       bool   // require mutual TLS on nbdkit exports
 }
 
 // Runner shells out to podman.
@@ -131,12 +133,20 @@ func (r *Runner) run(ctx context.Context, d blockdev.Device, hostPort int) error
 		"--label", deviceLabel + "=" + d.Path,
 		"--label", portLabel + "=" + strconv.Itoa(hostPort),
 		"--device", fmt.Sprintf("%s:/dev/nbd-export:r", d.Path),
+	}
+	if r.cfg.TLS && r.cfg.CertsDir != "" {
+		args = append(args, "-v", r.cfg.CertsDir+":/etc/pki/nbd:ro")
+	}
+	args = append(args,
 		"--entrypoint", "nbdkit",
 		r.cfg.Image,
 		"--foreground", "--readonly",
 		"--port", strconv.Itoa(hostPort),
-		"file", "/dev/nbd-export",
+	)
+	if r.cfg.TLS {
+		args = append(args, "--tls=require", "--tls-certificates=/etc/pki/nbd", "--tls-verify-peer")
 	}
+	args = append(args, "file", "/dev/nbd-export")
 	if out, err := exec.CommandContext(ctx, "podman", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("podman run: %w: %s", err, strings.TrimSpace(string(out)))
 	}

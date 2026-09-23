@@ -8,8 +8,11 @@ import (
 )
 
 func TestNbdURI(t *testing.T) {
-	if got := NbdURI("10.0.0.5", 10809); got != "nbd://10.0.0.5:10809" {
+	if got := NbdURI("10.0.0.5", 10809, false); got != "nbd://10.0.0.5:10809" {
 		t.Fatalf("NbdURI() = %q", got)
+	}
+	if got := NbdURI("10.0.0.5", 10809, true); got != "nbds://10.0.0.5:10809" {
+		t.Fatalf("NbdURI(ssl) = %q", got)
 	}
 }
 
@@ -27,12 +30,19 @@ func TestExportNbdConnections(t *testing.T) {
 			},
 		},
 	}
-	connections, err := ExportNbdConnections(appliance)
+	connections, err := ExportNbdConnections(appliance, false)
 	if err != nil {
 		t.Fatalf("ExportNbdConnections() error: %v", err)
 	}
 	if connections["[ds] vm/disk-0.vmdk"] != "nbd://10.0.0.5:10809" {
 		t.Fatalf("unexpected connection map: %#v", connections)
+	}
+	connections, err = ExportNbdConnections(appliance, true)
+	if err != nil {
+		t.Fatalf("ExportNbdConnections(ssl) error: %v", err)
+	}
+	if connections["[ds] vm/disk-0.vmdk"] != "nbds://10.0.0.5:10809" {
+		t.Fatalf("unexpected ssl connection map: %#v", connections)
 	}
 }
 
@@ -50,7 +60,7 @@ func TestExportNbdConnectionsWarmSnapshotPath(t *testing.T) {
 			},
 		},
 	}
-	connections, err := ExportNbdConnections(appliance)
+	connections, err := ExportNbdConnections(appliance, false)
 	if err != nil {
 		t.Fatalf("ExportNbdConnections() error: %v", err)
 	}

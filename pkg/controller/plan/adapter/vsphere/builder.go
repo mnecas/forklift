@@ -625,6 +625,25 @@ func (r *Builder) Secret(vmRef ref.Ref, in, object *core.Secret) (err error) {
 	if cacert, ok := util.GetCACert(in); ok {
 		object.Data["cacert"] = cacert
 	}
+	if r.Source.Provider.ToeholdNbdSsl() {
+		name := r.Source.Provider.Status.ToeholdSSHPrivateSecret
+		if name == "" {
+			return fmt.Errorf("provider has no toehold SSH private secret for NBD TLS")
+		}
+		toeholdSecret := &core.Secret{}
+		if err = r.Get(context.Background(), client.ObjectKey{
+			Name: name, Namespace: r.Source.Provider.Namespace,
+		}, toeholdSecret); err != nil {
+			return fmt.Errorf("failed to get toehold secret %s for NBD TLS: %w", name, err)
+		}
+		for _, key := range []string{"ca-cert.pem", "client-cert.pem", "client-key.pem"} {
+			data, found := toeholdSecret.Data[key]
+			if !found || len(data) == 0 {
+				return fmt.Errorf("toehold secret %s missing %s for NBD TLS", name, key)
+			}
+			object.Data[key] = data
+		}
+	}
 	return
 }
 
@@ -874,7 +893,7 @@ func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) 
 	if err != nil {
 		return nil, liberr.Wrap(err)
 	}
-	return cacontroller.ExportNbdConnections(appliance)
+	return cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
 }
 
 func (r *Builder) applyHostsConfig(vmRef ref.Ref, url, thumbprint string) (string, string, error) {
