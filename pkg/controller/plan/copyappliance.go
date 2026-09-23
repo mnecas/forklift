@@ -151,7 +151,7 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (ready bool, err err
 		}
 		req := appliance.Spec.ExportRequest
 		if req != nil && req.Target == api.ExportTargetExport &&
-			!cacontroller.ExportRequestObserved(appliance) {
+			cacontroller.NeedsExportConvergence(appliance) {
 			return false, nil
 		}
 		_, err = cacontroller.ExportNbdConnections(appliance)
@@ -191,7 +191,7 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (ready bool,
 	if appliance.Status.Phase != cacontroller.PhaseReleased {
 		return false, nil
 	}
-	if !cacontroller.ExportRequestObserved(appliance) {
+	if cacontroller.NeedsExportConvergence(appliance) {
 		return false, nil
 	}
 	return true, nil

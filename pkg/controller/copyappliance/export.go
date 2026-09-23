@@ -24,48 +24,6 @@ func NeedsExportConvergence(appliance *api.CopyAppliance) bool {
 	return obs == nil || req.Generation != obs.Generation || req.Target != obs.Target
 }
 
-// ExportRequestObserved reports whether the controller has converged spec.exportRequest.
-func ExportRequestObserved(appliance *api.CopyAppliance) bool {
-	req := appliance.Spec.ExportRequest
-	obs := appliance.Status.ObservedExportRequest
-	if req == nil || obs == nil {
-		return false
-	}
-	return req.Generation == obs.Generation && req.Target == obs.Target
-}
-
-// IsExportPhase reports whether phase belongs to the export release/reattach
-// pipeline. Deploy also uses PhaseWaitForExports; RoutesToExportRunner decides
-// which runner should handle the CR.
-func IsExportPhase(phase string) bool {
-	switch phase {
-	case PhaseReleaseDisks, PhaseWaitForReleaseDisks,
-		PhaseAttachDisks, PhaseWaitForAttachDisks,
-		PhaseRestartOrchestrator:
-		return true
-	default:
-		return false
-	}
-}
-
-// RoutesToExportRunner reports whether the export runner should reconcile the
-// appliance. Initial deploy waits for exports without an exportRequest.
-func RoutesToExportRunner(appliance *api.CopyAppliance) bool {
-	if IsExportPhase(appliance.Status.Phase) {
-		return true
-	}
-	if appliance.Status.Phase == PhaseWaitForExports &&
-		appliance.Spec.ExportRequest != nil {
-		return true
-	}
-	if (appliance.Status.Phase == PhaseDeployCompleted ||
-		appliance.Status.Phase == PhaseReleased) &&
-		NeedsExportConvergence(appliance) {
-		return true
-	}
-	return false
-}
-
 // Begin seeds the export itinerary from the requested target.
 func (r *ExportRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
@@ -112,9 +70,6 @@ func (r *ExportRunner) Run(ctx context.Context) (err error) {
 	return
 }
 
-// itinerary returns the pipeline for the requested target and the phase that
-// ends it. The two targets are disjoint routes rather than variations on one,
-// so the target picks the table and the phase alone then picks the step.
 func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed string, err error) {
 	req := r.context.Appliance.Spec.ExportRequest
 	if req == nil {
@@ -150,114 +105,82 @@ func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed strin
 	return
 }
 
-// execute runs one export step and reports whether it finished. A step with
-// nothing to wait for finishes, and the walk moves on to the next step within
-// the same pass. The terminal phases report not finished, which parks the walk
-// on them.
 func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, err error) {
 	switch phase {
 	case PhaseReleaseDisks:
-		err = r.detachAttached(ctx)
-		if err != nil {
+		detachVM := r.context.VM(r.context.Appliance.Status.MoRef)
+		detachTask, detachErr := r.context.DetachAttachedDisks(ctx, detachVM)
+		if detachErr != nil {
+			err = detachErr
 			return
 		}
+		r.context.SetTask(detachTask)
 		done = true
 	case PhaseWaitForReleaseDisks:
-		done, err = r.waitForDetach(ctx)
+		done, _, err = r.context.WaitForTask(ctx)
 		if err != nil || !done {
 			return
 		}
 		r.context.Appliance.Status.Exports = nil
 	case PhaseAttachDisks:
-		err = r.attach(ctx)
+		attachVM := r.context.VM(r.context.Appliance.Status.MoRef)
+		attachTask, attachErr := r.context.AttachDisks(ctx, attachVM)
+		if attachErr != nil {
+			err = attachErr
+			return
+		}
+		r.context.SetTask(attachTask)
+		done = true
+	case PhaseWaitForAttachDisks:
+		done, _, err = r.context.WaitForTask(ctx)
+	case PhaseRestartOrchestrator:
+		address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
+		if !ok {
+			err = liberr.New(
+				"the appliance reports no address to reach it on",
+				"appliance", r.context.Appliance.Name)
+			return
+		}
+		orch, ready, loginErr := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
+		if loginErr != nil {
+			err = loginErr
+			return
+		}
+		if !ready {
+			r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+			return
+		}
+		defer func() {
+			_ = orch.Close()
+		}()
+		err = orch.Restart()
 		if err != nil {
+			if !IsExitError(err) {
+				r.context.Log.Info(
+					"Lost the connection to the appliance while restarting the supervisor.",
+					"address", address,
+					"error", err.Error())
+				err = nil
+			}
 			return
 		}
 		done = true
-	case PhaseWaitForAttachDisks:
-		done, err = r.waitForAttach(ctx)
-	case PhaseRestartOrchestrator:
-		done, err = r.restartOrchestrator(ctx)
 	case PhaseWaitForExports:
 		done, err = r.context.WaitForExports(ctx)
-	case PhaseReleased:
+	case PhaseReleased, PhaseDeployCompleted:
 		r.context.observeExportRequest()
+		msg := "Copy appliance disk export has succeeded."
+		if phase == PhaseReleased {
+			msg = "Copy appliance disks have been released."
+		}
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
-			Message:  "Copy appliance disks have been released.",
-		})
-	case PhaseDeployCompleted:
-		r.context.observeExportRequest()
-		r.context.Appliance.Status.SetCondition(libcnd.Condition{
-			Type:     libcnd.Ready,
-			Status:   libcnd.True,
-			Category: libcnd.Required,
-			Message:  "Copy appliance disk export has succeeded.",
+			Message:  msg,
 		})
 	default:
 		err = liberr.New("unexpected phase for export", "phase", phase)
 	}
-	return
-}
-
-func (r *ExportRunner) detachAttached(ctx context.Context) (err error) {
-	vm := r.context.VM(r.context.Appliance.Status.MoRef)
-	task, err := r.context.DetachAttachedDisks(ctx, vm)
-	if err != nil {
-		return
-	}
-	r.context.SetTask(task)
-	return
-}
-
-func (r *ExportRunner) waitForDetach(ctx context.Context) (done bool, err error) {
-	done, _, err = r.context.WaitForTask(ctx)
-	return
-}
-
-func (r *ExportRunner) attach(ctx context.Context) (err error) {
-	vm := r.context.VM(r.context.Appliance.Status.MoRef)
-	task, err := r.context.AttachDisks(ctx, vm)
-	if err != nil {
-		return
-	}
-	r.context.SetTask(task)
-	return
-}
-
-func (r *ExportRunner) waitForAttach(ctx context.Context) (done bool, err error) {
-	done, _, err = r.context.WaitForTask(ctx)
-	return
-}
-
-func (r *ExportRunner) restartOrchestrator(ctx context.Context) (done bool, err error) {
-	address, _ := applianceAddress(r.context.Appliance.Status.Addresses)
-
-	orch, ready, err := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
-	if err != nil {
-		return
-	}
-	if !ready {
-		r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
-		return
-	}
-	defer func() {
-		_ = orch.Close()
-	}()
-
-	err = orch.Restart()
-	if err != nil {
-		if !IsExitError(err) {
-			r.context.Log.Info(
-				"Lost the connection to the appliance while restarting the supervisor.",
-				"address", address,
-				"error", err.Error())
-			err = nil
-		}
-		return
-	}
-	done = true
 	return
 }

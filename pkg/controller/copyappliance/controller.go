@@ -90,35 +90,42 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		r.Log.V(2).Info("Conditions.", "all", appliance.Status.Conditions)
 	}()
 
-	if !r.NeedsReconcile(appliance) {
+	deleting := !appliance.DeletionTimestamp.IsZero()
+	terminalPhase := appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased
+	if !deleting && terminalPhase && !NeedsExportConvergence(appliance) {
 		r.Log.Info("Nothing to do.")
 		return
 	}
-	//if !deleting &&
-	//	(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) &&
-	//	!NeedsExportConvergence(appliance) &&
-	//	!IsExportPhase(appliance.Status.Phase) {
-	//	// Nothing left to do.
-	//	return
-	//}
 
 	appliance.Status.BeginStagingConditions()
-	deleting := !appliance.DeletionTimestamp.IsZero()
-	switch {
-	case deleting:
+	if deleting {
 		err = r.Teardown(ctx, appliance)
-	case RoutesToExportRunner(appliance):
-		err = r.AddFinalizer(ctx, appliance)
-		if err != nil {
-			return
+	} else {
+		patch := client.MergeFrom(appliance.DeepCopy())
+		if controllerutil.AddFinalizer(appliance, api.CopyApplianceFinalizer) {
+			err = r.Patch(ctx, appliance, patch)
+			if err != nil {
+				err = liberr.Wrap(err)
+				r.Log.Error(err, "failed to add finalizer", "appliance", appliance.Name, "namespace", appliance.Namespace)
+				return
+			}
 		}
-		err = r.Export(ctx, appliance)
-	default:
-		err = r.AddFinalizer(ctx, appliance)
-		if err != nil {
-			return
+		switch appliance.Status.Phase {
+		case PhaseReleaseDisks, PhaseWaitForReleaseDisks,
+			PhaseAttachDisks, PhaseWaitForAttachDisks,
+			PhaseRestartOrchestrator,
+			PhaseDeployCompleted, PhaseReleased:
+			err = r.Export(ctx, appliance)
+		case PhaseWaitForExports:
+			// Shared with deploy; only an exportRequest makes it export's job.
+			if appliance.Spec.ExportRequest != nil {
+				err = r.Export(ctx, appliance)
+			} else {
+				err = r.Deploy(ctx, appliance)
+			}
+		default:
+			err = r.Deploy(ctx, appliance)
 		}
-		err = r.Deploy(ctx, appliance)
 	}
 	appliance.Status.EndStagingConditions()
 
@@ -149,12 +156,6 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		}
 	}
 	return
-}
-
-func (r Reconciler) NeedsReconcile(appliance *api.CopyAppliance) bool {
-	deleting := !appliance.DeletionTimestamp.IsZero()
-	terminalPhase := appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased
-	return deleting || !terminalPhase || NeedsExportConvergence(appliance)
 }
 
 // requeueFor returns how long to wait before the next pass. Every wait here is
@@ -205,21 +206,6 @@ func requeueFor(phase string) (reQ time.Duration) {
 		// An action phase is never observed: ExecutePhase falls through it in
 		// the same pass. So this is a completed appliance, or nothing to do
 		// at all, and either way we wait for a watch event.
-	}
-	return
-}
-
-// AddFinalizer holds the appliance in the cluster until its VM has been torn
-// down.
-func (r *Reconciler) AddFinalizer(ctx context.Context, appliance *api.CopyAppliance) (err error) {
-	patch := client.MergeFrom(appliance.DeepCopy())
-	if controllerutil.AddFinalizer(appliance, api.CopyApplianceFinalizer) {
-		err = r.Patch(ctx, appliance, patch)
-		if err != nil {
-			err = liberr.Wrap(err)
-			r.Log.Error(err, "failed to add finalizer", "appliance", appliance.Name, "namespace", appliance.Namespace)
-			return
-		}
 	}
 	return
 }
