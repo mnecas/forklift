@@ -523,9 +523,14 @@ func (r *VMEventHandler) workload(vmID string) (object interface{}, err error) {
 	return
 }
 
+const copyApplianceAnnotation = "Forklift Copy Appliance"
+
 func buildFileCount(allVMs []model.VM) map[string]int {
 	m := map[string]int{}
 	for i := range allVMs {
+		if allVMs[i].Annotation == copyApplianceAnnotation {
+			continue
+		}
 		for _, disk := range allVMs[i].Disks {
 			m[disk.File]++
 		}

@@ -849,6 +849,10 @@ func (v *VmAdapter) Apply(u types.ObjectUpdate) {
 				if b, cast := p.Val.(bool); cast {
 					v.model.IsTemplate = b
 				}
+			case fAnnotation:
+				if s, cast := p.Val.(string); cast {
+					v.model.Annotation = s
+				}
 			case fSnapshot:
 				if snapshot, cast := p.Val.(types.VirtualMachineSnapshotInfo); cast {
 					ref := snapshot.CurrentSnapshot
