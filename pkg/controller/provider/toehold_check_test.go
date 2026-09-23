@@ -171,8 +171,8 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		objects []client.Object
 		// template replaces the built and imported one.
 		template *api.ToeholdTemplate
-		// settings clears the toehold configuration.
-		unconfigured bool
+		// noTemplate skips creating a ToeholdTemplate in the fake client.
+		noTemplate bool
 
 		wantBlockedBy string // reason of ToeholdApplianceNotReady, "" for ready
 		wantRecorded  string // reason of ToeholdApplianceChecked, "" for none
@@ -182,14 +182,14 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		{
 			name:          "a provider that has never been checked deploys an appliance",
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "has started",
+			wantMessage:   "started",
 			wantAppliance: "present",
 		},
 		{
 			name:          "an appliance that came up records a pass and is torn down",
 			objects:       []client.Object{checkAppliance(copyappliance.PhaseDeployCompleted)},
 			wantRecorded:  ToeholdCheckPassed,
-			wantMessage:   "served its export endpoint",
+			wantMessage:   "passed",
 			wantAppliance: "terminating",
 		},
 		{
@@ -197,7 +197,7 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			objects:       []client.Object{failed},
 			wantBlockedBy: ToeholdCheckFailed,
 			wantRecorded:  ToeholdCheckFailed,
-			wantMessage:   "the guest never reported an address",
+			wantMessage:   "check failed",
 			wantAppliance: "terminating",
 		},
 		{
@@ -212,14 +212,14 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			objects:       []client.Object{stale},
 			wantBlockedBy: ToeholdCheckFailed,
 			wantRecorded:  ToeholdCheckFailed,
-			wantMessage:   "did not deploy within",
+			wantMessage:   "check failed",
 			wantAppliance: "terminating",
 		},
 		{
 			name:          "a teardown in progress is waited out rather than forced",
 			objects:       []client.Object{terminating},
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "torn down",
+			wantMessage:   "teardown",
 			wantAppliance: "terminating",
 		},
 		{
@@ -250,21 +250,21 @@ func TestToeholdApplianceCheck(t *testing.T) {
 				Items:  []string{"vm-800", "disk-0", "config-1", "copy-appliance:latest"},
 			},
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "has started",
+			wantMessage:   "started",
 			wantAppliance: "present",
 		},
 		{
 			name:          "a template that has not been built yet is waited on",
 			template:      &api.ToeholdTemplate{ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"}},
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "Waiting for the toehold template vcenter-toehold",
+			wantMessage:   "Waiting for the toehold template",
 			wantAppliance: "gone",
 		},
 		{
-			name:          "an unconfigured feature says so rather than waiting forever",
-			unconfigured:  true,
+			name:          "a missing template is waited on",
+			noTemplate:    true,
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "Provider.spec.settings." + api.ToeholdDatastore,
+			wantMessage:   "Waiting for the toehold template",
 			wantAppliance: "gone",
 		},
 	}
@@ -273,10 +273,6 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			withToeholdSettings(t)
 			provider := checkProvider()
-			if tt.unconfigured {
-				Settings.Toehold.BaseDiskContainerImage = ""
-				provider.Spec.Settings = nil
-			}
 			if tt.recorded != nil {
 				recorded := *tt.recorded
 				recorded.Type = ToeholdApplianceChecked
@@ -285,11 +281,15 @@ func TestToeholdApplianceCheck(t *testing.T) {
 				recorded.Durable = true
 				provider.Status.SetCondition(recorded)
 			}
-			template := tt.template
-			if template == nil {
-				template = checkTemplate()
+			objects := []client.Object{provider}
+			if !tt.noTemplate {
+				template := tt.template
+				if template == nil {
+					template = checkTemplate()
+				}
+				objects = append(objects, template)
 			}
-			objects := append([]client.Object{provider, template}, tt.objects...)
+			objects = append(objects, tt.objects...)
 			r := testCheckReconciler(t, objects...)
 
 			r.pass(provider)

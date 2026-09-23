@@ -26,11 +26,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
+	"github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	"github.com/kubev2v/forklift/pkg/controller/provider/container"
 	"github.com/kubev2v/forklift/pkg/controller/provider/model"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
@@ -773,6 +775,12 @@ func toeholdTemplateName(provider *api.Provider) string {
 	return provider.Name + "-toehold"
 }
 
+func toeholdPlacement(provider *api.Provider) (datastore, folder, network string) {
+	return provider.Setting(api.ToeholdDatastore),
+		provider.Setting(api.ToeholdFolder),
+		provider.Setting(api.ToeholdNetwork)
+}
+
 func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Provider) error {
 	if provider.Status.HasBlockerCondition() ||
 		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
@@ -822,4 +830,126 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 		return err
 	}
 	return r.Update(ctx, existing)
+}
+
+const toeholdCheckDeadline = 30 * time.Minute
+
+// ensureToeholdApplianceCheck proves the copy appliance works once, then tears
+// it down. ToeholdApplianceChecked remembers the verdict; ToeholdApplianceNotReady
+// blocks the provider until that verdict is a pass.
+func (r *Reconciler) ensureToeholdApplianceCheck(ctx context.Context, provider *api.Provider) {
+	if provider.DeletionTimestamp != nil ||
+		provider.Status.HasBlockerCondition() ||
+		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
+		return
+	}
+
+	toehold := &api.ToeholdTemplate{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: toeholdTemplateName(provider)}, toehold)
+	if err != nil || toehold.Status.Phase != api.ToeholdTemplatePhaseSucceeded || toehold.Status.Template.Moref == "" {
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
+			Category: Critical, Message: "Waiting for the toehold template.",
+		})
+		return
+	}
+
+	inputs := []string{
+		toehold.Status.Template.Moref,
+		toehold.Status.Template.DiskHash,
+		toehold.Status.Template.ConfigHash,
+		Settings.CopyAppliance.ContainerImage,
+	}
+	if cnd := provider.Status.FindCondition(ToeholdApplianceChecked); cnd != nil && slices.Equal(cnd.Items, inputs) {
+		r.deleteToeholdCheck(ctx, provider)
+		if cnd.Reason != ToeholdCheckPassed {
+			provider.Status.SetCondition(libcnd.Condition{
+				Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckFailed,
+				Category: Critical, Message: cnd.Message,
+			})
+		}
+		return
+	}
+	provider.Status.DeleteCondition(ToeholdApplianceChecked)
+
+	check := &api.CopyAppliance{}
+	err = r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: copyappliance.CheckName(provider.Name)}, check)
+	if err != nil && !k8serr.IsNotFound(err) {
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
+			Category: Critical, Message: fmt.Sprintf("Could not read check appliance: %s", err),
+		})
+		return
+	}
+	if k8serr.IsNotFound(err) {
+		build := r.newCheckAppliance
+		if build == nil {
+			build = copyappliance.BuildCheck
+		}
+		check, err = build(provider, toehold)
+		if err == nil {
+			err = k8sutil.SetControllerReference(provider, check, r.scheme)
+		}
+		if err == nil {
+			err = r.Create(ctx, check)
+			if k8serr.IsAlreadyExists(err) {
+				err = nil
+			}
+		}
+		if err != nil {
+			provider.Status.SetCondition(libcnd.Condition{
+				Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckFailed,
+				Category: Critical, Message: fmt.Sprintf("Could not create check appliance: %s", err),
+			})
+			return
+		}
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
+			Category: Critical, Message: "Copy appliance check started.",
+		})
+		return
+	}
+
+	if check.DeletionTimestamp != nil {
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
+			Category: Critical, Message: "Waiting for check appliance teardown.",
+		})
+		return
+	}
+
+	if check.Status.Phase == copyappliance.PhaseDeployCompleted {
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceChecked, Status: True, Reason: ToeholdCheckPassed,
+			Category: Advisory, Message: "Copy appliance check passed.", Items: inputs, Durable: true,
+		})
+		r.deleteToeholdCheck(ctx, provider)
+		return
+	}
+
+	if check.Status.Phase == copyappliance.PhaseDeployFailed ||
+		time.Since(check.CreationTimestamp.Time) > toeholdCheckDeadline {
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceChecked, Status: True, Reason: ToeholdCheckFailed,
+			Category: Advisory, Message: "Copy appliance check failed.", Items: inputs, Durable: true,
+		})
+		provider.Status.SetCondition(libcnd.Condition{
+			Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckFailed,
+			Category: Critical, Message: "Copy appliance check failed.",
+		})
+		r.deleteToeholdCheck(ctx, provider)
+		return
+	}
+
+	provider.Status.SetCondition(libcnd.Condition{
+		Type: ToeholdApplianceNotReady, Status: True, Reason: ToeholdCheckPending,
+		Category: Critical, Message: fmt.Sprintf("Check running (%s).", check.Status.Phase),
+	})
+}
+
+func (r *Reconciler) deleteToeholdCheck(ctx context.Context, provider *api.Provider) {
+	_ = r.Delete(ctx, &api.CopyAppliance{ObjectMeta: metav1.ObjectMeta{
+		Namespace: provider.Namespace,
+		Name:      copyappliance.CheckName(provider.Name),
+	}})
 }
