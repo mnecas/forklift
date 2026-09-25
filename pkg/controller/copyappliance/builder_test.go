@@ -21,6 +21,7 @@ import (
 type fakeInventory struct {
 	web.Client
 	vm          model.VM
+	template    model.VM
 	folders     map[string]model.Folder
 	datacenters map[string]model.Datacenter
 	hosts       map[string]model.Host
@@ -31,12 +32,21 @@ type fakeInventory struct {
 	// appliance's network from the source VM fails rather than passes.
 }
 
-func (r *fakeInventory) Find(resource interface{}, _ ref.Ref) error {
+// Find resolves the ref it is given, so a test can tell which of the two VMs a
+// value was taken from.
+func (r *fakeInventory) Find(resource interface{}, vmRef ref.Ref) error {
 	out, ok := resource.(*model.VM)
 	if !ok {
 		return fmt.Errorf("unexpected Find for %T", resource)
 	}
-	*out = r.vm
+	switch vmRef.ID {
+	case r.vm.ID:
+		*out = r.vm
+	case r.template.ID:
+		*out = r.template
+	default:
+		return fmt.Errorf("vm %q not found", vmRef.ID)
+	}
 	return nil
 }
 
@@ -69,17 +79,27 @@ func lookup[T any](from map[string]T, id string, out *T, kind string) error {
 // is decided by the fixture, not by the ref.
 var testRef = ref.Ref{ID: "vm-101", Name: "web-01"}
 
-// testInventory is a VM on a clustered host, two folders deep, with one disk.
-// Every path is what PathBuilder would produce for that topology, hidden
+// testInventory is a source VM and the provider's toehold template, each on a
+// clustered host with one disk, in different folders and on different
+// datastores. Keeping the two apart is what makes it visible that placement
+// follows the template and only the attached disks follow the source VM. Every
+// path is what PathBuilder would produce for that topology, hidden
 // vm/host/network/datastore folders included.
 func testInventory() *fakeInventory {
 	resource := func(id, path string) model.Resource {
 		return model.Resource{ID: id, Path: path}
 	}
+	vmResource := func(id, path, folder string) model.Resource {
+		return model.Resource{
+			ID:     id,
+			Path:   path,
+			Parent: vspheremodel.Ref{Kind: vspheremodel.FolderKind, ID: folder},
+		}
+	}
 	return &fakeInventory{
 		vm: model.VM{
 			VM1: model.VM1{
-				VM0:  resource("vm-101", "/DC0/vm/apps/web-01"),
+				VM0:  vmResource("vm-101", "/DC0/vm/apps/web-01", "folder-apps"),
 				Host: "host-1",
 				Disks: []vspheremodel.Disk{
 					{
@@ -97,9 +117,28 @@ func testInventory() *fakeInventory {
 				{Network: vspheremodel.Ref{Kind: vspheremodel.NetKind, ID: "net-1"}, Index: 0},
 			},
 		},
+		template: model.VM{
+			VM1: model.VM1{
+				VM0:  vmResource("vm-900", "/DC0/vm/templates/vcenter-toehold", "folder-templates"),
+				Host: "host-1",
+				Disks: []vspheremodel.Disk{
+					{
+						Key:       2000,
+						File:      "[templates] vcenter-toehold/disk-0.vmdk",
+						Capacity:  8 << 30,
+						Datastore: vspheremodel.Ref{Kind: vspheremodel.DsKind, ID: "ds-2"},
+					},
+				},
+			},
+		},
 		folders: map[string]model.Folder{
 			"folder-apps": {
 				Resource:   resource("folder-apps", "/DC0/vm/apps"),
+				Folder:     "folder-vm",
+				Datacenter: "dc-1",
+			},
+			"folder-templates": {
+				Resource:   resource("folder-templates", "/DC0/vm/templates"),
 				Folder:     "folder-vm",
 				Datacenter: "dc-1",
 			},
@@ -122,20 +161,28 @@ func testInventory() *fakeInventory {
 		},
 		datastores: map[string]model.Datastore{
 			"ds-1": {Resource: resource("ds-1", "/DC0/datastore/datastore1")},
+			"ds-2": {Resource: resource("ds-2", "/DC0/datastore/templates")},
 		},
 	}
 }
 
-// vmParent sets the VM's parent, which is how the folder is found.
+// vmParent sets the source VM's parent.
 func (r *fakeInventory) vmParent(kind, id string) *fakeInventory {
 	r.vm.Parent = vspheremodel.Ref{Kind: kind, ID: id}
 	return r
 }
 
-func TestPlacementFollowsTheSourceVM(t *testing.T) {
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+// templateParent sets the template's parent, which is how the appliance's
+// folder is found.
+func (r *fakeInventory) templateParent(kind, id string) *fakeInventory {
+	r.template.Parent = vspheremodel.Ref{Kind: kind, ID: id}
+	return r
+}
+
+func TestPlacementFollowsTheTemplate(t *testing.T) {
+	inventory := testInventory()
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	tests := []struct {
@@ -143,35 +190,61 @@ func TestPlacementFollowsTheSourceVM(t *testing.T) {
 		got   string
 		want  string
 	}{
-		{"Folder", spec.Folder, "/DC0/vm/apps"},
+		{"Template", spec.Template, "/DC0/vm/templates/vcenter-toehold"},
+		{"Folder", spec.Folder, "/DC0/vm/templates"},
 		{"Datacenter", spec.Datacenter, "/DC0"},
-		// The appliance is not placed on the source VM's host; the host is
+		// The appliance is not placed on the template's host; the host is
 		// only how its compute resource, and so the pool below, is found.
 		{"ResourcePool", spec.ResourcePool, "/DC0/host/Cluster0/Resources"},
-		{"Datastore", spec.Datastore, "/DC0/datastore/datastore1"},
+		// The appliance's own home, not where the disks it serves live.
+		{"Datastore", spec.Datastore, "/DC0/datastore/templates"},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.field, tc.got, tc.want)
 		}
 	}
+	if len(spec.AttachDisks) != 0 {
+		t.Errorf("AttachDisks = %+v, want placement to leave them alone", spec.AttachDisks)
+	}
+}
+
+// The inventory cannot resolve a folder by path, so the recorded moref is the
+// only way to the template. A spec that disagrees with where the template
+// actually is does not move the appliance.
+func TestPlacementIgnoresTheToeholdSpec(t *testing.T) {
+	inventory := testInventory()
+	toehold := testToehold()
+	toehold.Spec.Folder = "/DC0/vm/somewhere-else"
+	toehold.Spec.TemplateName = "renamed-since-import"
+
+	spec := api.CopyApplianceSpec{}
+	if err := placement(inventory, testProvider(), toehold, &spec); err != nil {
+		t.Fatalf("placement: %v", err)
+	}
+	if spec.Folder != "/DC0/vm/templates" {
+		t.Errorf("Folder = %q, want the template's own folder", spec.Folder)
+	}
+	if spec.Template != "/DC0/vm/templates/vcenter-toehold" {
+		t.Errorf("Template = %q, want the template's own path", spec.Template)
+	}
 }
 
 // Nested folders carry Datacenter from the inventory (resolved at serve
 // time), so placement does not walk the folder chain itself.
 func TestPlacementNestedFolder(t *testing.T) {
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-team")
+	inventory := testInventory().templateParent(vspheremodel.FolderKind, "folder-team")
 	inventory.folders["folder-team"] = model.Folder{
-		Resource:   model.Resource{ID: "folder-team", Path: "/DC0/vm/apps/team"},
-		Folder:     "folder-apps",
+		Resource:   model.Resource{ID: "folder-team", Path: "/DC0/vm/templates/team"},
+		Folder:     "folder-templates",
 		Datacenter: "dc-1",
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
-	if spec.Folder != "/DC0/vm/apps/team" {
-		t.Errorf("Folder = %q, want the VM's own folder", spec.Folder)
+	if spec.Folder != "/DC0/vm/templates/team" {
+		t.Errorf("Folder = %q, want the template's own folder", spec.Folder)
 	}
 	if spec.Datacenter != "/DC0" {
 		t.Errorf("Datacenter = %q, want /DC0", spec.Datacenter)
@@ -181,12 +254,12 @@ func TestPlacementNestedFolder(t *testing.T) {
 // A datacenter can itself sit in a folder, which is why the datacenter is
 // resolved rather than read off the first segment of a path.
 func TestPlacementDatacenterInAFolder(t *testing.T) {
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	inventory.datacenters["dc-1"] = model.Datacenter{
 		Resource: model.Resource{ID: "dc-1", Path: "/east/DC0"},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Datacenter != "/east/DC0" {
@@ -197,7 +270,7 @@ func TestPlacementDatacenterInAFolder(t *testing.T) {
 // A host outside a cluster is collected as a Cluster with the ComputeResource
 // variant, so it has a root resource pool like any other.
 func TestPlacementStandaloneHost(t *testing.T) {
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	inventory.hosts["host-1"] = model.Host{
 		Resource: model.Resource{ID: "host-1", Path: "/DC0/host/esx1.example.com/esx1.example.com"},
 		Cluster:  "cr-1",
@@ -210,7 +283,7 @@ func TestPlacementStandaloneHost(t *testing.T) {
 		},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testRef, &spec); err != nil {
+	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.ResourcePool != "/DC0/host/esx1.example.com/Resources" {
@@ -218,48 +291,67 @@ func TestPlacementStandaloneHost(t *testing.T) {
 	}
 }
 
+// Every placement input is the template's, so every way placement can fail is
+// a way the template can be wrong.
 func TestPlacementErrors(t *testing.T) {
 	tests := []struct {
-		name  string
-		setup func(*fakeInventory)
-		want  string
+		name    string
+		setup   func(*fakeInventory)
+		toehold func(*api.ToeholdTemplate)
+		want    string
 	}{
 		{
-			name:  "VM in a vApp rather than a folder",
-			setup: func(i *fakeInventory) { i.vmParent("VirtualApp", "vapp-1") },
+			name:    "template not imported yet",
+			toehold: func(x *api.ToeholdTemplate) { x.Status.Template.Moref = "" },
+			want:    "moref",
+		},
+		{
+			name:  "template not in the inventory",
+			setup: func(i *fakeInventory) { i.template = model.VM{} },
+			want:  "not found",
+		},
+		{
+			name:  "template in a vApp rather than a folder",
+			setup: func(i *fakeInventory) { i.templateParent("VirtualApp", "vapp-1") },
 			want:  "not in an inventory folder",
 		},
 		{
 			name:  "no disks",
-			setup: func(i *fakeInventory) { i.vm.Disks = nil },
+			setup: func(i *fakeInventory) { i.template.Disks = nil },
 			want:  "no disks",
 		},
 		{
 			name:  "no host",
-			setup: func(i *fakeInventory) { i.vm.Host = "" },
+			setup: func(i *fakeInventory) { i.template.Host = "" },
 			want:  "not found",
 		},
 		{
 			name: "folder with no datacenter",
 			setup: func(i *fakeInventory) {
-				i.folders["folder-apps"] = model.Folder{
-					Resource: model.Resource{ID: "folder-apps", Path: "/DC0/vm/apps"},
+				i.folders["folder-templates"] = model.Folder{
+					Resource: model.Resource{ID: "folder-templates", Path: "/DC0/vm/templates"},
 				}
 			},
 			want: "not under a datacenter",
 		},
 		{
 			name:  "datastore not in the inventory",
-			setup: func(i *fakeInventory) { delete(i.datastores, "ds-1") },
+			setup: func(i *fakeInventory) { delete(i.datastores, "ds-2") },
 			want:  "not found",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
-			tc.setup(inventory)
+			inventory := testInventory()
+			toehold := testToehold()
+			if tc.setup != nil {
+				tc.setup(inventory)
+			}
+			if tc.toehold != nil {
+				tc.toehold(toehold)
+			}
 			spec := api.CopyApplianceSpec{}
-			err := placement(inventory, testProvider(), testRef, &spec)
+			err := placement(inventory, testProvider(), toehold, &spec)
 			if err == nil {
 				t.Fatalf("placement succeeded, want an error mentioning %q", tc.want)
 			}
@@ -267,6 +359,58 @@ func TestPlacementErrors(t *testing.T) {
 				t.Errorf("placement error = %q, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// The appliance takes nothing but disks from the VM it serves, so a source VM
+// with no host and no folder of its own still places.
+func TestAttachDisksIsAllTheSourceVMContributes(t *testing.T) {
+	withSettings(t, testSettings())
+	inventory := testInventory().vmParent("VirtualApp", "vapp-1")
+	inventory.vm.Host = ""
+
+	appliance, err := build(inventory, testProvider(), testToehold(), testRef)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if appliance.Spec.Folder != "/DC0/vm/templates" {
+		t.Errorf("Folder = %q, want the template's", appliance.Spec.Folder)
+	}
+	if len(appliance.Spec.AttachDisks) != 1 {
+		t.Fatalf("AttachDisks = %+v, want the source VM's one disk", appliance.Spec.AttachDisks)
+	}
+	if appliance.Spec.AttachDisks[0].VMDKPath != "[datastore1] web-01/disk-0.vmdk" {
+		t.Errorf("AttachDisks[0].VMDKPath = %q, want the source VM's",
+			appliance.Spec.AttachDisks[0].VMDKPath)
+	}
+}
+
+func TestBuildRejectsAnUnknownSourceVM(t *testing.T) {
+	withSettings(t, testSettings())
+	inventory := testInventory()
+
+	_, err := build(inventory, testProvider(), testToehold(), ref.Ref{ID: "vm-404"})
+	if err == nil {
+		t.Fatal("build succeeded for a VM that is not in the inventory")
+	}
+	if !strings.Contains(err.Error(), "vm-404") {
+		t.Errorf("error = %q, want it to name the missing VM", err)
+	}
+}
+
+// testToehold is the provider's toehold template, imported and placed. Only
+// the moref is read; it resolves to the template VM in the fixture inventory.
+func testToehold() *api.ToeholdTemplate {
+	return &api.ToeholdTemplate{
+		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
+		Spec: api.ToeholdTemplateSpec{
+			TemplateName: "vcenter-toehold",
+			Folder:       "/DC0/vm/templates",
+		},
+		Status: api.ToeholdTemplateStatus{
+			Phase:    api.ToeholdTemplatePhaseSucceeded,
+			Template: api.TemplateStatus{Moref: "vm-900"},
+		},
 	}
 }
 
@@ -303,10 +447,10 @@ func testSettings() settings.CopyAppliance {
 
 func TestBuild(t *testing.T) {
 	withSettings(t, testSettings())
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	provider := testProvider()
 
-	appliance, err := build(inventory, provider, testRef)
+	appliance, err := build(inventory, provider, testToehold(), testRef)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -353,8 +497,12 @@ func TestBuild(t *testing.T) {
 	if spec.AttachDisks[0].Serial != "6000C297-7d53-fad7-e8b4-5194193802f7" {
 		t.Errorf("AttachDisks[0].Serial = %q", spec.AttachDisks[0].Serial)
 	}
-	if spec.Folder != "/DC0/vm/apps" || spec.Datastore != "/DC0/datastore/datastore1" {
-		t.Errorf("placement = (%q, %q), want the source VM's", spec.Folder, spec.Datastore)
+	// Placement is the template's; only the disks above are the source VM's.
+	if spec.Template != "/DC0/vm/templates/vcenter-toehold" {
+		t.Errorf("Template = %q, want the toehold template's inventory path", spec.Template)
+	}
+	if spec.Folder != "/DC0/vm/templates" || spec.Datastore != "/DC0/datastore/templates" {
+		t.Errorf("placement = (%q, %q), want the template's", spec.Folder, spec.Datastore)
 	}
 }
 
@@ -364,9 +512,9 @@ func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
 	applied := testSettings()
 	applied.ContainerImage = ""
 	withSettings(t, applied)
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 
-	_, err := build(inventory, testProvider(), testRef)
+	_, err := build(inventory, testProvider(), testToehold(), testRef)
 	if err == nil {
 		t.Fatal("build succeeded without a container image")
 	}
@@ -377,12 +525,12 @@ func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
 
 func TestBuildRejectsANonVSphereProvider(t *testing.T) {
 	withSettings(t, testSettings())
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	provider := testProvider()
 	ovirt := api.OVirt
 	provider.Spec.Type = &ovirt
 
-	_, err := build(inventory, provider, testRef)
+	_, err := build(inventory, provider, testToehold(), testRef)
 	if err == nil {
 		t.Fatal("build succeeded for an oVirt provider")
 	}

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"path"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
@@ -50,22 +49,23 @@ const checkNameSuffix = "-toehold-check"
 const maxVMNameLength = 80
 
 // Build returns a CopyAppliance for an appliance VM that will read the given
-// source VM's disks. The appliance is placed where the source VM already is:
-// the same folder, datacenter and datastore. The shape of the appliance itself,
-// its root disk and the networks it is attached to come from the template it is
-// cloned from. The returned resource has not been created; the caller creates
-// it and the reconciler builds the VM from it.
-func Build(provider *api.Provider, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
+// source VM's disks. Everything about the appliance comes from the toehold
+// template it is cloned from — where it is placed, its shape, its root disk
+// and its network — except the disks to attach, which are the source VM's. The
+// returned resource has not been created; the caller creates it and the
+// reconciler builds the VM from it.
+func Build(provider *api.Provider, toehold *api.ToeholdTemplate, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
 	inventory, err := web.NewClient(provider)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
 	}
-	return build(inventory, provider, vmRef)
+	return build(inventory, provider, toehold, vmRef)
 }
 
-// build is Build over an already-resolved inventory client.
-func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
+// build is Build over an already-resolved inventory client. An empty vmRef
+// builds an appliance with no source VM, and so with nothing to attach.
+func build(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
 	if provider.Type() != api.VSphere {
 		err = liberr.New(fmt.Sprintf(
 			"copy appliances are only supported for vSphere providers; %s is %s",
@@ -99,21 +99,30 @@ func build(inventory web.Client, provider *api.Provider, vmRef ref.Ref) (applian
 		ContainerImage: Settings.CopyAppliance.ContainerImage,
 		// The appliance's shape, root disk and network are not configured here,
 		// and the network is not the source VM's: the template carries all of
-		// them, and the clone inherits them.
+		// them, and the clone inherits them. Placement below comes from the
+		// template as well.
 	}
-	err = placement(inventory, provider, vmRef, &spec)
+	err = placement(inventory, provider, toehold, &spec)
 	if err != nil {
 		return
+	}
+
+	labels := map[string]string{
+		LabelApp:      AppForklift,
+		LabelProvider: string(provider.UID),
+	}
+	if vmRef.ID != "" {
+		err = attachDisks(inventory, vmRef, &spec)
+		if err != nil {
+			return
+		}
+		labels[LabelVM] = vmRef.ID
 	}
 
 	appliance = &api.CopyAppliance{
 		ObjectMeta: meta.ObjectMeta{
 			Namespace: provider.Namespace,
-			Labels: map[string]string{
-				LabelApp:      AppForklift,
-				LabelProvider: string(provider.UID),
-				LabelVM:       vmRef.ID,
-			},
+			Labels:    labels,
 		},
 		Spec: spec,
 	}
@@ -135,31 +144,11 @@ func BuildCheck(provider *api.Provider, toehold *api.ToeholdTemplate) (appliance
 }
 
 // buildCheck is BuildCheck over an already-resolved inventory client.
-//
-// There is no source VM to place the appliance from, so datacenter and
-// datastore come from the toehold template VM (by moref). The clone folder is
-// taken from toehold.Spec.Folder so appliances land with the template.
 func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
-	moRef := toehold.Status.Template.Moref
-	if moRef == "" {
-		err = liberr.New(fmt.Sprintf(
-			"toehold template %s has no moref to place the check appliance from",
-			toehold.Name))
-		return
-	}
-	appliance, err = build(inventory, provider, ref.Ref{ID: moRef})
+	appliance, err = build(inventory, provider, toehold, ref.Ref{})
 	if err != nil {
 		return
 	}
-	// Placement takes the attach list from the disks of the VM it was pointed
-	// at, which here is the template. Leaving it would hand the appliance the
-	// template's own root vmdk; a check appliance exports nothing.
-	appliance.Spec.AttachDisks = nil
-	appliance.Spec.Template = path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
-	appliance.Spec.Folder = toehold.Spec.Folder
-	// There is no source VM. The label would carry the template's ID, which
-	// reads as an appliance serving a VM that is not being migrated.
-	delete(appliance.Labels, LabelVM)
 	// Named rather than generated: there is one check appliance per provider,
 	// and the next pass has to find this one rather than create another.
 	appliance.Name = CheckName(provider.Name)
@@ -175,15 +164,31 @@ func CheckName(providerName string) string {
 	return providerName[:maxVMNameLength-len(checkNameSuffix)] + checkNameSuffix
 }
 
-// placement fills in the placement fields of spec from where the source VM
-// lives. Every value is an inventory Path in the form the govmomi finder expects.
-func placement(inventory web.Client, provider *api.Provider, vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
-	vm := &model.VM{}
-	err = inventory.Find(vm, vmRef)
-	if err != nil {
-		err = liberr.Wrap(err, "vm", vmRef.String())
+// placement fills in the placement fields of spec from where the toehold
+// template VM lives. The appliance is cloned into the template's own folder,
+// datacenter and datastore, which is the one placement known to work for a VM
+// of this shape. Every value is an inventory Path in the form the govmomi
+// finder expects.
+//
+// The template is resolved by moref rather than by the path recorded in
+// toehold.Spec: the inventory serves templates through the get-by-moref
+// handler and filters them out of its listings, so a path lookup finds
+// nothing.
+func placement(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate, spec *api.CopyApplianceSpec) (err error) {
+	moRef := toehold.Status.Template.Moref
+	if moRef == "" {
+		err = liberr.New(fmt.Sprintf(
+			"toehold template %s has no moref to place the appliance from",
+			toehold.Name))
 		return
 	}
+	vm := &model.VM{}
+	err = inventory.Find(vm, ref.Ref{ID: moRef})
+	if err != nil {
+		err = liberr.Wrap(err, "template", moRef)
+		return
+	}
+	spec.Template = vm.Path
 
 	if vm.Parent.Kind != vspheremodel.FolderKind {
 		err = liberr.New(fmt.Sprintf(
@@ -231,8 +236,20 @@ func placement(inventory web.Client, provider *api.Provider, vmRef ref.Ref, spec
 		return
 	}
 	spec.Datastore = datastore.Path
+	return
+}
 
-	// Shared and RDM disks are skipped; the copy appliance targets flat VMDKs.
+// attachDisks fills in the disks of spec from the source VM. This is all the
+// appliance takes from the VM it serves; where it runs is the template's
+// business. Shared and RDM disks are skipped; the copy appliance targets flat
+// VMDKs.
+func attachDisks(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
+	vm := &model.VM{}
+	err = inventory.Find(vm, vmRef)
+	if err != nil {
+		err = liberr.Wrap(err, "vm", vmRef.String())
+		return
+	}
 	for _, disk := range vm.Disks {
 		if disk.Shared || disk.RDM || disk.File == "" {
 			continue

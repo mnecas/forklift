@@ -3,32 +3,11 @@ package copyappliance
 import (
 	"strings"
 	"testing"
-
-	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	vspheremodel "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
-	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-// testToehold is the provider's toehold template, imported and placed. The
-// fixture inventory is reused as-is: the fake resolves whatever moref it is
-// given to the same VM, which stands in for the template here.
-func testToehold() *api.ToeholdTemplate {
-	return &api.ToeholdTemplate{
-		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
-		Spec: api.ToeholdTemplateSpec{
-			TemplateName: "vcenter-toehold",
-			Folder:       "/DC0/vm/templates",
-		},
-		Status: api.ToeholdTemplateStatus{
-			Phase:    api.ToeholdTemplatePhaseSucceeded,
-			Template: api.TemplateStatus{Moref: "vm-900"},
-		},
-	}
-}
 
 func TestBuildCheck(t *testing.T) {
 	withSettings(t, testSettings())
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	provider := testProvider()
 	toehold := testToehold()
 
@@ -37,17 +16,18 @@ func TestBuildCheck(t *testing.T) {
 		t.Fatalf("buildCheck: %v", err)
 	}
 
-	// The fixture template has a disk. Attaching it would give the appliance
-	// the template's own root vmdk to serve.
+	// There is no source VM to take disks from, and the template's own root
+	// vmdk is not something a check appliance serves.
 	if len(appliance.Spec.AttachDisks) != 0 {
 		t.Errorf("AttachDisks = %+v, want none", appliance.Spec.AttachDisks)
 	}
 	if appliance.Spec.Template != "/DC0/vm/templates/vcenter-toehold" {
 		t.Errorf("Template = %q, want the toehold template's inventory path", appliance.Spec.Template)
 	}
-	// Folder comes from the toehold spec; datastore still from the template VM.
-	if appliance.Spec.Folder != "/DC0/vm/templates" || appliance.Spec.Datastore != "/DC0/datastore/datastore1" {
-		t.Errorf("placement = (%q, %q), want toehold folder and template datastore",
+	// The same placement a migration appliance gets, which is the point: the
+	// check proves that placement works.
+	if appliance.Spec.Folder != "/DC0/vm/templates" || appliance.Spec.Datastore != "/DC0/datastore/templates" {
+		t.Errorf("placement = (%q, %q), want the template's folder and datastore",
 			appliance.Spec.Folder, appliance.Spec.Datastore)
 	}
 	if appliance.Spec.Secret.Name != "toehold-ssh-keys-vcenter-private" {
@@ -107,7 +87,7 @@ func TestCheckNameFitsAVMName(t *testing.T) {
 // blank one would send the finder looking for "the default" object.
 func TestBuildCheckRejectsAnUnimportedTemplate(t *testing.T) {
 	withSettings(t, testSettings())
-	inventory := testInventory().vmParent(vspheremodel.FolderKind, "folder-apps")
+	inventory := testInventory()
 	toehold := testToehold()
 	toehold.Status.Template.Moref = ""
 
