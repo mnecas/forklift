@@ -139,28 +139,6 @@ func TestStreamImage(t *testing.T) {
 }
 
 func TestInjectImage(t *testing.T) {
-	// The image is hundreds of megabytes, so a pass that re-entered the step
-	// and sent it again would cost as much as the first one did. Asking the
-	// appliance is the whole of what makes the step idempotent.
-	t.Run("an image the appliance already has is not sent again", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := sshContext(t, private, server.addr)
-		ac.Appliance.Status.ExporterImage = ApplianceContainerImageName + ":0123456789ab"
-		runner := DeployRunner{context: ac}
-
-		done, err := runner.InjectImage(context.TODO())
-		if err != nil {
-			t.Fatalf("InjectImage: %v", err)
-		}
-		if !done {
-			t.Error("done = false, want the image the appliance already has to count")
-		}
-		if slices.Contains(server.Ran(), AppliancePodmanLoadCommand) {
-			t.Errorf("ran %v, want no load at all", server.Ran())
-		}
-	})
-
 	// sshd can go away between passes, and an appliance that is not answering
 	// is one to come back to rather than one to fail the deploy over.
 	t.Run("an appliance that is not answering is not a failure", func(t *testing.T) {

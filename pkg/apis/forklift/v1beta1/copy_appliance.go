@@ -173,9 +173,8 @@ type CopyApplianceStatus struct {
 	// must not be trusted when this does not match the connected instance.
 	// +optional
 	VCenterInstanceUUID string `json:"vcenterInstanceUUID,omitempty"`
-	// The reference the container image is loaded under in the appliance's
-	// podman store. It carries the digest of the image that was loaded, so an
-	// appliance holding an earlier build of the same tag does not match.
+	// The digest-tagged reference the container image is loaded under in the
+	// appliance's podman store. The orchestrator unit is rendered to run it.
 	// +optional
 	ExporterImage string `json:"exporterImage,omitempty"`
 	// The disk exports the appliance publishes, one per attached disk. Empty

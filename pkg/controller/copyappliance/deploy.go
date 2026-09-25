@@ -3,6 +3,7 @@ package copyappliance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -13,6 +14,16 @@ import (
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/vmware/govmomi/vim25/types"
 )
+
+// ApplianceContainerImageName is where the image is filed in the appliance's podman
+// store. Deliberately not the cluster pull spec: the appliance has no reason to
+// carry the in-cluster registry's hostname, and a digest reference cannot be a
+// tag in a docker archive.
+const ApplianceContainerImageName = "localhost/forklift-copy-appliance"
+
+// AppliancePodmanLoadCommand reads a docker archive on its standard input and adds
+// what it finds to the appliance's podman store.
+const AppliancePodmanLoadCommand = "/usr/local/bin/toehold-podman load"
 
 // DeployRunner drives the appliance VM from nothing to running. It holds no
 // state of its own: every pass reads where it got to from the appliance status
@@ -263,23 +274,6 @@ func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
 	defer func() {
 		_ = client.Close()
 	}()
-	// Check if the image is already present in the podman registry
-	loaded := r.context.Appliance.Status.ExporterImage
-	if loaded != "" {
-		err = client.RunCommand("podman image exists " + loaded)
-		switch {
-		case err == nil:
-			// Already loaded; nothing to send.
-			done = true
-			return
-		case IsExitError(err):
-			// podman exits non-zero for an image it does not have, which is
-			// this question's other answer.
-			err = nil
-		default:
-			return
-		}
-	}
 	registry, err := r.clusterRegistry()
 	if err != nil {
 		return
@@ -296,9 +290,6 @@ func (r *DeployRunner) injectImage(client *SSHClient, img v1.Image) (done bool, 
 	if err != nil {
 		return
 	}
-	// Recorded before the transfer rather than after it. A load that is cut off
-	// can still leave the image in the store, and the next pass has to know
-	// what to ask about.
 	r.context.Appliance.Status.ExporterImage = tag.Name()
 	r.context.Log.Info("Starting to stream the exporter image.",
 		"image", r.context.Appliance.Spec.ContainerImage,
@@ -330,6 +321,21 @@ func (r *DeployRunner) streamImage(client *SSHClient, img v1.Image, ref name.Tag
 	}()
 
 	err = client.RunWithStdin(AppliancePodmanLoadCommand, reader)
+	return
+}
+
+// makeTag makes a tag for the image from its digest.
+func makeTag(img v1.Image) (tag name.Tag, err error) {
+	digest, err := img.Digest()
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	tag, err = name.NewTag(fmt.Sprintf("%s:%s", ApplianceContainerImageName, digest.Hex), name.WithDefaultRegistry(""))
+	if err != nil {
+		err = liberr.Wrap(err, "digest", digest.String())
+		return
+	}
 	return
 }
 
