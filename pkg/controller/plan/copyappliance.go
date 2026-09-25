@@ -2,7 +2,6 @@ package plan
 
 import (
 	"context"
-	"path"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
@@ -72,7 +71,7 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 		return liberr.Wrap(err)
 	}
 
-	appliance, err := cacontroller.Build(provider, vm.Ref)
+	appliance, err := cacontroller.Build(provider, toehold, vm.Ref)
 	if err != nil {
 		return liberr.Wrap(err)
 	}
@@ -82,10 +81,6 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 			appliance.Spec.AttachDisks[i].VMDKPath = cacontroller.BaseVMDKPath(appliance.Spec.AttachDisks[i].VMDKPath)
 		}
 	}
-	appliance.Spec.Template = path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
-	// Clone into the toehold folder so appliances sit with the template.
-	appliance.Spec.Folder = toehold.Spec.Folder
-
 	appliance.Name = cacontroller.ApplianceName(r.Migration.UID, vm.ID)
 	appliance.Namespace = provider.Namespace
 	appliance.Spec.ExportRequest = &api.ExportRequest{

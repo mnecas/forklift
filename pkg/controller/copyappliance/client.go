@@ -379,7 +379,7 @@ func (r *ApplianceContext) AttachDisks(ctx context.Context, vm *object.VirtualMa
 		err = liberr.Wrap(err, "vm", vm.Reference().Value)
 		return
 	}
-	changes, err := r.buildAttachDiskChanges(ctx, devices)
+	changes, err := r.buildAttachDiskChanges(devices)
 	if err != nil {
 		return
 	}
@@ -570,15 +570,17 @@ func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.Vir
 		err = liberr.Wrap(err)
 		return
 	}
-	return r.buildAttachDiskChanges(ctx, devices)
+	return r.buildAttachDiskChanges(devices)
 }
 
-func (r *ApplianceContext) buildAttachDiskChanges(ctx context.Context, devices object.VirtualDeviceList) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
-	datastore, err := r.finder.Datastore(ctx, r.Appliance.Spec.Datastore)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
+// buildAttachDiskChanges returns the device changes that attach the spec's
+// disks to a VM with the given devices.
+//
+// No datastore is put on the backing. Spec.Datastore is where the appliance
+// itself lives, which is the template's datastore and generally not the source
+// VM's, and the datastore a disk is on is already the "[name]" prefix of its
+// own path.
+func (r *ApplianceContext) buildAttachDiskChanges(devices object.VirtualDeviceList) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
 	present := diskPathsOnVM(devices)
 	for _, attached := range r.Appliance.Spec.AttachedDisks() {
 		path := attached.VMDKPath
@@ -592,7 +594,7 @@ func (r *ApplianceContext) buildAttachDiskChanges(ctx context.Context, devices o
 		}
 		disk := devices.CreateDisk(
 			controller,
-			datastore.Reference(),
+			types.ManagedObjectReference{},
 			path,
 		)
 		// Leave CapacityInKB and CapacityInBytes at zero.
