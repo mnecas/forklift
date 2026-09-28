@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
@@ -211,18 +212,23 @@ func (r *Builder) build(toehold *api.ToeholdTemplate) (appliance *api.CopyApplia
 	return
 }
 
-// placement fills in the placement fields of spec from where the toehold
-// template VM lives. The appliance is cloned into the template's own folder,
-// datacenter and datastore, which is the one placement known to work for a VM
-// of this shape. Every value is an inventory Path in the form the govmomi
-// finder expects.
+// placement fills in the placement fields of spec. The appliance is cloned
+// into the template's own folder and datastore, which is the one placement
+// known to work for a VM of this shape. Folder, datastore and the path of the
+// template to clone are the ToeholdTemplate's own spec — the values the import
+// was given. Datacenter and resource pool are not on that spec and are
+// resolved from the inventory, in the Path form the govmomi finder expects.
 //
-// The template is resolved by moref rather than by the path recorded in
+// The template is resolved there by moref rather than by the path recorded in
 // toehold.Spec: the inventory serves templates through the get-by-moref
 // handler and filters them out of its listings, so a path lookup finds
 // nothing.
 func (r *Builder) placement(toehold *api.ToeholdTemplate, spec *api.CopyApplianceSpec) (err error) {
 	inventory := r.Inventory
+	spec.Folder = toehold.Spec.Folder
+	spec.Datastore = toehold.Spec.Datastore
+	spec.Template = path.Join(toehold.Spec.Folder, toehold.Spec.TemplateName)
+
 	moRef := toehold.Status.Template.Moref
 	if moRef == "" {
 		err = liberr.New(fmt.Sprintf(
@@ -236,8 +242,8 @@ func (r *Builder) placement(toehold *api.ToeholdTemplate, spec *api.CopyApplianc
 		err = liberr.Wrap(err, "template", moRef)
 		return
 	}
-	spec.Template = vm.Path
 
+	// The folder is only how the datacenter the template sits in is found.
 	if vm.Parent.Kind != vspheremodel.FolderKind {
 		err = liberr.New(fmt.Sprintf(
 			"VM %s is not in an inventory folder; its parent is a %s",
@@ -248,8 +254,6 @@ func (r *Builder) placement(toehold *api.ToeholdTemplate, spec *api.CopyApplianc
 	if err = inventory.Get(folder, vm.Parent.ID); err != nil {
 		return
 	}
-	spec.Folder = folder.Path
-
 	if folder.Datacenter == "" {
 		err = liberr.New(fmt.Sprintf("folder %s is not under a datacenter", folder.ID))
 		return
@@ -274,16 +278,6 @@ func (r *Builder) placement(toehold *api.ToeholdTemplate, spec *api.CopyApplianc
 	} else {
 		spec.ResourcePool = cluster.Path + "/" + rootResourcePool
 	}
-
-	if len(vm.Disks) == 0 {
-		err = liberr.New(fmt.Sprintf("VM %s has no disks to take a datastore from", vm.ID))
-		return
-	}
-	datastore := &model.Datastore{}
-	if err = inventory.Get(datastore, vm.Disks[0].Datastore.ID); err != nil {
-		return
-	}
-	spec.Datastore = datastore.Path
 	return
 }
 

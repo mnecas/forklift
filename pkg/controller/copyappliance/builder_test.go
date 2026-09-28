@@ -27,10 +27,10 @@ type fakeInventory struct {
 	datacenters map[string]model.Datacenter
 	hosts       map[string]model.Host
 	clusters    map[string]model.Cluster
-	datastores  map[string]model.Datastore
-	// There is deliberately no network map. Placement does not resolve
-	// networks, and Get rejects the attempt, so a regression to taking the
-	// appliance's network from the source VM fails rather than passes.
+	// There is deliberately no network or datastore map. Placement resolves
+	// neither — the network and the datastore are the toehold template's spec
+	// — and Get rejects the attempt, so a regression to taking either from the
+	// inventory fails rather than passes.
 }
 
 // Find resolves the ref it is given, so a test can tell which of the two VMs a
@@ -61,8 +61,6 @@ func (r *fakeInventory) Get(resource interface{}, id string) error {
 		return lookup(r.hosts, id, out, "host")
 	case *model.Cluster:
 		return lookup(r.clusters, id, out, "cluster")
-	case *model.Datastore:
-		return lookup(r.datastores, id, out, "datastore")
 	}
 	return fmt.Errorf("unexpected Get for %T", resource)
 }
@@ -83,10 +81,10 @@ var testRef = ref.Ref{ID: "vm-101", Name: "web-01"}
 const testMigrationUID = types.UID("6f1e2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7")
 
 // testInventory is a source VM and the provider's toehold template, each on a
-// clustered host with one disk, in different folders and on different
-// datastores. Keeping the two apart is what makes it visible that placement
-// follows the template and only the attached disks follow the source VM. Every
-// path is what PathBuilder would produce for that topology, hidden
+// clustered host with one disk and in a folder of its own. Keeping the two
+// apart is what makes it visible that the datacenter and the resource pool are
+// the template's and only the attached disks are the source VM's. Every path
+// is what PathBuilder would produce for that topology, hidden
 // vm/host/network/datastore folders included.
 func testInventory() *fakeInventory {
 	resource := func(id, path string) model.Resource {
@@ -162,10 +160,6 @@ func testInventory() *fakeInventory {
 		clusters: map[string]model.Cluster{
 			"cluster-1": {Resource: resource("cluster-1", "/DC0/host/Cluster0")},
 		},
-		datastores: map[string]model.Datastore{
-			"ds-1": {Resource: resource("ds-1", "/DC0/datastore/datastore1")},
-			"ds-2": {Resource: resource("ds-2", "/DC0/datastore/templates")},
-		},
 	}
 }
 
@@ -200,7 +194,7 @@ func TestPlacementFollowsTheTemplate(t *testing.T) {
 		// only how its compute resource, and so the pool below, is found.
 		{"ResourcePool", spec.ResourcePool, "/DC0/host/Cluster0/Resources"},
 		// The appliance's own home, not where the disks it serves live.
-		{"Datastore", spec.Datastore, "/DC0/datastore/templates"},
+		{"Datastore", spec.Datastore, "templates"},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
@@ -212,24 +206,45 @@ func TestPlacementFollowsTheTemplate(t *testing.T) {
 	}
 }
 
-// The inventory cannot resolve a folder by path, so the recorded moref is the
-// only way to the template. A spec that disagrees with where the template
-// actually is does not move the appliance.
-func TestPlacementIgnoresTheToeholdSpec(t *testing.T) {
+// Where the appliance is cloned from and to is the toehold template's spec,
+// not where the inventory has the template. The two agree unless the template
+// was moved or renamed after the import, and the spec is what the import was
+// told to do.
+func TestPlacementFollowsTheToeholdSpec(t *testing.T) {
 	inventory := testInventory()
 	toehold := testToehold()
 	toehold.Spec.Folder = "/DC0/vm/somewhere-else"
 	toehold.Spec.TemplateName = "renamed-since-import"
+	toehold.Spec.Datastore = "another-datastore"
 
 	spec := api.CopyApplianceSpec{}
 	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(toehold, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
-	if spec.Folder != "/DC0/vm/templates" {
-		t.Errorf("Folder = %q, want the template's own folder", spec.Folder)
+	if spec.Folder != "/DC0/vm/somewhere-else" {
+		t.Errorf("Folder = %q, want the spec's folder", spec.Folder)
 	}
-	if spec.Template != "/DC0/vm/templates/vcenter-toehold" {
-		t.Errorf("Template = %q, want the template's own path", spec.Template)
+	if spec.Template != "/DC0/vm/somewhere-else/renamed-since-import" {
+		t.Errorf("Template = %q, want the spec's folder and template name", spec.Template)
+	}
+	if spec.Datastore != "another-datastore" {
+		t.Errorf("Datastore = %q, want the spec's datastore", spec.Datastore)
+	}
+}
+
+// A folder path need not be absolute: the finder that resolves it has the
+// datacenter set from the placement below, and joining a template name onto it
+// must not make it absolute.
+func TestPlacementRelativeFolder(t *testing.T) {
+	toehold := testToehold()
+	toehold.Spec.Folder = "vm/templates"
+
+	spec := api.CopyApplianceSpec{}
+	if err := (&Builder{Provider: testProvider(), Inventory: testInventory()}).placement(toehold, &spec); err != nil {
+		t.Fatalf("placement: %v", err)
+	}
+	if spec.Template != "vm/templates/vcenter-toehold" {
+		t.Errorf("Template = %q, want it relative like the folder it is in", spec.Template)
 	}
 }
 
@@ -245,9 +260,6 @@ func TestPlacementNestedFolder(t *testing.T) {
 	spec := api.CopyApplianceSpec{}
 	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
-	}
-	if spec.Folder != "/DC0/vm/templates/team" {
-		t.Errorf("Folder = %q, want the template's own folder", spec.Folder)
 	}
 	if spec.Datacenter != "/DC0" {
 		t.Errorf("Datacenter = %q, want /DC0", spec.Datacenter)
@@ -319,11 +331,6 @@ func TestPlacementErrors(t *testing.T) {
 			want:  "not in an inventory folder",
 		},
 		{
-			name:  "no disks",
-			setup: func(i *fakeInventory) { i.template.Disks = nil },
-			want:  "no disks",
-		},
-		{
 			name:  "no host",
 			setup: func(i *fakeInventory) { i.template.Host = "" },
 			want:  "not found",
@@ -336,11 +343,6 @@ func TestPlacementErrors(t *testing.T) {
 				}
 			},
 			want: "not under a datacenter",
-		},
-		{
-			name:  "datastore not in the inventory",
-			setup: func(i *fakeInventory) { delete(i.datastores, "ds-2") },
-			want:  "not found",
 		},
 	}
 	for _, tc := range tests {
@@ -401,14 +403,16 @@ func TestBuildRejectsAnUnknownSourceVM(t *testing.T) {
 	}
 }
 
-// testToehold is the provider's toehold template, imported and placed. Only
-// the moref is read; it resolves to the template VM in the fixture inventory.
+// testToehold is the provider's toehold template, imported and placed. The
+// spec is where the import put it; the moref resolves to that same template VM
+// in the fixture inventory.
 func testToehold() *api.ToeholdTemplate {
 	return &api.ToeholdTemplate{
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
 		Spec: api.ToeholdTemplateSpec{
 			TemplateName: "vcenter-toehold",
 			Folder:       "/DC0/vm/templates",
+			Datastore:    "templates",
 		},
 		Status: api.ToeholdTemplateStatus{
 			Phase:    api.ToeholdTemplatePhaseSucceeded,
@@ -505,7 +509,7 @@ func TestBuild(t *testing.T) {
 	if spec.Template != "/DC0/vm/templates/vcenter-toehold" {
 		t.Errorf("Template = %q, want the toehold template's inventory path", spec.Template)
 	}
-	if spec.Folder != "/DC0/vm/templates" || spec.Datastore != "/DC0/datastore/templates" {
+	if spec.Folder != "/DC0/vm/templates" || spec.Datastore != "templates" {
 		t.Errorf("placement = (%q, %q), want the template's", spec.Folder, spec.Datastore)
 	}
 }

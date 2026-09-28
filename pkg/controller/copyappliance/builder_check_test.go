@@ -25,7 +25,7 @@ func TestBuildCheck(t *testing.T) {
 	}
 	// The same placement a migration appliance gets, which is the point: the
 	// check proves that placement works.
-	if appliance.Spec.Folder != "/DC0/vm/templates" || appliance.Spec.Datastore != "/DC0/datastore/templates" {
+	if appliance.Spec.Folder != "/DC0/vm/templates" || appliance.Spec.Datastore != "templates" {
 		t.Errorf("placement = (%q, %q), want the template's folder and datastore",
 			appliance.Spec.Folder, appliance.Spec.Datastore)
 	}
