@@ -41,7 +41,7 @@ func toeholdTemplateForProvider(r client.Client, provider *api.Provider) (*api.T
 	if fallback != nil {
 		return fallback, nil
 	}
-	toeholdName := provider.Name + "-toehold"
+	toeholdName := provider.ToeholdTemplateName()
 	toehold := &api.ToeholdTemplate{}
 	err = r.Get(context.TODO(), client.ObjectKey{
 		Namespace: provider.Namespace,
