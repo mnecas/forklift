@@ -85,7 +85,7 @@ func checkAppliance(phase string) *api.CopyAppliance {
 	return appliance
 }
 
-func testCheckReconciler(t *testing.T, objs ...client.Object) *Reconciler {
+func testCheckScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := core.AddToScheme(scheme); err != nil {
@@ -94,6 +94,12 @@ func testCheckReconciler(t *testing.T, objs ...client.Object) *Reconciler {
 	if err := api.SchemeBuilder.AddToScheme(scheme); err != nil {
 		t.Fatalf("AddToScheme forklift: %v", err)
 	}
+	return scheme
+}
+
+func testCheckReconciler(t *testing.T, objs ...client.Object) *Reconciler {
+	t.Helper()
+	scheme := testCheckScheme(t)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
