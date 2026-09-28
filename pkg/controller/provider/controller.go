@@ -768,12 +768,6 @@ func (r *Reconciler) cleanupProviderServer(ctx context.Context, provider *api.Pr
 	return nil
 }
 
-// toeholdTemplateName is the name of a provider's toehold template. The
-// appliance check and UI create agree on this name.
-func toeholdTemplateName(provider *api.Provider) string {
-	return provider.Name + "-toehold"
-}
-
 func toeholdPlacement(provider *api.Provider) (datastore, folder, network string) {
 	return provider.Setting(api.ToeholdDatastore),
 		provider.Setting(api.ToeholdFolder),
@@ -793,7 +787,7 @@ func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Pro
 		return nil
 	}
 
-	name := toeholdTemplateName(provider)
+	name := provider.ToeholdTemplateName()
 	existing := &api.ToeholdTemplate{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, existing)
 	if k8serr.IsNotFound(err) {
@@ -839,7 +833,7 @@ func (r *Reconciler) ensureToeholdApplianceCheck(ctx context.Context, provider *
 	}
 
 	toehold := &api.ToeholdTemplate{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: toeholdTemplateName(provider)}, toehold)
+	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: provider.ToeholdTemplateName()}, toehold)
 	if k8serr.IsNotFound(err) {
 		// Template is created explicitly (UI/API); do not block the provider.
 		return
