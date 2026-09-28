@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -280,7 +279,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 				r.Log.Error(err, "failed to ensure toehold SSH keys for vSphere provider")
 				return
 			}
-			err = r.ensureToeholdTemplate(ctx, provider)
+			err = newToeholdSync(r.Client, provider).Run(ctx)
 			if err != nil {
 				r.Log.Error(err, "failed to reconcile toehold template for vSphere provider")
 				return
@@ -295,15 +294,14 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	}
 
 	// Prove the copy appliance works, before a migration finds out that it
-	// does not. This runs after updateContainer and ensureToeholdTemplate
+	// does not. This runs after updateContainer and the toehold template sync
 	// because it sets a blocking condition, and both of those bail on one.
 	if provider.Type() == api.VSphere && Settings.Features.Toehold {
 		r.ensureToeholdApplianceCheck(ctx, provider)
 	}
 
 	// Ready condition.
-	if !provider.Status.HasBlockerCondition() &&
-		provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
+	if inventoryReady(provider) {
 		provider.Status.Phase = Ready
 		provider.Status.SetCondition(
 			libcnd.Condition{
@@ -768,67 +766,13 @@ func (r *Reconciler) cleanupProviderServer(ctx context.Context, provider *api.Pr
 	return nil
 }
 
-func toeholdPlacement(provider *api.Provider) (datastore, folder, network string) {
-	return provider.Setting(api.ToeholdDatastore),
-		provider.Setting(api.ToeholdFolder),
-		provider.Setting(api.ToeholdNetwork)
-}
-
-// ensureToeholdTemplate syncs placement and ForkliftController image settings
-// onto an existing ToeholdTemplate. Creation is left to the user (console/API).
-func (r Reconciler) ensureToeholdTemplate(ctx context.Context, provider *api.Provider) error {
-	if provider.Status.HasBlockerCondition() ||
-		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
-		return nil
-	}
-	datastore, folder, network := toeholdPlacement(provider)
-	if Settings.Toehold.BaseDiskContainerImage == "" ||
-		datastore == "" || folder == "" || network == "" {
-		return nil
-	}
-
-	name := provider.ToeholdTemplateName()
-	existing := &api.ToeholdTemplate{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, existing)
-	if k8serr.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	desired := api.ToeholdTemplateSpec{
-		Provider:     v1.ObjectReference{Name: provider.Name, Namespace: provider.Namespace},
-		TemplateName: name,
-		BaseDisk:     api.ToeholdBaseDisk{ContainerImage: Settings.Toehold.BaseDiskContainerImage},
-		Resources: api.ToeholdResources{
-			CPU:       Settings.Toehold.TemplateCPU,
-			MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
-		},
-		Datastore: datastore,
-		Folder:    folder,
-		Network:   network,
-		Images:    api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage},
-	}
-	if reflect.DeepEqual(existing.Spec, desired) && metav1.IsControlledBy(existing, provider) {
-		return nil
-	}
-	existing.Spec = desired
-	if err = k8sutil.SetControllerReference(provider, existing, r.scheme); err != nil {
-		return err
-	}
-	return r.Update(ctx, existing)
-}
-
 const toeholdCheckDeadline = 30 * time.Minute
 
 // ensureToeholdApplianceCheck proves the copy appliance works once, then tears
 // it down. ToeholdApplianceChecked remembers the verdict; ToeholdApplianceNotReady
 // blocks the provider until that verdict is a pass.
 func (r *Reconciler) ensureToeholdApplianceCheck(ctx context.Context, provider *api.Provider) {
-	if provider.DeletionTimestamp != nil ||
-		provider.Status.HasBlockerCondition() ||
-		!provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated) {
+	if provider.DeletionTimestamp != nil || !inventoryReady(provider) {
 		return
 	}
 
@@ -944,4 +888,11 @@ func (r *Reconciler) deleteToeholdCheck(ctx context.Context, provider *api.Provi
 		Namespace: provider.Namespace,
 		Name:      copyappliance.CheckName(provider.Name),
 	}})
+}
+
+// inventoryReady reports whether the provider is far enough along to be used:
+// the connection tested, the inventory built, and nothing blocking.
+func inventoryReady(provider *api.Provider) bool {
+	return !provider.Status.HasBlockerCondition() &&
+		provider.Status.HasCondition(ConnectionTestSucceeded, InventoryCreated)
 }
