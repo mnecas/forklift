@@ -10,6 +10,7 @@ import (
 	vspheremodel "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	"github.com/kubev2v/forklift/pkg/controller/provider/web"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
+	"github.com/kubev2v/forklift/pkg/labeler"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
@@ -17,23 +18,44 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Labels.
+// Labels. An appliance is identified by its labels rather than by its name,
+// which is generated. LabelMigration and LabelVM repeat the keys the plan
+// package declares as convctx.LabelMigration and convctx.LabelVM; the values
+// have to agree, and plan imports this package rather than the reverse.
 const (
-	LabelApp      = "app"
-	LabelProvider = "provider"
-	LabelVM       = "vmID"
-	AppForklift   = "forklift"
+	LabelApp       = "app"
+	LabelSubapp    = "subapp"
+	LabelProvider  = "provider"
+	LabelMigration = "migration"
+	LabelVM        = "vmID"
+	AppForklift    = "forklift"
+
+	SubappAppliance = "copy-appliance"
+	SubappCheck     = "copy-appliance-check"
 )
 
-// ApplianceName returns the stable CopyAppliance name for a migration VM.
-func ApplianceName(migrationUID types.UID, vmID string) string {
-	sum := sha256.Sum256([]byte(vmID))
-	vmShort := hex.EncodeToString(sum[:4])
-	migShort := string(migrationUID)
-	if len(migShort) > 8 {
-		migShort = migShort[:8]
+type Labeler struct {
+	labeler.Labeler
+}
+
+// ApplianceLabels identify the appliance serving one VM of one migration.
+func (r *Labeler) ApplianceLabels(provider *api.Provider, migrationUID types.UID, vmID string) map[string]string {
+	return map[string]string{
+		LabelApp:       AppForklift,
+		LabelSubapp:    SubappAppliance,
+		LabelProvider:  string(provider.UID),
+		LabelMigration: string(migrationUID),
+		LabelVM:        vmID,
 	}
-	return fmt.Sprintf("copy-appliance-%s-%s", migShort, vmShort)
+}
+
+// CheckLabels identify a provider's check appliance.
+func (r *Labeler) CheckLabels(provider *api.Provider) map[string]string {
+	return map[string]string{
+		LabelApp:      AppForklift,
+		LabelSubapp:   SubappCheck,
+		LabelProvider: string(provider.UID),
+	}
 }
 
 // rootResourcePool is the name vSphere gives the root resource pool of every
@@ -48,24 +70,97 @@ const checkNameSuffix = "-toehold-check"
 // be named anything vCenter would refuse.
 const maxVMNameLength = 80
 
-// Build returns a CopyAppliance for an appliance VM that will read the given
-// source VM's disks. Everything about the appliance comes from the toehold
-// template it is cloned from — where it is placed, its shape, its root disk
-// and its network — except the disks to attach, which are the source VM's. The
-// returned resource has not been created; the caller creates it and the
-// reconciler builds the VM from it.
-func Build(provider *api.Provider, toehold *api.ToeholdTemplate, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
+// generatedNameSuffixLength is what the API server appends to a GenerateName.
+const generatedNameSuffixLength = 5
+
+// maxPrefixLength is what a GenerateName may be and still leave a name vCenter
+// accepts.
+const maxPrefixLength = maxVMNameLength - generatedNameSuffixLength
+
+// Builder builds CopyAppliance CRs from a provider's toehold template.
+type Builder struct {
+	Provider *api.Provider
+	// Inventory reads the provider's inventory service, which placement and
+	// disk attachment are resolved against.
+	Inventory web.Client
+	Labeler   Labeler
+}
+
+// NewBuilder returns a Builder over the provider's inventory service.
+func NewBuilder(provider *api.Provider) (builder *Builder, err error) {
 	inventory, err := web.NewClient(provider)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
 	}
-	return build(inventory, provider, toehold, vmRef)
+	builder = &Builder{
+		Provider:  provider,
+		Inventory: inventory,
+	}
+	return
 }
 
-// build is Build over an already-resolved inventory client. An empty vmRef
-// builds an appliance with no source VM, and so with nothing to attach.
-func build(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate, vmRef ref.Ref) (appliance *api.CopyAppliance, err error) {
+// prefix is the generated name of the appliance serving one VM of a migration.
+// The VM ID is hashed because it is a source-side identifier and is not
+// guaranteed to be legal in a resource name.
+func (r *Builder) prefix(migrationUID types.UID, vmID string) string {
+	sum := sha256.Sum256([]byte(vmID))
+	vmShort := hex.EncodeToString(sum[:4])
+	migShort := string(migrationUID)
+	if len(migShort) > 8 {
+		migShort = migShort[:8]
+	}
+	return fmt.Sprintf("copy-appliance-%s-%s-", migShort, vmShort)
+}
+
+// checkPrefix is the generated name of the provider's check appliance.
+func (r *Builder) checkPrefix() string {
+	name := r.Provider.Name
+	if len(name)+len(checkNameSuffix)+1 > maxPrefixLength {
+		name = name[:maxPrefixLength-len(checkNameSuffix)-1]
+	}
+	return name + checkNameSuffix + "-"
+}
+
+// Appliance returns a CopyAppliance for an appliance VM that will read the
+// given source VM's disks. Everything about the appliance comes from the
+// toehold template it is cloned from — where it is placed, its shape, its root
+// disk and its network — except the disks to attach, which are the source
+// VM's. The returned resource has not been created; the caller creates it and
+// the reconciler builds the VM from it.
+func (r *Builder) Appliance(toehold *api.ToeholdTemplate, vmRef ref.Ref, migrationUID types.UID) (appliance *api.CopyAppliance, err error) {
+	appliance, err = r.build(toehold)
+	if err != nil {
+		return
+	}
+	err = r.attachDisks(vmRef, &appliance.Spec)
+	if err != nil {
+		return
+	}
+	appliance.GenerateName = r.prefix(migrationUID, vmRef.ID)
+	appliance.Labels = r.Labeler.ApplianceLabels(r.Provider, migrationUID, vmRef.ID)
+	return
+}
+
+// Check returns a CopyAppliance for an appliance VM that reads no disks at
+// all. Deploying one exercises everything the appliance path needs — the clone,
+// the boot, the guest network, the login, the orchestrator install and the
+// export endpoint — against nothing a migration depends on, so a provider can
+// be told its appliance works before a plan relies on it.
+func (r *Builder) Check(toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
+	appliance, err = r.build(toehold)
+	if err != nil {
+		return
+	}
+	appliance.GenerateName = r.checkPrefix()
+	appliance.Labels = r.Labeler.CheckLabels(r.Provider)
+	return
+}
+
+// build is what an appliance has regardless of which VM, if any, it serves.
+// The caller names and labels it.
+func (r *Builder) build(toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
+	provider := r.Provider
 	if provider.Type() != api.VSphere {
 		err = liberr.New(fmt.Sprintf(
 			"copy appliances are only supported for vSphere providers; %s is %s",
@@ -102,66 +197,18 @@ func build(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTem
 		// them, and the clone inherits them. Placement below comes from the
 		// template as well.
 	}
-	err = placement(inventory, provider, toehold, &spec)
+	err = r.placement(toehold, &spec)
 	if err != nil {
 		return
-	}
-
-	labels := map[string]string{
-		LabelApp:      AppForklift,
-		LabelProvider: string(provider.UID),
-	}
-	if vmRef.ID != "" {
-		err = attachDisks(inventory, vmRef, &spec)
-		if err != nil {
-			return
-		}
-		labels[LabelVM] = vmRef.ID
 	}
 
 	appliance = &api.CopyAppliance{
 		ObjectMeta: meta.ObjectMeta{
 			Namespace: provider.Namespace,
-			Labels:    labels,
 		},
 		Spec: spec,
 	}
 	return
-}
-
-// BuildCheck returns a CopyAppliance for an appliance VM that reads no disks at
-// all. Deploying one exercises everything the appliance path needs — the clone,
-// the boot, the guest network, the login, the orchestrator install and the
-// export endpoint — against nothing a migration depends on, so a provider can
-// be told its appliance works before a plan relies on it.
-func BuildCheck(provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
-	inventory, err := web.NewClient(provider)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	return buildCheck(inventory, provider, toehold)
-}
-
-// buildCheck is BuildCheck over an already-resolved inventory client.
-func buildCheck(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate) (appliance *api.CopyAppliance, err error) {
-	appliance, err = build(inventory, provider, toehold, ref.Ref{})
-	if err != nil {
-		return
-	}
-	// Named rather than generated: there is one check appliance per provider,
-	// and the next pass has to find this one rather than create another.
-	appliance.Name = CheckName(provider.Name)
-	return
-}
-
-// CheckName returns the name of a provider's check appliance.
-func CheckName(providerName string) string {
-	name := providerName + checkNameSuffix
-	if len(name) <= maxVMNameLength {
-		return name
-	}
-	return providerName[:maxVMNameLength-len(checkNameSuffix)] + checkNameSuffix
 }
 
 // placement fills in the placement fields of spec from where the toehold
@@ -174,7 +221,8 @@ func CheckName(providerName string) string {
 // toehold.Spec: the inventory serves templates through the get-by-moref
 // handler and filters them out of its listings, so a path lookup finds
 // nothing.
-func placement(inventory web.Client, provider *api.Provider, toehold *api.ToeholdTemplate, spec *api.CopyApplianceSpec) (err error) {
+func (r *Builder) placement(toehold *api.ToeholdTemplate, spec *api.CopyApplianceSpec) (err error) {
+	inventory := r.Inventory
 	moRef := toehold.Status.Template.Moref
 	if moRef == "" {
 		err = liberr.New(fmt.Sprintf(
@@ -221,7 +269,7 @@ func placement(inventory web.Client, provider *api.Provider, toehold *api.Toehol
 	if err = inventory.Get(cluster, host.Cluster); err != nil {
 		return
 	}
-	if pool := provider.Setting(api.CopyApplianceResourcePool); pool != "" {
+	if pool := r.Provider.Setting(api.CopyApplianceResourcePool); pool != "" {
 		spec.ResourcePool = pool
 	} else {
 		spec.ResourcePool = cluster.Path + "/" + rootResourcePool
@@ -243,9 +291,9 @@ func placement(inventory web.Client, provider *api.Provider, toehold *api.Toehol
 // appliance takes from the VM it serves; where it runs is the template's
 // business. Shared and RDM disks are skipped; the copy appliance targets flat
 // VMDKs.
-func attachDisks(inventory web.Client, vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
+func (r *Builder) attachDisks(vmRef ref.Ref, spec *api.CopyApplianceSpec) (err error) {
 	vm := &model.VM{}
-	err = inventory.Find(vm, vmRef)
+	err = r.Inventory.Find(vm, vmRef)
 	if err != nil {
 		err = liberr.Wrap(err, "vm", vmRef.String())
 		return

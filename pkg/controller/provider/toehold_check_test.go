@@ -2,22 +2,21 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/controller/base"
 	"github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
-	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
-	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 const checkName = "vcenter-toehold-check"
@@ -34,7 +33,7 @@ func withToeholdSettings(t *testing.T) {
 }
 
 // checkProvider is a vSphere provider. It carries no conditions: they are set
-// during the pass, by pass() below.
+// during the pass, by runPass() below.
 func checkProvider() *api.Provider {
 	vsphere := api.VSphere
 	return &api.Provider{
@@ -71,12 +70,15 @@ func checkTemplate() *api.ToeholdTemplate {
 }
 
 // checkAppliance is a check appliance in the given phase, carrying the
-// finalizer the copy appliance controller adds.
+// finalizer the copy appliance controller adds. The name is what the API
+// server would have generated; the labels are what the check finds it by.
 func checkAppliance(phase string) *api.CopyAppliance {
+	labeler := copyappliance.Labeler{}
 	appliance := &api.CopyAppliance{
 		ObjectMeta: meta.ObjectMeta{
 			Namespace:         "forklift",
 			Name:              checkName,
+			Labels:            labeler.CheckLabels(checkProvider()),
 			Finalizers:        []string{api.CopyApplianceFinalizer},
 			CreationTimestamp: meta.Now(),
 		},
@@ -97,7 +99,28 @@ func testCheckScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func testCheckReconciler(t *testing.T, objs ...client.Object) *Reconciler {
+// testCheckOn builds a check over a client the caller has made, for tests that
+// need the client to misbehave.
+func testCheckOn(t *testing.T, cl client.Client, provider *api.Provider) *applianceCheck {
+	t.Helper()
+	check := newApplianceCheck(cl, provider)
+	// Stands in for the real builder, which reads the inventory service. Only
+	// the appliance's identity matters to the check.
+	check.build = func(provider *api.Provider, _ *api.ToeholdTemplate) (*api.CopyAppliance, error) {
+		labeler := copyappliance.Labeler{}
+		return &api.CopyAppliance{
+			ObjectMeta: meta.ObjectMeta{
+				Namespace:    provider.Namespace,
+				GenerateName: provider.Name + "-toehold-check-",
+				Labels:       labeler.CheckLabels(provider),
+			},
+		}, nil
+	}
+	return check
+}
+
+// testCheck builds a check over a fake client holding objs.
+func testCheck(t *testing.T, provider *api.Provider, objs ...client.Object) *applianceCheck {
 	t.Helper()
 	scheme := testCheckScheme(t)
 	cl := fake.NewClientBuilder().
@@ -105,51 +128,64 @@ func testCheckReconciler(t *testing.T, objs ...client.Object) *Reconciler {
 		WithObjects(objs...).
 		WithStatusSubresource(&api.Provider{}, &api.CopyAppliance{}, &api.ToeholdTemplate{}).
 		Build()
-	return &Reconciler{
-		Reconciler: base.Reconciler{Client: cl, Log: logging.WithName("test")},
-		scheme:     scheme,
-		newCheckAppliance: func(provider *api.Provider, toehold *api.ToeholdTemplate) (*api.CopyAppliance, error) {
-			// Stands in for the real builder, which reads the inventory
-			// service. Only the identity matters to this controller.
-			return &api.CopyAppliance{
-				ObjectMeta: meta.ObjectMeta{
-					Namespace: provider.Namespace,
-					Name:      copyappliance.CheckName(provider.Name),
-				},
-			}, nil
-		},
-	}
+	return testCheckOn(t, cl, provider)
 }
 
-// pass runs the check the way Reconcile does, inside a staging window. The
+// runPass runs the check the way Reconcile does, inside a staging window. The
 // staging is the point: it is what decides which conditions survive to the
 // next pass. The two conditions the check gates on are re-set here because
 // that is what validate and updateContainer do earlier in the same pass —
 // neither is durable, so neither is visible until it is set again.
-func (r *Reconciler) pass(provider *api.Provider) {
-	provider.Status.BeginStagingConditions()
-	provider.Status.SetCondition(
+func runPass(t *testing.T, c *applianceCheck) error {
+	t.Helper()
+	c.provider.Status.BeginStagingConditions()
+	c.provider.Status.SetCondition(
 		libcnd.Condition{Type: ConnectionTestSucceeded, Status: True, Category: Required},
 		libcnd.Condition{Type: InventoryCreated, Status: True, Category: Required})
-	r.ensureToeholdApplianceCheck(context.TODO(), provider)
-	provider.Status.EndStagingConditions()
+	err := c.Run(context.TODO())
+	c.provider.Status.EndStagingConditions()
+	return err
+}
+
+// checkAppliances is every appliance in the fake client. Appliances are found
+// by label rather than by name, so the assertions list rather than get.
+func checkAppliances(t *testing.T, c *applianceCheck) []api.CopyAppliance {
+	t.Helper()
+	list := &api.CopyApplianceList{}
+	if err := c.client.List(context.TODO(), list); err != nil {
+		t.Fatalf("list appliances: %v", err)
+	}
+	return list.Items
+}
+
+// theCheckAppliance is the one appliance the check has to work with.
+func theCheckAppliance(t *testing.T, c *applianceCheck) *api.CopyAppliance {
+	t.Helper()
+	items := checkAppliances(t, c)
+	if len(items) != 1 {
+		t.Fatalf("found %d check appliances, want one", len(items))
+	}
+	return &items[0]
 }
 
 // applianceState reports what became of the check appliance.
-func applianceState(t *testing.T, r *Reconciler, namespace string) string {
+func applianceState(t *testing.T, c *applianceCheck) string {
 	t.Helper()
-	found := &api.CopyAppliance{}
-	err := r.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: checkName}, found)
+	live, terminating := 0, 0
+	for _, appliance := range checkAppliances(t, c) {
+		if appliance.DeletionTimestamp != nil {
+			terminating++
+		} else {
+			live++
+		}
+	}
 	switch {
-	case k8serr.IsNotFound(err):
-		return "gone"
-	case err != nil:
-		t.Fatalf("get appliance: %v", err)
-		return ""
-	case found.DeletionTimestamp != nil:
+	case live > 0:
+		return "present"
+	case terminating > 0:
 		return "terminating"
 	default:
-		return "present"
+		return "gone"
 	}
 }
 
@@ -203,7 +239,7 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			objects:       []client.Object{failed},
 			wantBlockedBy: ToeholdCheckFailed,
 			wantRecorded:  ToeholdCheckFailed,
-			wantMessage:   "check failed",
+			wantMessage:   "the guest never reported an address",
 			wantAppliance: "terminating",
 		},
 		{
@@ -218,15 +254,17 @@ func TestToeholdApplianceCheck(t *testing.T) {
 			objects:       []client.Object{stale},
 			wantBlockedBy: ToeholdCheckFailed,
 			wantRecorded:  ToeholdCheckFailed,
-			wantMessage:   "check failed",
+			wantMessage:   "did not come up within 30m0s",
 			wantAppliance: "terminating",
 		},
 		{
-			name:          "a teardown in progress is waited out rather than forced",
+			// The name is generated, so a replacement does not collide with
+			// the one still going away.
+			name:          "a teardown in progress does not hold up the next check",
 			objects:       []client.Object{terminating},
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   "teardown",
-			wantAppliance: "terminating",
+			wantMessage:   "started",
+			wantAppliance: "present",
 		},
 		{
 			name: "a recorded pass for the same inputs deploys nothing",
@@ -294,9 +332,11 @@ func TestToeholdApplianceCheck(t *testing.T) {
 				objects = append(objects, template)
 			}
 			objects = append(objects, tt.objects...)
-			r := testCheckReconciler(t, objects...)
+			c := testCheck(t, provider, objects...)
 
-			r.pass(provider)
+			if err := runPass(t, c); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 
 			blocker := provider.Status.FindCondition(ToeholdApplianceNotReady)
 			switch {
@@ -348,7 +388,7 @@ func TestToeholdApplianceCheck(t *testing.T) {
 				}
 			}
 
-			if got := applianceState(t, r, provider.Namespace); got != tt.wantAppliance {
+			if got := applianceState(t, c); got != tt.wantAppliance {
 				t.Errorf("appliance is %s, want %s", got, tt.wantAppliance)
 			}
 		})
@@ -361,10 +401,12 @@ func TestToeholdApplianceCheck(t *testing.T) {
 func TestToeholdApplianceCheckRunsOnce(t *testing.T) {
 	withToeholdSettings(t)
 	provider := checkProvider()
-	r := testCheckReconciler(t, provider, checkTemplate(),
+	c := testCheck(t, provider, provider, checkTemplate(),
 		checkAppliance(copyappliance.PhaseDeployCompleted))
 
-	r.pass(provider)
+	if err := runPass(t, c); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
 
 	record := provider.Status.FindCondition(ToeholdApplianceChecked)
 	if record == nil || record.Reason != ToeholdCheckPassed {
@@ -376,17 +418,15 @@ func TestToeholdApplianceCheckRunsOnce(t *testing.T) {
 
 	// The appliance is terminating rather than gone, because the fake client
 	// honours its finalizer. Release it the way its own controller would.
-	appliance := &api.CopyAppliance{}
-	key := client.ObjectKey{Namespace: provider.Namespace, Name: checkName}
-	if err := r.Get(context.TODO(), key, appliance); err != nil {
-		t.Fatalf("get appliance: %v", err)
-	}
+	appliance := theCheckAppliance(t, c)
 	appliance.Finalizers = nil
-	if err := r.Update(context.TODO(), appliance); err != nil {
+	if err := c.client.Update(context.TODO(), appliance); err != nil {
 		t.Fatalf("release finalizer: %v", err)
 	}
 
-	r.pass(provider)
+	if err := runPass(t, c); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
 
 	if provider.Status.FindCondition(ToeholdApplianceChecked) == nil {
 		t.Error("the record did not survive the second pass; is it durable?")
@@ -394,36 +434,134 @@ func TestToeholdApplianceCheckRunsOnce(t *testing.T) {
 	if provider.Status.HasBlockerCondition() {
 		t.Error("the provider is blocked on the second pass")
 	}
-	if got := applianceState(t, r, provider.Namespace); got != "gone" {
+	if got := applianceState(t, c); got != "gone" {
 		t.Errorf("appliance is %s on the second pass, want it not redeployed", got)
 	}
 }
 
-// Neither condition may block at the top of a pass. updateContainer and
-// ensureToeholdTemplate both bail on HasBlockerCondition and both run before
+// A settled check used to fire a Delete on every pass, whether or not there was
+// anything left to delete: a write per provider per reconcile, forever.
+func TestToeholdCheckDoesNotDeleteWhatIsNotThere(t *testing.T) {
+	withToeholdSettings(t)
+	provider := checkProvider()
+	provider.Status.SetCondition(libcnd.Condition{
+		Type:     ToeholdApplianceChecked,
+		Status:   True,
+		Reason:   ToeholdCheckPassed,
+		Category: Advisory,
+		Durable:  true,
+		Items:    []string{"vm-900", "disk-1", "config-1", "copy-appliance:latest"},
+	})
+
+	deletes := 0
+	scheme := testCheckScheme(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(provider, checkTemplate()).
+		WithStatusSubresource(&api.Provider{}, &api.CopyAppliance{}, &api.ToeholdTemplate{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deletes++
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	c := testCheckOn(t, cl, provider)
+
+	for i := range 2 {
+		if err := runPass(t, c); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+
+	if deletes != 0 {
+		t.Errorf("issued %d deletes, want none: there is no appliance to delete", deletes)
+	}
+}
+
+// A template that cannot be read is not a template that is still being built,
+// and saying so is the only way the user finds out the apiserver is refusing.
+func TestToeholdCheckReportsATemplateReadFailure(t *testing.T) {
+	withToeholdSettings(t)
+	provider := checkProvider()
+	scheme := testCheckScheme(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(provider, checkTemplate()).
+		WithStatusSubresource(&api.Provider{}, &api.CopyAppliance{}, &api.ToeholdTemplate{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, isTemplate := obj.(*api.ToeholdTemplate); isTemplate {
+					return errors.New("etcd is unavailable")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	c := testCheckOn(t, cl, provider)
+
+	err := runPass(t, c)
+
+	if err == nil {
+		t.Fatal("Run succeeded although the template could not be read")
+	}
+	blocker := provider.Status.FindCondition(ToeholdApplianceNotReady)
+	if blocker == nil {
+		t.Fatal("the provider is not blocked")
+	}
+	if !strings.Contains(blocker.Message, "etcd is unavailable") {
+		t.Errorf("message = %q, want it to name the real failure", blocker.Message)
+	}
+	if strings.Contains(blocker.Message, "Waiting for the toehold template") {
+		t.Errorf("message = %q, want it not to claim the template is still building", blocker.Message)
+	}
+}
+
+func TestToeholdCheckReportsAnApplianceReadFailure(t *testing.T) {
+	withToeholdSettings(t)
+	provider := checkProvider()
+	scheme := testCheckScheme(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(provider, checkTemplate()).
+		WithStatusSubresource(&api.Provider{}, &api.CopyAppliance{}, &api.ToeholdTemplate{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, isAppliance := list.(*api.CopyApplianceList); isAppliance {
+					return errors.New("etcd is unavailable")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	c := testCheckOn(t, cl, provider)
+
+	err := runPass(t, c)
+
+	if err == nil {
+		t.Fatal("Run succeeded although the appliance could not be read")
+	}
+	blocker := provider.Status.FindCondition(ToeholdApplianceNotReady)
+	if blocker == nil {
+		t.Fatal("the provider is not blocked")
+	}
+	if !strings.Contains(blocker.Message, "etcd is unavailable") {
+		t.Errorf("message = %q, want it to name the real failure", blocker.Message)
+	}
+}
+
+// Neither condition may block at the top of a pass. updateContainer and the
+// toehold template sync both bail on HasBlockerCondition and both run before
 // the check does, so a recorded failure that blocked would stop the inventory
 // from updating and stop the template from ever being rebuilt to fix the very
 // failure that was recorded. The record stays out of the way by being
 // Advisory; the blocker stays out of the way by not being durable.
 func TestToeholdCheckDoesNotBlockTheStartOfTheNextPass(t *testing.T) {
 	provider := checkProvider()
-	provider.Status.SetCondition(
-		libcnd.Condition{
-			Type:     ToeholdApplianceChecked,
-			Status:   True,
-			Reason:   ToeholdCheckFailed,
-			Category: Advisory,
-			Durable:  true,
-			Message:  "the guest never reported an address",
-			Items:    []string{"vm-900", "disk-1", "config-1", "copy-appliance:latest"},
-		},
-		libcnd.Condition{
-			Type:     ToeholdApplianceNotReady,
-			Status:   True,
-			Reason:   ToeholdCheckFailed,
-			Category: Critical,
-			Message:  "the guest never reported an address",
-		})
+	c := &applianceCheck{provider: provider}
+	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+	c.fail(inputs, "the guest never reported an address")
+
 	if !provider.Status.HasBlockerCondition() {
 		t.Fatal("precondition: the failed provider is not blocked")
 	}
@@ -432,12 +570,112 @@ func TestToeholdCheckDoesNotBlockTheStartOfTheNextPass(t *testing.T) {
 
 	if provider.Status.HasBlockerCondition() {
 		t.Error("the provider is blocked before the check has re-run; " +
-			"updateContainer and ensureToeholdTemplate will not run")
+			"updateContainer and the template sync will not run")
 	}
 	// The record itself has to still be readable, or the check would run again
 	// every pass.
 	if provider.Status.FindCondition(ToeholdApplianceChecked) == nil {
 		t.Error("the record is not readable during staging; is it durable?")
+	}
+}
+
+// The shape of the two conditions is what makes the pass above work, so it is
+// asserted on directly rather than inferred from a reconcile path.
+func TestToeholdCheckConditions(t *testing.T) {
+	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+
+	blocked := &applianceCheck{provider: checkProvider()}
+	blocked.block(ToeholdCheckPending, "waiting")
+	switch cnd := blocked.provider.Status.FindCondition(ToeholdApplianceNotReady); {
+	case cnd == nil:
+		t.Error("block set no condition")
+	case cnd.Category != Critical:
+		t.Errorf("blocker category = %s, want %s", cnd.Category, Critical)
+	case cnd.Durable:
+		t.Error("the blocker is durable; it would survive staging and stop the next pass")
+	}
+
+	passed := &applianceCheck{provider: checkProvider()}
+	passed.pass(inputs)
+	switch cnd := passed.provider.Status.FindCondition(ToeholdApplianceChecked); {
+	case cnd == nil:
+		t.Error("pass set no condition")
+	case cnd.Category != Advisory:
+		t.Errorf("record category = %s, want %s", cnd.Category, Advisory)
+	case !cnd.Durable:
+		t.Error("the record is not durable; the check would run again every pass")
+	case !inputs.Match(cnd):
+		t.Errorf("record items = %v, want the inputs it was reached with", cnd.Items)
+	}
+	if passed.provider.Status.FindCondition(ToeholdApplianceNotReady) != nil {
+		t.Error("a passing check blocked the provider")
+	}
+
+	// The record and the blocker have to agree, which is why one call sets both.
+	failed := &applianceCheck{provider: checkProvider()}
+	failed.fail(inputs, "the guest never reported an address")
+	record := failed.provider.Status.FindCondition(ToeholdApplianceChecked)
+	blocker := failed.provider.Status.FindCondition(ToeholdApplianceNotReady)
+	if record == nil || blocker == nil {
+		t.Fatalf("fail set record=%v blocker=%v, want both", record, blocker)
+	}
+	if record.Message != blocker.Message {
+		t.Errorf("record says %q but the blocker says %q", record.Message, blocker.Message)
+	}
+	if !strings.Contains(record.Message, "the guest never reported an address") {
+		t.Errorf("message = %q, want it to carry the reason", record.Message)
+	}
+	// Items is documented as the items referenced in the Message.
+	for _, item := range record.Items {
+		if !strings.Contains(record.Message, item) {
+			t.Errorf("item %q is not referenced in the message %q", item, record.Message)
+		}
+	}
+}
+
+func TestCheckInputs(t *testing.T) {
+	withToeholdSettings(t)
+	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+
+	// Three come off the template, the fourth off the appliance settings: a
+	// new appliance image is as much a reason to re-check as a new template.
+	if got := inputsOf(checkTemplate()); got != inputs {
+		t.Errorf("inputsOf = %+v, want %+v", got, inputs)
+	}
+
+	tests := []struct {
+		name     string
+		recorded *libcnd.Condition
+		want     bool
+	}{
+		{
+			name:     "the same four match",
+			recorded: &libcnd.Condition{Items: inputs.Items()},
+			want:     true,
+		},
+		{
+			name:     "no record matches nothing",
+			recorded: nil,
+		},
+		{
+			name:     "a rebuilt template does not match",
+			recorded: &libcnd.Condition{Items: []string{"vm-901", "disk-1", "config-1", "copy-appliance:latest"}},
+		},
+		{
+			name:     "a shorter record from an older build does not match",
+			recorded: &libcnd.Condition{Items: []string{"vm-900", "disk-1", "config-1"}},
+		},
+		{
+			name:     "the same four in a different order do not match",
+			recorded: &libcnd.Condition{Items: []string{"disk-1", "vm-900", "config-1", "copy-appliance:latest"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inputs.Match(tt.recorded); got != tt.want {
+				t.Errorf("Match = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -449,14 +687,16 @@ func TestToeholdApplianceCheckSkipsADeletedProvider(t *testing.T) {
 	deleted := meta.Now()
 	provider.DeletionTimestamp = &deleted
 	provider.Finalizers = []string{"forklift"}
-	r := testCheckReconciler(t, provider, checkTemplate())
+	c := testCheck(t, provider, provider, checkTemplate())
 
-	r.pass(provider)
+	if err := runPass(t, c); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 
 	if provider.Status.HasBlockerCondition() {
 		t.Error("a provider being deleted was blocked by the appliance check")
 	}
-	if got := applianceState(t, r, provider.Namespace); got != "gone" {
+	if got := applianceState(t, c); got != "gone" {
 		t.Errorf("appliance is %s, want none deployed for a deleted provider", got)
 	}
 }
@@ -466,16 +706,13 @@ func TestToeholdApplianceCheckSkipsADeletedProvider(t *testing.T) {
 func TestToeholdCheckApplianceIsOwnedByTheProvider(t *testing.T) {
 	withToeholdSettings(t)
 	provider := checkProvider()
-	r := testCheckReconciler(t, provider, checkTemplate())
+	c := testCheck(t, provider, provider, checkTemplate())
 
-	r.pass(provider)
-
-	appliance := &api.CopyAppliance{}
-	key := client.ObjectKey{Namespace: provider.Namespace, Name: checkName}
-	if err := r.Get(context.TODO(), key, appliance); err != nil {
-		t.Fatalf("get appliance: %v", err)
+	if err := runPass(t, c); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	owner := meta.GetControllerOf(appliance)
+
+	owner := meta.GetControllerOf(theCheckAppliance(t, c))
 	if owner == nil || owner.UID != provider.UID {
 		t.Errorf("owner = %v, want the provider", owner)
 	}
