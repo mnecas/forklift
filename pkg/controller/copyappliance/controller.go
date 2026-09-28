@@ -450,6 +450,17 @@ func (r *Reconciler) setFailed(appliance *api.CopyAppliance, phase, reason strin
 	})
 }
 
+// FailureReason returns the message the appliance recorded when it failed. The
+// category is checked because setConverging writes a Ready condition too, on
+// every non-terminal phase, and that one is not a failure.
+func FailureReason(appliance *api.CopyAppliance) string {
+	cnd := appliance.Status.Conditions.FindCondition(libcnd.Ready)
+	if cnd != nil && cnd.Category == libcnd.Error && cnd.Message != "" {
+		return cnd.Message
+	}
+	return "the appliance did not record why it failed"
+}
+
 // setConverging records that the appliance is still on its way to the phase it
 // is headed for. A terminal phase has already set its own condition, and
 // staging would otherwise leave the appliance with no Ready condition at all
