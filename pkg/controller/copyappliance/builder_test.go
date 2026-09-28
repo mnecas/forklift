@@ -2,6 +2,7 @@ package copyappliance
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,6 +79,8 @@ func lookup[T any](from map[string]T, id string, out *T, kind string) error {
 // testRef identifies the source VM. The fake ignores it: which VM is returned
 // is decided by the fixture, not by the ref.
 var testRef = ref.Ref{ID: "vm-101", Name: "web-01"}
+
+const testMigrationUID = types.UID("6f1e2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7")
 
 // testInventory is a source VM and the provider's toehold template, each on a
 // clustered host with one disk, in different folders and on different
@@ -182,7 +185,7 @@ func (r *fakeInventory) templateParent(kind, id string) *fakeInventory {
 func TestPlacementFollowsTheTemplate(t *testing.T) {
 	inventory := testInventory()
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
+	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	tests := []struct {
@@ -219,7 +222,7 @@ func TestPlacementIgnoresTheToeholdSpec(t *testing.T) {
 	toehold.Spec.TemplateName = "renamed-since-import"
 
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), toehold, &spec); err != nil {
+	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(toehold, &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Folder != "/DC0/vm/templates" {
@@ -240,7 +243,7 @@ func TestPlacementNestedFolder(t *testing.T) {
 		Datacenter: "dc-1",
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
+	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Folder != "/DC0/vm/templates/team" {
@@ -259,7 +262,7 @@ func TestPlacementDatacenterInAFolder(t *testing.T) {
 		Resource: model.Resource{ID: "dc-1", Path: "/east/DC0"},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
+	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.Datacenter != "/east/DC0" {
@@ -283,7 +286,7 @@ func TestPlacementStandaloneHost(t *testing.T) {
 		},
 	}
 	spec := api.CopyApplianceSpec{}
-	if err := placement(inventory, testProvider(), testToehold(), &spec); err != nil {
+	if err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(testToehold(), &spec); err != nil {
 		t.Fatalf("placement: %v", err)
 	}
 	if spec.ResourcePool != "/DC0/host/esx1.example.com/Resources" {
@@ -351,7 +354,7 @@ func TestPlacementErrors(t *testing.T) {
 				tc.toehold(toehold)
 			}
 			spec := api.CopyApplianceSpec{}
-			err := placement(inventory, testProvider(), toehold, &spec)
+			err := (&Builder{Provider: testProvider(), Inventory: inventory}).placement(toehold, &spec)
 			if err == nil {
 				t.Fatalf("placement succeeded, want an error mentioning %q", tc.want)
 			}
@@ -369,7 +372,7 @@ func TestAttachDisksIsAllTheSourceVMContributes(t *testing.T) {
 	inventory := testInventory().vmParent("VirtualApp", "vapp-1")
 	inventory.vm.Host = ""
 
-	appliance, err := build(inventory, testProvider(), testToehold(), testRef)
+	appliance, err := (&Builder{Provider: testProvider(), Inventory: inventory}).Appliance(testToehold(), testRef, testMigrationUID)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -389,7 +392,7 @@ func TestBuildRejectsAnUnknownSourceVM(t *testing.T) {
 	withSettings(t, testSettings())
 	inventory := testInventory()
 
-	_, err := build(inventory, testProvider(), testToehold(), ref.Ref{ID: "vm-404"})
+	_, err := (&Builder{Provider: testProvider(), Inventory: inventory}).Appliance(testToehold(), ref.Ref{ID: "vm-404"}, testMigrationUID)
 	if err == nil {
 		t.Fatal("build succeeded for a VM that is not in the inventory")
 	}
@@ -450,7 +453,7 @@ func TestBuild(t *testing.T) {
 	inventory := testInventory()
 	provider := testProvider()
 
-	appliance, err := build(inventory, provider, testToehold(), testRef)
+	appliance, err := (&Builder{Provider: provider, Inventory: inventory}).Appliance(testToehold(), testRef, testMigrationUID)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -458,22 +461,23 @@ func TestBuild(t *testing.T) {
 	if appliance.Namespace != "forklift" {
 		t.Errorf("Namespace = %q, want the provider's", appliance.Namespace)
 	}
-	// Callers set metadata.name; the appliance VM is cloned under that name.
+	// The API server names it; the appliance VM is cloned under that name.
 	if appliance.Name != "" {
-		t.Errorf("Name = %q, want the caller to set it", appliance.Name)
+		t.Errorf("Name = %q, want it left for the API server", appliance.Name)
 	}
-	if appliance.GenerateName != "" {
-		t.Errorf("GenerateName = %q, want empty", appliance.GenerateName)
+	if appliance.GenerateName == "" {
+		t.Error("GenerateName is empty, want a prefix for the API server")
 	}
-	wantLabels := map[string]string{
-		LabelApp:      AppForklift,
-		LabelProvider: string(provider.UID),
-		LabelVM:       testRef.ID,
+	if len(appliance.GenerateName)+generatedNameSuffixLength > maxVMNameLength {
+		t.Errorf("GenerateName %q generates a name vCenter would refuse", appliance.GenerateName)
 	}
-	for key, want := range wantLabels {
-		if got := appliance.Labels[key]; got != want {
-			t.Errorf("label %q = %q, want %q", key, got, want)
-		}
+
+	// The labels are the appliance's identity: this is the set every lookup
+	// selects on, so it has to be exactly what the Labeler produces.
+	labeler := Labeler{}
+	wantLabels := labeler.ApplianceLabels(provider, testMigrationUID, testRef.ID)
+	if !reflect.DeepEqual(appliance.Labels, wantLabels) {
+		t.Errorf("Labels = %v, want %v", appliance.Labels, wantLabels)
 	}
 
 	spec := appliance.Spec
@@ -514,7 +518,7 @@ func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
 	withSettings(t, applied)
 	inventory := testInventory()
 
-	_, err := build(inventory, testProvider(), testToehold(), testRef)
+	_, err := (&Builder{Provider: testProvider(), Inventory: inventory}).Appliance(testToehold(), testRef, testMigrationUID)
 	if err == nil {
 		t.Fatal("build succeeded without a container image")
 	}
@@ -530,7 +534,7 @@ func TestBuildRejectsANonVSphereProvider(t *testing.T) {
 	ovirt := api.OVirt
 	provider.Spec.Type = &ovirt
 
-	_, err := build(inventory, provider, testToehold(), testRef)
+	_, err := (&Builder{Provider: provider, Inventory: inventory}).Appliance(testToehold(), testRef, testMigrationUID)
 	if err == nil {
 		t.Fatal("build succeeded for an oVirt provider")
 	}

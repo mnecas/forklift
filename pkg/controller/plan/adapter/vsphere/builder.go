@@ -918,15 +918,19 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 }
 
 func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) {
-	appliance := &api.CopyAppliance{}
-	err := r.Client.Get(context.TODO(), client.ObjectKey{
-		Namespace: r.Source.Provider.Namespace,
-		Name:      cacontroller.ApplianceName(r.Migration.UID, vmRef.ID),
-	}, appliance)
+	provider := r.Source.Provider
+	ensure := cacontroller.Ensurer{Client: r.Client, Log: r.Log}
+	appliance, err := ensure.Find(context.TODO(),
+		provider.Namespace,
+		ensure.Labeler.ApplianceLabels(provider, r.Migration.UID, vmRef.ID),
+		true)
 	if err != nil {
-		return nil, liberr.Wrap(err)
+		return nil, err
 	}
-	return cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
+	if appliance == nil {
+		return nil, liberr.New("copy appliance is gone", "vm", vmRef.ID)
+	}
+	return cacontroller.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
 }
 
 func (r *Builder) applyHostsConfig(vmRef ref.Ref, url, thumbprint string) (string, string, error) {

@@ -6,9 +6,9 @@ import (
 	v1beta1 "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
+	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
-	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	"github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/web/vsphere"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
@@ -2207,10 +2207,14 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 	})
 
 	It("annotates warm DataVolumes with NBD when the copy appliance is ready", func() {
+		// Found by its labels. The provider is the one createBuilder makes,
+		// whose UID is empty; the migration UID is its "123".
+		labeler := cacontroller.Labeler{}
 		appliance := &v1beta1.CopyAppliance{
 			ObjectMeta: meta.ObjectMeta{
-				Name:      cacontroller.ApplianceName("123", "test-vm-id"),
+				Name:      "copy-appliance-abcde",
 				Namespace: "test",
+				Labels:    labeler.ApplianceLabels(&v1beta1.Provider{}, "123", "test-vm-id"),
 			},
 			Spec: v1beta1.CopyApplianceSpec{
 				AttachDiskPaths: []string{diskFile},

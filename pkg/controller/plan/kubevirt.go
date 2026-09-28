@@ -1747,16 +1747,20 @@ func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
 		return nil
 	}
 
-	appliance := &api.CopyAppliance{}
-	err := r.Get(context.TODO(), client.ObjectKey{
-		Namespace: r.Source.Provider.Namespace,
-		Name:      cacontroller.ApplianceName(r.Migration.UID, vm.ID),
-	}, appliance)
+	provider := r.Source.Provider
+	ensure := cacontroller.Ensurer{Client: r.Client, Log: r.Log}
+	appliance, err := ensure.Find(context.TODO(),
+		provider.Namespace,
+		ensure.Labeler.ApplianceLabels(provider, r.Migration.UID, vm.ID),
+		true)
 	if err != nil {
-		return liberr.Wrap(err)
+		return err
+	}
+	if appliance == nil {
+		return liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
 
-	connections, err := cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
+	connections, err := cacontroller.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
 	if err != nil {
 		return liberr.Wrap(err)
 	}

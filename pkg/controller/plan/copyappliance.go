@@ -59,11 +59,14 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 		return liberr.New("source provider is not available")
 	}
 
-	if _, err = r.getCopyAppliance(vm); err == nil {
-		return nil
-	}
-	if !k8serr.IsNotFound(err) {
+	// Checked before building: building reads the provider's inventory service
+	// over the network, and this runs on every pass.
+	found, err := r.getCopyAppliance(vm)
+	if err != nil {
 		return err
+	}
+	if found != nil {
+		return nil
 	}
 
 	toehold, err := toeholdTemplateForProvider(r.Client, provider)
@@ -71,7 +74,11 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 		return liberr.Wrap(err)
 	}
 
-	appliance, err := cacontroller.Build(provider, toehold, vm.Ref)
+	builder, err := cacontroller.NewBuilder(provider)
+	if err != nil {
+		return liberr.Wrap(err)
+	}
+	appliance, err := builder.Appliance(toehold, vm.Ref, r.Migration.UID)
 	if err != nil {
 		return liberr.Wrap(err)
 	}
@@ -81,35 +88,39 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 			appliance.Spec.AttachDisks[i].VMDKPath = cacontroller.BaseVMDKPath(appliance.Spec.AttachDisks[i].VMDKPath)
 		}
 	}
-	appliance.Name = cacontroller.ApplianceName(r.Migration.UID, vm.ID)
 	appliance.Namespace = provider.Namespace
 	appliance.Spec.ExportRequest = &api.ExportRequest{
 		Target:     api.ExportTargetExport,
 		Generation: 1,
 	}
 
+	// The plan labels are not identity; they are what cleanupOrphanedResources
+	// selects on.
 	appliance.Labels[convctx.LabelPlan] = string(r.Plan.UID)
 	appliance.Labels[convctx.LabelPlanName] = r.Plan.Name
 	appliance.Labels[convctx.LabelPlanNamespace] = r.Plan.Namespace
-	appliance.Labels[convctx.LabelMigration] = string(r.Migration.UID)
-	appliance.Labels[cacontroller.LabelVM] = vm.ID
 
 	err = controllerutil.SetControllerReference(r.Migration, appliance, scheme.Scheme)
 	if err != nil {
 		return liberr.Wrap(err)
 	}
 
-	err = r.Create(context.TODO(), appliance)
-	if err != nil && !k8serr.IsAlreadyExists(err) {
-		return liberr.Wrap(err)
-	}
-	return nil
+	_, err = r.copyAppliances().Appliance(context.TODO(), appliance)
+	return
+}
+
+// copyAppliances finds and creates the migration's copy appliances.
+func (r *Migration) copyAppliances() *cacontroller.Ensurer {
+	return &cacontroller.Ensurer{Client: r.Client, Log: r.Log}
 }
 
 func (r *Migration) patchCopyApplianceExportRequest(vm *plan.VMStatus, target string) error {
 	appliance, err := r.getCopyAppliance(vm)
 	if err != nil {
 		return err
+	}
+	if appliance == nil {
+		return liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
 	next := int64(1)
 	if appliance.Spec.ExportRequest != nil {
@@ -135,6 +146,9 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (ready bool, err err
 	appliance, err := r.getCopyAppliance(vm)
 	if err != nil {
 		return false, err
+	}
+	if appliance == nil {
+		return false, liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
 
 	switch appliance.Status.Phase {
@@ -168,6 +182,9 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (ready bool,
 	if err != nil {
 		return false, err
 	}
+	if appliance == nil {
+		return false, liberr.New("copy appliance is gone", "vm", vm.ID)
+	}
 
 	switch appliance.Status.Phase {
 	case cacontroller.PhaseDeployFailed:
@@ -193,12 +210,18 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (ready bool,
 }
 
 func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err error) {
-	appliance, err := r.getCopyAppliance(vm)
+	namespace, labels, err := r.copyApplianceKey(vm)
 	if err != nil {
-		if k8serr.IsNotFound(err) {
-			return true, nil
-		}
 		return false, err
+	}
+	// Not live-only: teardown is reported on the appliance's own status, and by
+	// then it has a deletion timestamp.
+	appliance, err := r.copyAppliances().Find(context.TODO(), namespace, labels, false)
+	if err != nil {
+		return false, err
+	}
+	if appliance == nil {
+		return true, nil
 	}
 
 	if appliance.DeletionTimestamp == nil {
@@ -219,27 +242,35 @@ func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err err
 
 func (r *Migration) deleteCopyAppliance(vm *plan.VMStatus) error {
 	appliance, err := r.getCopyAppliance(vm)
-	if k8serr.IsNotFound(err) {
-		return nil
-	}
 	if err != nil {
 		return err
+	}
+	if appliance == nil {
+		return nil
 	}
 	return client.IgnoreNotFound(r.Delete(context.TODO(), appliance))
 }
 
+// getCopyAppliance returns the appliance serving the VM, or nil when there is
+// none. Absence is not an error: the appliance is created on demand and torn
+// down before the migration ends, so most of its callers have a use for nil.
 func (r *Migration) getCopyAppliance(vm *plan.VMStatus) (*api.CopyAppliance, error) {
+	namespace, labels, err := r.copyApplianceKey(vm)
+	if err != nil {
+		return nil, err
+	}
+	return r.copyAppliances().Find(context.TODO(), namespace, labels, true)
+}
+
+// copyApplianceKey is where the appliance serving the VM lives and what
+// identifies it.
+func (r *Migration) copyApplianceKey(vm *plan.VMStatus) (namespace string, labels map[string]string, err error) {
 	provider := r.Source.Provider
 	if provider == nil {
-		return nil, liberr.New("source provider is not available")
+		err = liberr.New("source provider is not available")
+		return
 	}
-	appliance := &api.CopyAppliance{}
-	err := r.Get(context.TODO(), client.ObjectKey{
-		Namespace: provider.Namespace,
-		Name:      cacontroller.ApplianceName(r.Migration.UID, vm.ID),
-	}, appliance)
-	if err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	return appliance, nil
+	namespace = provider.Namespace
+	labels = r.copyAppliances().Labeler.ApplianceLabels(provider, r.Migration.UID, vm.ID)
+	return
 }
