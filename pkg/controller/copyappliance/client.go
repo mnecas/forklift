@@ -170,7 +170,7 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 		},
 		Config: &types.VirtualMachineConfigSpec{
 			DeviceChange: changes,
-			Annotation:   applianceAnnotation,
+			Annotation:   api.CopyApplianceAnnotation,
 		},
 		PowerOn:  true,
 		Template: false,
@@ -711,7 +711,3 @@ func diskBackingFile(device types.BaseVirtualDevice) string {
 	}
 	return backing.FileName
 }
-
-// applianceAnnotation marks the appliance VM in the vSphere inventory so an
-// operator browsing it can tell what created the VM.
-const applianceAnnotation = "Forklift Copy Appliance"

@@ -3,6 +3,7 @@ package vsphere
 import (
 	"testing"
 
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 )
 
@@ -11,7 +12,7 @@ func TestBuildFileCountIgnoresCopyAppliance(t *testing.T) {
 	vms := []model.VM{
 		{Disks: []model.Disk{{File: path}}},
 		{
-			Annotation: copyApplianceAnnotation,
+			Annotation: api.CopyApplianceAnnotation,
 			Disks:      []model.Disk{{File: path}},
 		},
 	}

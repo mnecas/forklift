@@ -8,6 +8,11 @@ import (
 
 const CopyApplianceFinalizer = "forklift/copy-appliance"
 
+// CopyApplianceAnnotation is set on the appliance VM notes in vSphere so
+// inventory can ignore it (e.g. shared-disk counting) and operators can
+// recognize it.
+const CopyApplianceAnnotation = "Forklift Copy Appliance"
+
 // Export targets for CopyApplianceSpec.Target.
 const (
 	ExportTargetExport  = "Export"
