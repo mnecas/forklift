@@ -14,20 +14,30 @@ type ExportRunner struct {
 	context *ApplianceContext
 }
 
-// NeedsExportConvergence reports whether spec.exportRequest has not yet been applied.
-func NeedsExportConvergence(appliance *api.CopyAppliance) bool {
-	req := appliance.Spec.ExportRequest
-	if req == nil {
+// PendingExportRequest reports whether a terminal appliance must re-enter the
+// export itinerary. Terminal phase encodes the last converged target
+// (DeployCompleted = Export, Released = Release), so only a mismatched
+// target is pending. Warm precopy always Release→Export; there is no
+// same-target re-export path.
+func PendingExportRequest(appliance *api.CopyAppliance) bool {
+	target := appliance.Spec.Target
+	if target == "" {
 		return false
 	}
-	obs := appliance.Status.ObservedExportRequest
-	return obs == nil || req.Generation != obs.Generation || req.Target != obs.Target
+	switch appliance.Status.Phase {
+	case PhaseDeployCompleted:
+		return target == api.ExportTargetRelease
+	case PhaseReleased:
+		return target == api.ExportTargetExport
+	default:
+		return false
+	}
 }
 
 // Begin seeds the export itinerary from the requested target.
 func (r *ExportRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
-	if r.context.Appliance.Spec.ExportRequest == nil {
+	if r.context.Appliance.Spec.Target == "" {
 		return
 	}
 	itinerary, _, err := r.itinerary()
@@ -71,12 +81,12 @@ func (r *ExportRunner) Run(ctx context.Context) (err error) {
 }
 
 func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed string, err error) {
-	req := r.context.Appliance.Spec.ExportRequest
-	if req == nil {
-		err = liberr.New("export request is not set")
+	target := r.context.Appliance.Spec.Target
+	if target == "" {
+		err = liberr.New("export target is not set")
 		return
 	}
-	switch req.Target {
+	switch target {
 	case api.ExportTargetRelease:
 		itinerary = &libitr.Itinerary{
 			Name: "Release",
@@ -100,7 +110,7 @@ func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed strin
 		}
 		completed = PhaseDeployCompleted
 	default:
-		err = liberr.New("unknown export target", "target", req.Target)
+		err = liberr.New("unknown export target", "target", target)
 	}
 	return
 }
@@ -168,7 +178,6 @@ func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, er
 	case PhaseWaitForExports:
 		done, err = r.context.WaitForExports(ctx)
 	case PhaseReleased, PhaseDeployCompleted:
-		r.context.observeExportRequest()
 		msg := "Copy appliance disk export has succeeded."
 		if phase == PhaseReleased {
 			msg = "Copy appliance disks have been released."

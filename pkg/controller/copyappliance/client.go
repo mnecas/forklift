@@ -152,7 +152,12 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 		err = liberr.Wrap(err, "template", r.Appliance.Spec.Template)
 		return
 	}
-	changes, err := r.diskChanges(ctx, template)
+	devices, err := template.Device(ctx)
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	changes, err := r.buildAttachDiskChanges(devices)
 	if err != nil {
 		return
 	}
@@ -201,13 +206,15 @@ func (r *ApplianceContext) WaitForTask(ctx context.Context) (done bool, result a
 	if err != nil {
 		return
 	}
-	done, result, err = r.TaskResult(info)
-	if err != nil {
-		return
-	}
+	done = info.State == types.TaskInfoStateSuccess || info.State == types.TaskInfoStateError
 	if !done {
 		return
 	}
+	if info.State == types.TaskInfoStateError {
+		err = liberr.New("task failed", "task", info.Task, "fault", info.Error.LocalizedMessage)
+		return
+	}
+	result = info.Result
 	r.Appliance.Status.TaskRef = ""
 	return
 }
@@ -231,21 +238,6 @@ func (r *ApplianceContext) GetTaskInfo(ctx context.Context, task string) (info *
 		return
 	}
 	info = &managedTask.Info
-	return
-}
-
-// TaskResult reports whether a vSphere task has settled, and with what. A task
-// that failed settles as an error; one still running has neither.
-func (r *ApplianceContext) TaskResult(info *types.TaskInfo) (done bool, result any, err error) {
-	done = info.State == types.TaskInfoStateSuccess || info.State == types.TaskInfoStateError
-	if !done {
-		return
-	}
-	if info.State == types.TaskInfoStateError {
-		err = liberr.New("task failed", "task", info.Task, "fault", info.Error.LocalizedMessage)
-		return
-	}
-	result = info.Result
 	return
 }
 
@@ -514,9 +506,12 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 		return
 	}
 
-	exports, err := client.Disks(ctx, r.announceAddr(address))
+	exports, err := client.Disks(ctx, net.JoinHostPort(address, r.announcePort()))
 	if err != nil {
-		if r.announceStarting(err) {
+		var timeout interface{ Timeout() bool }
+		if isStarting(err) ||
+			errors.Is(err, syscall.ECONNREFUSED) ||
+			(errors.As(err, &timeout) && timeout.Timeout()) {
 			r.Log.Info("The appliance is not announcing its exports yet.",
 				"address", address)
 			err = nil
@@ -526,7 +521,7 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 		return
 	}
 
-	attached := r.Appliance.Spec.AttachedDisks()
+	attached := r.Appliance.Spec.AttachDisks
 	if len(exports) < len(attached) {
 		r.Log.Info("The appliance has not exported every disk yet.",
 			"address", address,
@@ -546,33 +541,6 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 	return
 }
 
-// announceStarting reports whether the query failed because the announce
-// endpoint is not up yet: nothing listening, a connection dropped before the
-// reply, or a timeout.
-func (r *ApplianceContext) announceStarting(err error) (ok bool) {
-	var timeout interface{ Timeout() bool }
-	ok = isStarting(err) ||
-		errors.Is(err, syscall.ECONNREFUSED) ||
-		(errors.As(err, &timeout) && timeout.Timeout())
-	return
-}
-
-// observeExportRequest records the export request the controller has converged.
-func (r *ApplianceContext) observeExportRequest() {
-	if r.Appliance.Spec.ExportRequest != nil {
-		r.Appliance.Status.ObservedExportRequest = r.Appliance.Spec.ExportRequest.DeepCopy()
-	}
-}
-
-func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.VirtualMachine) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
-	devices, err := template.Device(ctx)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	return r.buildAttachDiskChanges(devices)
-}
-
 // buildAttachDiskChanges returns the device changes that attach the spec's
 // disks to a VM with the given devices.
 //
@@ -582,7 +550,7 @@ func (r *ApplianceContext) diskChanges(ctx context.Context, template *object.Vir
 // own path.
 func (r *ApplianceContext) buildAttachDiskChanges(devices object.VirtualDeviceList) (changes []types.BaseVirtualDeviceConfigSpec, err error) {
 	present := diskPathsOnVM(devices)
-	for _, attached := range r.Appliance.Spec.AttachedDisks() {
+	for _, attached := range r.Appliance.Spec.AttachDisks {
 		path := attached.VMDKPath
 		if present[path] {
 			continue
@@ -634,8 +602,12 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 			"name", ref.Name)
 		return
 	}
+	port := r.sshPort
+	if port == "" {
+		port = ApplianceSSHPort
+	}
 	client, err = NewSSHClient(
-		Settings.CopyAppliance.SSHUser, address, r.sshLoginPort(), r.ApplianceSecret)
+		Settings.CopyAppliance.SSHUser, address, port, r.ApplianceSecret)
 	if err != nil {
 		return
 	}
@@ -651,22 +623,6 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 		ready = false
 	}
 	return
-}
-
-// sshLoginPort is the port the appliance's sshd answers on. Empty means the
-// standard port, which is the only one an appliance image is built with; a test
-// appliance is on whatever it was given.
-func (r *ApplianceContext) sshLoginPort() (port string) {
-	port = r.sshPort
-	if port == "" {
-		port = ApplianceSSHPort
-	}
-	return
-}
-
-// announceAddr is the address to query the appliance's export list at.
-func (r *ApplianceContext) announceAddr(address string) (addr string) {
-	return net.JoinHostPort(address, r.announcePort())
 }
 
 // announcePort is the port the appliance announces its exports on. Empty means
@@ -726,8 +682,8 @@ func (r *ApplianceContext) tlsData(keys ...string) (files map[string][]byte, err
 }
 
 func attachedDiskPathSet(spec api.CopyApplianceSpec) map[string]bool {
-	paths := make(map[string]bool, len(spec.AttachedDisks()))
-	for _, disk := range spec.AttachedDisks() {
+	paths := make(map[string]bool, len(spec.AttachDisks))
+	for _, disk := range spec.AttachDisks {
 		paths[disk.VMDKPath] = true
 	}
 	return paths

@@ -2217,7 +2217,7 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 				Labels:    labeler.ApplianceLabels(&v1beta1.Provider{}, "123", "test-vm-id"),
 			},
 			Spec: v1beta1.CopyApplianceSpec{
-				AttachDiskPaths: []string{diskFile},
+				AttachDisks: []v1beta1.AttachedDisk{{VMDKPath: diskFile}},
 			},
 			Status: v1beta1.CopyApplianceStatus{
 				Addresses: []v1beta1.ApplianceAddress{{IP: "10.0.0.5"}},

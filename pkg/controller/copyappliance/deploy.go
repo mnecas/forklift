@@ -118,7 +118,6 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 	case PhaseWaitForExports:
 		done, err = r.context.WaitForExports(ctx)
 	case PhaseDeployCompleted:
-		r.context.observeExportRequest()
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
