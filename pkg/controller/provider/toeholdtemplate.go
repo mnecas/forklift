@@ -83,8 +83,8 @@ func (s *toeholdSync) Run(ctx context.Context) (err error) {
 }
 
 // apply writes the fields of the spec that the provider dictates. The rest —
-// Customize, TargetNamespace, NodeSelector and RetainTemplate — belong to
-// whoever created the template, and are left as they were found.
+// TargetNamespace, TransferNetwork, NodeSelector and RetainTemplate — belong to
+// whoever created the template (console/API), and are left as they were found.
 func (s *toeholdSync) apply(spec *api.ToeholdTemplateSpec) {
 	spec.Provider = v1.ObjectReference{
 		Name:      s.provider.Name,
@@ -101,5 +101,5 @@ func (s *toeholdSync) apply(spec *api.ToeholdTemplateSpec) {
 	spec.Datastore = s.datastore
 	spec.Folder = s.folder
 	spec.Network = s.network
-	spec.Images = api.ToeholdImages{ToeholdBuilder: Settings.Toehold.BuilderImage}
+	spec.BuilderImage = Settings.Toehold.BuilderImage
 }

@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/kubev2v/forklift/pkg/controller/conversion"
+	"github.com/kubev2v/forklift/pkg/controller/base"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/settings"
 	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
@@ -26,21 +26,21 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	creds := &core.Secret{Data: map[string][]byte{
-		"user":     []byte(os.Getenv(settings.VCenterUser)),
-		"password": []byte(os.Getenv(settings.VCenterPassword)),
-	}}
+	creds := &core.Secret{Data: map[string][]byte{}}
 	if settings.LookupBool(settings.VCenterInsecure, false) {
 		creds.Data["insecureSkipVerify"] = []byte("true")
 	}
-	conn := conversion.VsphereConnectionSecret(
-		os.Getenv(settings.VCenterURL),
-		creds,
-		os.Getenv(settings.VCenterThumbprint),
-	)
 
-	log.Info("Connecting to vCenter", "url", os.Getenv(settings.VCenterURL))
-	gc, err := conversion.GovmomiClientFromSecret(ctx, conn)
+	url := os.Getenv(settings.VCenterURL)
+	log.Info("Connecting to vCenter", "url", url)
+	gc, err := base.ConnectGovmomi(
+		ctx,
+		url,
+		os.Getenv(settings.VCenterUser),
+		os.Getenv(settings.VCenterPassword),
+		os.Getenv(settings.VCenterThumbprint),
+		creds,
+	)
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func run(ctx context.Context) error {
 	}
 	defer client.Close(ctx)
 
-	importOpts := toeholdvsphere.ImportOptions{
+	opts := toeholdvsphere.ImportOptions{
 		FolderPath:         settings.Lookup(settings.ToeholdFolder, ""),
 		Datastore:          settings.Lookup(settings.ToeholdDatastore, ""),
 		Network:            settings.Lookup(settings.ToeholdNetwork, settings.DefaultToeholdNetwork),
@@ -62,23 +62,8 @@ func run(ctx context.Context) error {
 		TemplateConfigHash: os.Getenv(settings.ToeholdTemplateConfigHash),
 		BaseContainerImage: os.Getenv(settings.ToeholdBaseContainerImage),
 	}
-	log.Info("Removing existing template if present", "name", importOpts.Name)
-	_ = client.DestroyVMIfExists(ctx, importOpts.FolderPath, importOpts.Name)
-
-	st, err := os.Stat(importOpts.VMDKPath)
-	if err != nil {
-		return fmt.Errorf("vmdk %s: %w", importOpts.VMDKPath, err)
-	}
-	log.Info("Using VMDK",
-		"path", importOpts.VMDKPath,
-		"bytes", st.Size(),
-		"template", importOpts.Name,
-		"folder", importOpts.FolderPath,
-		"datastore", importOpts.Datastore,
-		"network", importOpts.Network,
-	)
-
-	ref, err := client.ImportOVF(ctx, importOpts)
+	_ = client.DestroyVMIfExists(ctx, opts.FolderPath, opts.Name)
+	ref, err := client.ImportOVF(ctx, opts)
 	if err != nil {
 		return err
 	}

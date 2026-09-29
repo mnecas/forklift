@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	k8snet "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
@@ -165,6 +166,9 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		return nil, liberr.Wrap(err)
 	}
 	pod := r.buildPod(toehold, credsSecretName(toehold), sshPublicSecretName, sshPublicKey)
+	if err := r.applyBuildPodTransferNetwork(ctx, toehold, pod); err != nil {
+		return nil, err
+	}
 	if err := r.setOwner(toehold, pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
@@ -172,6 +176,30 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		return nil, liberr.Wrap(err)
 	}
 	return pod, nil
+}
+
+func (r Reconciler) applyBuildPodTransferNetwork(ctx context.Context, toehold *api.ToeholdTemplate, pod *core.Pod) error {
+	if toehold.Spec.TransferNetwork == nil {
+		return nil
+	}
+	ns := toehold.Spec.TransferNetwork.Namespace
+	if ns == "" {
+		ns = toehold.TargetNS()
+	}
+	nad := &k8snet.NetworkAttachmentDefinition{}
+	err := r.Get(ctx, client.ObjectKey{
+		Namespace: ns,
+		Name:      toehold.Spec.TransferNetwork.Name,
+	}, nad)
+	if err != nil {
+		return liberr.Wrap(err,
+			"transferNetwork", toehold.Spec.TransferNetwork.Name,
+			"namespace", ns)
+	}
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	return base.ApplyTransferNetworkAnnotations(nad, pod.Annotations)
 }
 
 func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) error {
@@ -260,8 +288,8 @@ func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.Toeh
 
 func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName, sshPublicSecretName, sshPublicKey string) *core.Pod {
 	builderImage := Settings.Toehold.BuilderImage
-	if toehold.Spec.Images.ToeholdBuilder != "" {
-		builderImage = toehold.Spec.Images.ToeholdBuilder
+	if toehold.Spec.BuilderImage != "" {
+		builderImage = toehold.Spec.BuilderImage
 	}
 	activeDeadline := int64(7200)
 	nodeSelector := map[string]string{"node-role.kubernetes.io/worker": ""}
@@ -285,9 +313,6 @@ func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName, sshPublic
 		{Name: settings.ToeholdTemplateContentHash, Value: version.DiskHash(toehold.Spec, sshPublicKey)},
 		{Name: settings.ToeholdTemplateConfigHash, Value: version.ConfigHash(toehold.Spec)},
 		{Name: settings.ToeholdBaseContainerImage, Value: toehold.Spec.BaseDisk.ContainerImage},
-	}
-	if password := toehold.Spec.Customize.RootPassword; password != "" {
-		buildEnv = append(buildEnv, core.EnvVar{Name: "TOEHOLD_ROOT_PASSWORD", Value: password})
 	}
 	buildEnv = append(buildEnv, core.EnvVar{
 		Name:  "TOEHOLD_SSH_PUBLIC_KEY_FILE",

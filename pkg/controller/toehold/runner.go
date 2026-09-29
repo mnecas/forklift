@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/controller/conversion"
+	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -170,10 +170,11 @@ func (run *Runner) stageEnsureTemplate() error {
 		_ = run.pctx.Client.DestroyVMIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
 		return run.requireBuild()
 	}
-	storedDisk, storedConfig, err := run.pctx.Client.TemplateHashesFromVM(run.ctx, ref.VM)
+	anns, err := run.pctx.Client.GetAnnotationMap(run.ctx, ref.VM)
 	if err != nil {
 		return err
 	}
+	storedDisk, storedConfig := anns[toeholdvsphere.DiskHashAnnotation], anns[toeholdvsphere.ConfigHashAnnotation]
 	if storedDisk == "" || storedDisk != run.diskHash {
 		_ = run.pctx.Client.DestroyVMIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
 		run.toehold.Status.SetCondition(libcnd.Condition{
@@ -286,8 +287,14 @@ func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTem
 	if err != nil {
 		return nil, err
 	}
-	conn := conversion.VsphereConnectionSecret(provider.Spec.URL, secret, provider.Status.Fingerprint)
-	gc, err := conversion.GovmomiClientFromSecret(ctx, conn)
+	gc, err := base.ConnectGovmomi(
+		ctx,
+		provider.Spec.URL,
+		string(secret.Data["user"]),
+		string(secret.Data["password"]),
+		provider.Status.Fingerprint,
+		secret,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -299,10 +306,11 @@ func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTem
 }
 
 func verifyOrStampTemplate(ctx context.Context, client *toeholdvsphere.Client, ref *toeholdvsphere.VMRef, toehold *api.ToeholdTemplate, diskHash, configHash string) error {
-	storedDisk, storedConfig, err := client.TemplateHashesFromVM(ctx, ref.VM)
+	anns, err := client.GetAnnotationMap(ctx, ref.VM)
 	if err != nil {
 		return fmt.Errorf("read template hashes for %q moref=%s: %w", ref.Name, ref.Moref, err)
 	}
+	storedDisk, storedConfig := anns[toeholdvsphere.DiskHashAnnotation], anns[toeholdvsphere.ConfigHashAnnotation]
 	if storedDisk == diskHash && storedConfig == configHash {
 		return nil
 	}
