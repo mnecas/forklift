@@ -33,10 +33,21 @@ signature_policy = "/opt/toehold/appliance-root/etc/containers/policy.json"
 EOF
 fi
 sed -i 's/^driver = "overlay"/driver = "vfs"/' "${conf}/storage.conf"
+if [[ -f "${root}/etc/vmware-tools/tools.conf.example" && ! -f "${root}/etc/vmware-tools/tools.conf" ]]; then
+  cp "${root}/etc/vmware-tools/tools.conf.example" "${root}/etc/vmware-tools/tools.conf"
+fi
 
 staging=/tmp/appliance-staging
 rm -rf "${staging}"
-mkdir -p "${staging}/opt/toehold" "${staging}/etc/systemd/system" "${staging}/usr/local/bin" "${staging}/usr/bin"
+mkdir -p \
+  "${staging}/opt/toehold" \
+  "${staging}/etc/containers" \
+  "${staging}/etc/systemd/system/multi-user.target.wants" \
+  "${staging}/etc/systemd/system/timers.target.wants" \
+  "${staging}/etc/NetworkManager/system-connections" \
+  "${staging}/usr/local/bin" \
+  "${staging}/usr/bin"
+
 cp -a "${root}" "${staging}/opt/toehold/appliance-root"
 cp /usr/share/toehold/systemd/*.service /usr/share/toehold/systemd/*.timer "${staging}/etc/systemd/system/"
 cp /usr/local/bin/toehold-publish-guestinfo.sh /usr/local/bin/toehold-podman.sh "${staging}/usr/local/bin/"
@@ -44,5 +55,37 @@ chmod +x "${staging}/usr/local/bin/toehold-publish-guestinfo.sh" "${staging}/usr
 ln -sfn toehold-podman.sh "${staging}/usr/local/bin/toehold-podman"
 ln -sfn toehold-podman "${staging}/usr/local/bin/podman"
 ln -sfn ../usr/local/bin/toehold-podman "${staging}/usr/bin/podman"
+
+aproot=/opt/toehold/appliance-root
+for f in policy.json storage.conf registries.conf; do
+  if [[ -f "${staging}${aproot}/etc/containers/${f}" ]]; then
+    ln -sfn "${aproot}/etc/containers/${f}" "${staging}/etc/containers/${f}"
+  fi
+done
+ln -sfn "${aproot}/etc/vmware-tools" "${staging}/etc/vmware-tools"
+
+want="${staging}/etc/systemd/system/multi-user.target.wants"
+for unit in toehold-vgauthd.service toehold-vmtoolsd.service; do
+  ln -sfn "../${unit}" "${want}/${unit}"
+done
+ln -sfn ../toehold-guestinfo-sync.timer \
+  "${staging}/etc/systemd/system/timers.target.wants/toehold-guestinfo-sync.timer"
+
+cat > "${staging}/etc/NetworkManager/system-connections/vsphere-dhcp.nmconnection" <<'EOF'
+[connection]
+id=vsphere-dhcp
+type=ethernet
+autoconnect=true
+autoconnect-priority=100
+
+[ethernet]
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=ignore
+EOF
+chmod 600 "${staging}/etc/NetworkManager/system-connections/vsphere-dhcp.nmconnection"
 
 tar -czf "${tarball}" -C "${staging}" .
