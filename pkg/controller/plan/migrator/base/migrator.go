@@ -235,10 +235,28 @@ func (r *BaseMigrator) Pipeline(vm plan.VM) (pipeline []*plan.Step, err error) {
 						Progress:    libitr.Progress{Total: 1},
 					},
 				})
-		case api.PhaseCreateCopyAppliance, api.PhaseWaitForCopyAppliance:
-			pipeline = appendApplianceDeploymentStep(pipeline)
+		case api.PhaseCreateCopyAppliance:
+			pipeline = append(
+				pipeline,
+				&plan.Step{
+					Task: plan.Task{
+						Name:        ApplianceDeployment,
+						Description: "Deploy copy appliance.",
+						Progress:    libitr.Progress{Total: 1},
+						Phase:       api.StepPending,
+					},
+				})
 		case api.PhaseTeardownCopyAppliance:
-			pipeline = appendApplianceTeardownStep(pipeline)
+			pipeline = append(
+				pipeline,
+				&plan.Step{
+					Task: plan.Task{
+						Name:        ApplianceTeardown,
+						Description: "Tear down copy appliance.",
+						Progress:    libitr.Progress{Total: 1},
+						Phase:       api.StepPending,
+					},
+				})
 		}
 	}
 
@@ -366,6 +384,7 @@ func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
 			{Name: api.PhaseCreateSnapshot},
 			{Name: api.PhaseWaitForSnapshot},
 			{Name: api.PhaseStoreSnapshotDeltas, All: VSphere},
+			{Name: api.PhaseAddCheckpoint},
 			// Precopy loop end
 			{Name: api.PhaseStorePowerState},
 			{Name: api.PhasePowerOffSource},
@@ -436,38 +455,6 @@ func (r *BaseMigrator) warmItinerary() *libitr.Itinerary {
 			{Name: api.PhaseCompleted},
 		},
 	}
-}
-
-func appendApplianceDeploymentStep(pipeline []*plan.Step) []*plan.Step {
-	if len(pipeline) > 0 && pipeline[len(pipeline)-1].Name == ApplianceDeployment {
-		return pipeline
-	}
-	return append(
-		pipeline,
-		&plan.Step{
-			Task: plan.Task{
-				Name:        ApplianceDeployment,
-				Description: "Deploy copy appliance.",
-				Progress:    libitr.Progress{Total: 1},
-				Phase:       api.StepPending,
-			},
-		})
-}
-
-func appendApplianceTeardownStep(pipeline []*plan.Step) []*plan.Step {
-	if len(pipeline) > 0 && pipeline[len(pipeline)-1].Name == ApplianceTeardown {
-		return pipeline
-	}
-	return append(
-		pipeline,
-		&plan.Step{
-			Task: plan.Task{
-				Name:        ApplianceTeardown,
-				Description: "Tear down copy appliance.",
-				Progress:    libitr.Progress{Total: 1},
-				Phase:       api.StepPending,
-			},
-		})
 }
 
 func (r *BaseMigrator) coldItinerary() *libitr.Itinerary {

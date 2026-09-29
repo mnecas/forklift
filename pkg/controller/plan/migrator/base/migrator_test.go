@@ -259,6 +259,7 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 		api.PhaseWaitForCopyApplianceReleased,
 		api.PhaseRefreshCopyAppliance,
 		api.PhaseWaitForRefreshedCopyAppliance,
+		api.PhaseAddCheckpoint,
 		api.PhaseReleaseCopyApplianceBeforeCutover,
 		api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
 		api.PhaseRefreshCopyApplianceBeforeFinalize,
@@ -309,6 +310,14 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	}
 	if next.Name != api.PhaseWaitForRefreshedCopyAppliance {
 		t.Fatalf("expected next phase %q after refresh, got %q", api.PhaseWaitForRefreshedCopyAppliance, next.Name)
+	}
+
+	next, done, err = itr.Next(api.PhaseStoreSnapshotDeltas)
+	if err != nil || done {
+		t.Fatalf("Next after StoreSnapshotDeltas: next=%q done=%v err=%v", next.Name, done, err)
+	}
+	if next.Name != api.PhaseAddCheckpoint {
+		t.Fatalf("expected next phase %q after StoreSnapshotDeltas, got %q", api.PhaseAddCheckpoint, next.Name)
 	}
 
 	wantCutoverOrder := []string{
