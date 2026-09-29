@@ -4861,13 +4861,6 @@ spec:
               itself, and that name is how an operator recognizes the VM in the vSphere
               inventory. The controller finds it again by the moRef recorded in the status.
             properties:
-              attachDiskPaths:
-                description: 'Deprecated: use attachDisks instead.'
-                items:
-                  pattern: ^\[[^\]]+\]\s*.+\.vmdk$
-                  type: string
-                maxItems: 59
-                type: array
               attachDisks:
                 description: |-
                   Disks to attach to the appliance VM for export. Each entry names an
@@ -4918,27 +4911,6 @@ spec:
               datastore:
                 description: Datastore that holds the appliance VM home directory.
                 type: string
-              exportRequest:
-                description: |-
-                  ExportRequest asks the controller to attach or release source disks and
-                  refresh NBD exports on an already-deployed appliance.
-                properties:
-                  generation:
-                    description: Monotonic counter bumped by the consumer on every
-                      target change.
-                    format: int64
-                    type: integer
-                  target:
-                    description: Export attaches disks and publishes exports. Release
-                      detaches disks and clears exports.
-                    enum:
-                    - Export
-                    - Release
-                    type: string
-                required:
-                - generation
-                - target
-                type: object
               folder:
                 description: Inventory folder in which the appliance VM is created.
                 type: string
@@ -5048,6 +5020,15 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              target:
+                description: |-
+                  Export attaches disks and publishes exports. Release detaches disks and clears exports.
+                  Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
+                  Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
+                enum:
+                - Export
+                - Release
+                type: string
               template:
                 description: |-
                   Inventory path of the VM template the appliance is cloned from. The
@@ -5138,9 +5119,8 @@ spec:
                 type: array
               exporterImage:
                 description: |-
-                  The reference the container image is loaded under in the appliance's
-                  podman store. It carries the digest of the image that was loaded, so an
-                  appliance holding an earlier build of the same tag does not match.
+                  The digest-tagged reference the container image is loaded under in the
+                  appliance's podman store. The orchestrator unit is rendered to run it.
                 type: string
               exports:
                 description: |-
@@ -5184,36 +5164,14 @@ spec:
                 description: The managed object reference ID of the created appliance
                   VM.
                 type: string
-              observedExportRequest:
-                description: ExportRequest the controller has converged to.
-                properties:
-                  generation:
-                    description: Monotonic counter bumped by the consumer on every
-                      target change.
-                    format: int64
-                    type: integer
-                  target:
-                    description: Export attaches disks and publishes exports. Release
-                      detaches disks and clears exports.
-                    enum:
-                    - Export
-                    - Release
-                    type: string
-                required:
-                - generation
-                - target
-                type: object
-              observedGeneration:
-                description: The most recent generation observed by the controller.
-                format: int64
-                type: integer
               phase:
                 description: |-
                   The step of the deploy or teardown itinerary the appliance has reached.
                   Every phase here is one the appliance can actually be observed in: a
                   step that need not wait on vSphere is passed through within a single
                   reconcile. The terminal phases are DeployCompleted, DeployFailed,
-                  TeardownCompleted and TeardownFailed.
+                  Released, TeardownCompleted and TeardownFailed. DeployCompleted means
+                  Export has converged; Released means Release has converged.
                 type: string
               taskRef:
                 description: |-
@@ -12265,6 +12223,13 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              toeholdSSHPrivateSecret:
+                description: Name of the secret with the toehold SSH private key and
+                  TLS material.
+                type: string
+              toeholdSSHPublicSecret:
+                description: Name of the secret with the toehold SSH public key.
+                type: string
             type: object
         type: object
     served: true
@@ -12698,27 +12663,17 @@ spec:
                 required:
                 - containerImage
                 type: object
-              customize:
-                description: Optional virt-customize inputs applied to the overlay
-                  disk.
-                properties:
-                  rootPassword:
-                    description: Root password set on the guest disk via virt-customize
-                      --root-password.
-                    type: string
-                type: object
+              builderImage:
+                description: |-
+                  Override for the toehold builder container image.
+                  Defaults to the controller TOEHOLD_BUILDER_IMAGE setting when empty.
+                type: string
               datastore:
                 description: Target vCenter datastore.
                 type: string
               folder:
                 description: vCenter folder path (e.g. /Datacenter/vm).
                 type: string
-              images:
-                description: Container image overrides.
-                properties:
-                  toeholdBuilder:
-                    type: string
-                type: object
               network:
                 description: Port group for OVF network mapping.
                 type: string
@@ -12793,6 +12748,49 @@ spec:
               templateName:
                 description: vCenter template name after OVF import.
                 type: string
+              transferNetwork:
+                description: Multus NAD for the OVA build pod (same as Plan.spec.transferNetwork).
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
             required:
             - baseDisk
             - datastore

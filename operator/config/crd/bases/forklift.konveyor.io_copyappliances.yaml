@@ -56,13 +56,6 @@ spec:
               itself, and that name is how an operator recognizes the VM in the vSphere
               inventory. The controller finds it again by the moRef recorded in the status.
             properties:
-              attachDiskPaths:
-                description: 'Deprecated: use attachDisks instead.'
-                items:
-                  pattern: ^\[[^\]]+\]\s*.+\.vmdk$
-                  type: string
-                maxItems: 59
-                type: array
               attachDisks:
                 description: |-
                   Disks to attach to the appliance VM for export. Each entry names an
@@ -113,27 +106,6 @@ spec:
               datastore:
                 description: Datastore that holds the appliance VM home directory.
                 type: string
-              exportRequest:
-                description: |-
-                  ExportRequest asks the controller to attach or release source disks and
-                  refresh NBD exports on an already-deployed appliance.
-                properties:
-                  generation:
-                    description: Monotonic counter bumped by the consumer on every
-                      target change.
-                    format: int64
-                    type: integer
-                  target:
-                    description: Export attaches disks and publishes exports. Release
-                      detaches disks and clears exports.
-                    enum:
-                    - Export
-                    - Release
-                    type: string
-                required:
-                - generation
-                - target
-                type: object
               folder:
                 description: Inventory folder in which the appliance VM is created.
                 type: string
@@ -243,6 +215,15 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              target:
+                description: |-
+                  Export attaches disks and publishes exports. Release detaches disks and clears exports.
+                  Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
+                  Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
+                enum:
+                - Export
+                - Release
+                type: string
               template:
                 description: |-
                   Inventory path of the VM template the appliance is cloned from. The
@@ -378,36 +359,14 @@ spec:
                 description: The managed object reference ID of the created appliance
                   VM.
                 type: string
-              observedExportRequest:
-                description: ExportRequest the controller has converged to.
-                properties:
-                  generation:
-                    description: Monotonic counter bumped by the consumer on every
-                      target change.
-                    format: int64
-                    type: integer
-                  target:
-                    description: Export attaches disks and publishes exports. Release
-                      detaches disks and clears exports.
-                    enum:
-                    - Export
-                    - Release
-                    type: string
-                required:
-                - generation
-                - target
-                type: object
-              observedGeneration:
-                description: The most recent generation observed by the controller.
-                format: int64
-                type: integer
               phase:
                 description: |-
                   The step of the deploy or teardown itinerary the appliance has reached.
                   Every phase here is one the appliance can actually be observed in: a
                   step that need not wait on vSphere is passed through within a single
                   reconcile. The terminal phases are DeployCompleted, DeployFailed,
-                  TeardownCompleted and TeardownFailed.
+                  Released, TeardownCompleted and TeardownFailed. DeployCompleted means
+                  Export has converged; Released means Release has converged.
                 type: string
               taskRef:
                 description: |-

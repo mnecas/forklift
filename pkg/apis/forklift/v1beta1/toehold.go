@@ -60,28 +60,12 @@ type ToeholdBaseDisk struct {
 	WorkGiB int64 `json:"workGiB,omitempty"`
 }
 
-// ToeholdCustomize configures virt-customize on the overlay disk.
-type ToeholdCustomize struct {
-	// Root password set on the guest disk via virt-customize --root-password.
-	// +optional
-	RootPassword string `json:"rootPassword,omitempty"`
-}
-
-// ToeholdImages overrides container images used by the toehold template pipeline.
-type ToeholdImages struct {
-	// +optional
-	ToeholdBuilder string `json:"toeholdBuilder,omitempty"`
-}
-
 // ToeholdTemplateSpec defines the desired state of ToeholdTemplate.
 type ToeholdTemplateSpec struct {
 	// Reference to a vSphere Provider.
 	Provider core.ObjectReference `json:"provider"`
 	// Base containerdisk image for overlay customization.
 	BaseDisk ToeholdBaseDisk `json:"baseDisk"`
-	// Optional virt-customize inputs applied to the overlay disk.
-	// +optional
-	Customize ToeholdCustomize `json:"customize,omitempty"`
 	// vCenter template name after OVF import.
 	TemplateName string `json:"templateName"`
 	// Target vCenter datastore.
@@ -93,6 +77,9 @@ type ToeholdTemplateSpec struct {
 	// Namespace where the build pod runs. Defaults to the CR namespace.
 	// +optional
 	TargetNamespace string `json:"targetNamespace,omitempty"`
+	// Multus NAD for the OVA build pod (same as Plan.spec.transferNetwork).
+	// +optional
+	TransferNetwork *core.ObjectReference `json:"transferNetwork,omitempty"`
 	// Optional node selector for the build pod.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
@@ -103,9 +90,10 @@ type ToeholdTemplateSpec struct {
 	// OVF hardware descriptor overrides.
 	// +optional
 	Resources ToeholdResources `json:"resources,omitempty"`
-	// Container image overrides.
+	// Override for the toehold builder container image.
+	// Defaults to the controller TOEHOLD_BUILDER_IMAGE setting when empty.
 	// +optional
-	Images ToeholdImages `json:"images,omitempty"`
+	BuilderImage string `json:"builderImage,omitempty"`
 }
 
 // TemplateStatus tracks the vCenter template artifact.
