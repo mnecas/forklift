@@ -1,7 +1,17 @@
 package base
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRestClientURL_UsesConfiguredScheme(t *testing.T) {
@@ -41,7 +51,6 @@ func TestRestClientURL_UsesConfiguredScheme(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save and restore globals to avoid cross-test interference.
 			origHost, origPort, origScheme := Settings.Host, Settings.Inventory.Port, Settings.Scheme
 			t.Cleanup(func() {
 				Settings.Host = origHost
@@ -49,17 +58,87 @@ func TestRestClientURL_UsesConfiguredScheme(t *testing.T) {
 				Settings.Scheme = origScheme
 			})
 
-			// Set up inventory settings
 			Settings.Host = tt.host
 			Settings.Inventory.Port = tt.port
 			Settings.Scheme = tt.scheme
 
-			c := &RestClient{Host: ""} // Empty Host forces use of Settings
+			c := &RestClient{Host: ""}
 			got := c.url(tt.path)
 
 			if got != tt.want {
 				t.Fatalf("expected URL %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestRestClientBuildTransport_VerifiesWithConfiguredCA(t *testing.T) {
+	origCA, origDev := Settings.Inventory.TLS.CA, Settings.Development
+	t.Cleanup(func() {
+		Settings.Inventory.TLS.CA = origCA
+		Settings.Development = origDev
+	})
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	Settings.Inventory.TLS.CA = caPath
+	Settings.Development = false
+
+	c := &RestClient{}
+	if err := c.buildTransport(); err != nil {
+		t.Fatalf("buildTransport: %v", err)
+	}
+	transport, ok := c.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatalf("expected http.Transport with TLSClientConfig, got %#v", c.Transport)
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("InsecureSkipVerify must be false when a CA pool is configured")
+	}
+	if transport.TLSClientConfig.RootCAs == nil {
+		t.Fatal("RootCAs must be set when Inventory.TLS.CA is configured")
+	}
+}
+
+func TestRestClientBuildTransport_DevelopmentWithoutCASkipsVerify(t *testing.T) {
+	origCA, origDev := Settings.Inventory.TLS.CA, Settings.Development
+	t.Cleanup(func() {
+		Settings.Inventory.TLS.CA = origCA
+		Settings.Development = origDev
+	})
+
+	Settings.Inventory.TLS.CA = ""
+	Settings.Development = true
+
+	c := &RestClient{}
+	if err := c.buildTransport(); err != nil {
+		t.Fatalf("buildTransport: %v", err)
+	}
+	transport, ok := c.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatalf("expected http.Transport with TLSClientConfig, got %#v", c.Transport)
+	}
+	if !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("development without CA should set InsecureSkipVerify")
 	}
 }
