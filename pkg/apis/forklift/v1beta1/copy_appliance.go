@@ -8,21 +8,11 @@ import (
 
 const CopyApplianceFinalizer = "forklift/copy-appliance"
 
-// Export targets for CopyApplianceSpec.ExportRequest.
+// Export targets for CopyApplianceSpec.Target.
 const (
 	ExportTargetExport  = "Export"
 	ExportTargetRelease = "Release"
 )
-
-// ExportRequest asks the controller to converge disk attachment and NBD exports.
-// Increment generation on every change; the controller copies it to status when done.
-type ExportRequest struct {
-	// Export attaches disks and publishes exports. Release detaches disks and clears exports.
-	// +kubebuilder:validation:Enum=Export;Release
-	Target string `json:"target"`
-	// Monotonic counter bumped by the consumer on every target change.
-	Generation int64 `json:"generation"`
-}
 
 // CopyAppliance specification.
 //
@@ -75,21 +65,18 @@ type CopyApplianceSpec struct {
 	// +kubebuilder:validation:MaxItems=59
 	// +optional
 	AttachDisks []AttachedDisk `json:"attachDisks,omitempty"`
-	// Deprecated: use attachDisks instead.
-	// +kubebuilder:validation:MaxItems=59
-	// +kubebuilder:validation:items:Pattern=`^\[[^\]]+\]\s*.+\.vmdk$`
-	// +optional
-	AttachDiskPaths []string `json:"attachDiskPaths,omitempty"`
 	// Inventory path of the VM template the appliance is cloned from. The
 	// template supplies the root disk, so it must support the controller its
 	// disks are attached to, and the one network the appliance is reached on,
 	// which the clone inherits as-is.
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
-	// ExportRequest asks the controller to attach or release source disks and
-	// refresh NBD exports on an already-deployed appliance.
+	// Export attaches disks and publishes exports. Release detaches disks and clears exports.
+	// Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
+	// Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
+	// +kubebuilder:validation:Enum=Export;Release
 	// +optional
-	ExportRequest *ExportRequest `json:"exportRequest,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 // AttachedDisk is an existing VMDK to attach to the copy appliance.
@@ -106,19 +93,6 @@ type AttachedDisk struct {
 	// Disk capacity in bytes. Used as a secondary match key when serial is empty.
 	// +optional
 	Capacity int64 `json:"capacity,omitempty"`
-}
-
-// AttachedDisks returns the disks to attach, synthesizing attachDisks entries
-// from the deprecated attachDiskPaths field when needed.
-func (s CopyApplianceSpec) AttachedDisks() []AttachedDisk {
-	if len(s.AttachDisks) > 0 {
-		return s.AttachDisks
-	}
-	disks := make([]AttachedDisk, 0, len(s.AttachDiskPaths))
-	for _, path := range s.AttachDiskPaths {
-		disks = append(disks, AttachedDisk{VMDKPath: path})
-	}
-	return disks
 }
 
 // ApplianceAddress is an address the appliance VM's guest reports on its
@@ -157,9 +131,6 @@ type ApplianceExport struct {
 type CopyApplianceStatus struct {
 	// Conditions.
 	libcnd.Conditions `json:",inline"`
-	// The most recent generation observed by the controller.
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// The managed object reference ID of the created appliance VM.
 	// +optional
 	MoRef string `json:"moRef,omitempty"`
@@ -185,16 +156,14 @@ type CopyApplianceStatus struct {
 	// Every phase here is one the appliance can actually be observed in: a
 	// step that need not wait on vSphere is passed through within a single
 	// reconcile. The terminal phases are DeployCompleted, DeployFailed,
-	// TeardownCompleted and TeardownFailed.
+	// Released, TeardownCompleted and TeardownFailed. DeployCompleted means
+	// Export has converged; Released means Release has converged.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 	// The managed object reference ID of the vSphere task the current phase is
 	// waiting on. Empty when the phase has nothing outstanding.
 	// +optional
 	TaskRef string `json:"taskRef,omitempty"`
-	// ExportRequest the controller has converged to.
-	// +optional
-	ObservedExportRequest *ExportRequest `json:"observedExportRequest,omitempty"`
 }
 
 // +genclient

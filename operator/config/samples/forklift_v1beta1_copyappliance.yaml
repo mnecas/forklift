@@ -1,5 +1,5 @@
 ---
-# Manual CopyAppliance for integration testing. Placement and attachDiskPaths must
+# Manual CopyAppliance for integration testing. Placement and attachDisks must
 # match your vSphere inventory. secret names the toehold private secret for the
 # provider (auto-generated as toehold-ssh-keys-<provider>-private), which holds
 # the SSH key and the appliance's TLS material.
@@ -24,7 +24,6 @@ spec:
       diskKey: 2000
       serial: "6000C297-7d53-fad7-e8b4-5194193802f7"
       capacity: 17179869184
-  # Optional for T2; initial deploy sets generation 1 when created by a plan.
-  # exportRequest:
-  #   target: Export
-  #   generation: 1
+  # Optional for T2; initial deploy owns WaitForExports when unset.
+  # Plan create sets target: Export; release/refresh patches Release then Export.
+  # target: Export
