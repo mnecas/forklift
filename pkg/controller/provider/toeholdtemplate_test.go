@@ -32,14 +32,13 @@ func syncProvider() *api.Provider {
 }
 
 // syncTemplate is a toehold template as someone else created it: the fields the
-// provider dictates are empty or wrong, and the four it does not are set.
+// provider dictates are empty or wrong, and the three it does not are set.
 func syncTemplate() *api.ToeholdTemplate {
 	retain := false
 	return &api.ToeholdTemplate{
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
 		Spec: api.ToeholdTemplateSpec{
 			Datastore:       "the-old-datastore",
-			Customize:       api.ToeholdCustomize{RootPassword: "hunter2"},
 			TargetNamespace: "toehold-builds",
 			NodeSelector:    map[string]string{"kubernetes.io/arch": "amd64"},
 			RetainTemplate:  &retain,
@@ -67,8 +66,8 @@ func getTemplate(t *testing.T, s *toeholdSync) *api.ToeholdTemplate {
 	return found
 }
 
-// The spec has twelve fields and the provider dictates eight of them. Replacing
-// the whole spec wipes the other four, which nothing else ever writes back.
+// The spec has eleven fields and the provider dictates eight of them. Replacing
+// the whole spec wipes the other three, which nothing else ever writes back.
 func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	withSyncSettings(t)
 	provider := syncProvider()
@@ -79,9 +78,6 @@ func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	}
 
 	spec := getTemplate(t, s).Spec
-	if spec.Customize.RootPassword != "hunter2" {
-		t.Errorf("Customize = %+v, want it left alone", spec.Customize)
-	}
 	if spec.TargetNamespace != "toehold-builds" {
 		t.Errorf("TargetNamespace = %q, want it left alone", spec.TargetNamespace)
 	}
@@ -109,8 +105,8 @@ func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 		t.Errorf("placement = (%q, %q, %q), want the provider's settings",
 			spec.Datastore, spec.Folder, spec.Network)
 	}
-	if spec.Images.ToeholdBuilder != "builder:latest" {
-		t.Errorf("Images = %+v", spec.Images)
+	if spec.BuilderImage != "builder:latest" {
+		t.Errorf("BuilderImage = %q", spec.BuilderImage)
 	}
 }
 

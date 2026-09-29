@@ -33,61 +33,29 @@ type ImportOptions struct {
 	BaseContainerImage string
 }
 
-type importStreamOptions struct {
-	ImportOptions
-	DiskReader   io.Reader
-	StreamSize   int64
-	DiskCapacity int64
-	VMDKFileName string
-}
-
 // ImportOVF builds an OVF descriptor and imports the VMDK as a template.
 func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, error) {
 	if opts.VMDKPath == "" {
 		return nil, fmt.Errorf("vmdk path is required")
 	}
-	stat, err := os.Stat(opts.VMDKPath)
+	f, err := os.Open(opts.VMDKPath)
 	if err != nil {
 		return nil, err
 	}
-	return c.importOVFStream(ctx, importStreamOptions{
-		ImportOptions: opts,
-		StreamSize:    stat.Size(),
-		VMDKFileName:  filepath.Base(opts.VMDKPath),
-	})
-}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	streamSize := stat.Size()
+	vmdkFileName := filepath.Base(opts.VMDKPath)
+	diskCapacity, _ := toeholdovf.DiskCapacity(opts.VMDKPath)
 
-func (c *Client) importOVFStream(ctx context.Context, opts importStreamOptions) (*VMRef, error) {
-	if opts.DiskReader == nil {
-		f, err := os.Open(opts.VMDKPath)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		opts.DiskReader = f
-		if opts.StreamSize == 0 {
-			stat, err := f.Stat()
-			if err != nil {
-				return nil, err
-			}
-			opts.StreamSize = stat.Size()
-		}
-	}
-	if opts.VMDKFileName == "" {
-		if opts.VMDKPath != "" {
-			opts.VMDKFileName = filepath.Base(opts.VMDKPath)
-		} else {
-			opts.VMDKFileName = "disk-0.vmdk"
-		}
-	}
-	if opts.DiskCapacity == 0 && opts.VMDKPath != "" {
-		opts.DiskCapacity, _ = toeholdovf.DiskCapacity(opts.VMDKPath)
-	}
 	log.Info("Importing template",
 		"name", opts.Name,
 		"vmdk", opts.VMDKPath,
-		"streamSize", opts.StreamSize,
-		"capacity", opts.DiskCapacity,
+		"streamSize", streamSize,
+		"capacity", diskCapacity,
 		"folder", opts.FolderPath,
 		"datastore", opts.Datastore,
 		"network", opts.Network,
@@ -99,9 +67,9 @@ func (c *Client) importOVFStream(ctx context.Context, opts importStreamOptions) 
 		Network:      opts.Network,
 		CPUs:         opts.CPUs,
 		MemoryMiB:    opts.MemoryMiB,
-		StreamSize:   opts.StreamSize,
-		DiskCapacity: opts.DiskCapacity,
-		VMDKFileName: opts.VMDKFileName,
+		StreamSize:   streamSize,
+		DiskCapacity: diskCapacity,
+		VMDKFileName: vmdkFileName,
 		DiskHash:     opts.TemplateDiskHash,
 	})
 	if err != nil {
@@ -190,12 +158,12 @@ func (c *Client) importOVFStream(ctx context.Context, opts importStreamOptions) 
 		}
 		log.V(1).Info("Uploading VMDK",
 			"path", item.Path,
-			"bytes", opts.StreamSize,
+			"bytes", streamSize,
 			"method", method,
 			"create", item.Create,
 			"url", item.URL,
 		)
-		if err = uploadLeaseFile(ctx, c, item, opts.DiskReader, opts.StreamSize); err != nil {
+		if err = uploadLeaseFile(ctx, c, item, f, streamSize); err != nil {
 			_ = lease.Abort(ctx, nil)
 			return nil, err
 		}
@@ -210,11 +178,7 @@ func (c *Client) importOVFStream(ctx context.Context, opts importStreamOptions) 
 	log.V(1).Info("Locating imported object", "name", opts.Name, "folder", opts.FolderPath)
 	vmRef, err := c.FindVM(ctx, opts.FolderPath, opts.Name)
 	if err != nil {
-		log.V(1).Info("Imported object not found as VM, retrying without template filter", "err", err)
-		vmRef, err = c.findVM(ctx, opts.FolderPath, opts.Name, false)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	log.V(1).Info("Located imported object", "name", vmRef.Name, "moref", vmRef.Moref)
 	// rhel-guest-image is built for BIOS boot; forcing EFI here leaves the guest

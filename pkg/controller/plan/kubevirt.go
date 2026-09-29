@@ -9,7 +9,6 @@ import (
 	"io"
 	"maps"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"path"
@@ -25,6 +24,7 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
+	ctrlbase "github.com/kubev2v/forklift/pkg/controller/base"
 	convbuilder "github.com/kubev2v/forklift/pkg/controller/conversion"
 	convctx "github.com/kubev2v/forklift/pkg/controller/conversion/context"
 	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
@@ -73,18 +73,10 @@ const (
 
 // Annotations
 const (
-	// Legacy transfer network annotation (value=network-attachment-definition name)
-	// FIXME: this should be phased out and replaced with the
-	// k8s.v1.cni.cncf.io/networks annotation.
-	AnnLegacyTransferNetwork = "v1.multus-cni.io/default-network"
-	// Transfer network annotation (value=network-attachment-definition name)
-	AnnTransferNetwork = "k8s.v1.cni.cncf.io/networks"
-	// Annotation to specify the default route for the transfer network.
-	// To be set on the transfer network NAD by the end user.
-	AnnForkliftNetworkRoute = "forklift.konveyor.io/route"
-	// Special value for AnnForkliftNetworkRoute to explicitly request no gateway.
-	// Use this to enable modern k8s.v1.cni.cncf.io/networks annotation without default-route.
-	AnnForkliftRouteValueNone = "none"
+	AnnLegacyTransferNetwork  = ctrlbase.AnnLegacyTransferNetwork
+	AnnTransferNetwork        = ctrlbase.AnnTransferNetwork
+	AnnForkliftNetworkRoute   = ctrlbase.AnnForkliftNetworkRoute
+	AnnForkliftRouteValueNone = ctrlbase.AnnForkliftRouteValueNone
 	// Contains validations for a Kubevirt VM. Needs to be removed when
 	// creating a VM from a template.
 	AnnKubevirtValidations = "vm.kubevirt.io/validations"
@@ -1434,23 +1426,6 @@ func (r *KubeVirt) getVMVolumes(vm *plan.VMStatus) ([]cnv.Volume, error) {
 // Priority: Plan.Spec.ServiceAccount > Settings.Migration.ServiceAccount > "" (namespace default).
 func resolveServiceAccount(plan *api.Plan) string {
 	return cmp.Or(plan.Spec.ServiceAccount, Settings.ServiceAccount)
-}
-
-// CNINetworkConfig represents a CNI network configuration parsed from a NetworkAttachmentDefinition.
-// This includes the IPAM configuration with routes for determining default gateway.
-type CNINetworkConfig struct {
-	IPAM CNIIPAMConfig `json:"ipam"`
-}
-
-// CNIIPAMConfig represents the IPAM section of a CNI network configuration.
-type CNIIPAMConfig struct {
-	Routes []CNIRoute `json:"routes"`
-}
-
-// CNIRoute represents a single route entry in the CNI IPAM configuration.
-type CNIRoute struct {
-	Dst string `json:"dst"` // Destination network in CIDR notation (e.g., "0.0.0.0/0" for default route)
-	GW  string `json:"gw"`  // Gateway IP address
 }
 
 // Build a VirtualMachineMap.
@@ -4353,62 +4328,7 @@ func (r *KubeVirt) vmAllButMigrationLabels(vmRef ref.Ref) (labels map[string]str
 	return
 }
 
-// guessTransferNetworkDefaultRoute determines the default gateway IP address for the transfer network
-// by checking the NetworkAttachmentDefinition in the following priority order:
-//
-//  1. Checks the AnnForkliftNetworkRoute annotation on the NAD
-//  2. Parses the NAD's spec.config JSON and looks for the default route (0.0.0.0/0 or ::/0)
-//     in the ipam.routes array, extracting the gateway IP from the matching route entry
-//
-// Returns:
-//   - route: The gateway IP address as a string (e.g., "192.168.1.1")
-//   - found: true if a route was found, false otherwise
-func (r *KubeVirt) guessTransferNetworkDefaultRoute(netAttachDef *k8snet.NetworkAttachmentDefinition) (route string, found bool) {
-	// First, try to get the default route from the annotation.
-	route, found = netAttachDef.Annotations[AnnForkliftNetworkRoute]
-	if found {
-		return route, true
-	}
-
-	// If the route annotation is not set, try to get the default route from the gw config value.
-	// Parse the Config string which is a JSON string containing network configuration.
-	if netAttachDef.Spec.Config != "" {
-		var config CNINetworkConfig
-		err := json.Unmarshal([]byte(netAttachDef.Spec.Config), &config)
-		if err != nil {
-			// If we can't parse the config, just return not found
-			return "", false
-		}
-
-		// Look for the default route (0.0.0.0/0 or ::/0) in the routes
-		for _, r := range config.IPAM.Routes {
-			if r.Dst == "0.0.0.0/0" || r.Dst == "::/0" {
-				return r.GW, true
-			}
-		}
-	}
-
-	return "", false
-}
-
-// setTransferNetwork configures the transfer network for the DataVolume's importer pod
-// by setting appropriate annotations based on whether a default gateway route can be determined.
-//
-// Behavior:
-//   - If a default gateway is found (via annotation or NAD config): Sets the
-//     k8s.v1.cni.cncf.io/networks annotation with the gateway IP in default-route
-//   - If route annotation is explicitly set to "none" (AnnForkliftRouteValueNone):
-//     Sets k8s.v1.cni.cncf.io/networks annotation without default-route field.
-//     Useful for example when only ESXi hosts are accessible via transfer network
-//     but vCenter is not.
-//   - If no route annotation exists and no gateway found in NAD config:
-//     Falls back to setting the legacy
-//     v1.multus-cni.io/default-network annotation with the NAD's namespaced name
-//
-// The default gateway is discovered by checking the NAD annotation and IPAM config
-// (see guessTransferNetworkDefaultRoute for details).
-//
-// FIXME: the codepath using the multus annotation should be phased out.
+// setTransferNetwork fetches the Plan TransferNetwork NAD and applies Multus annotations.
 func (r *KubeVirt) setTransferNetwork(annotations map[string]string) (err error) {
 	key := client.ObjectKey{
 		Namespace: r.Plan.Spec.TransferNetwork.Namespace,
@@ -4420,37 +4340,7 @@ func (r *KubeVirt) setTransferNetwork(annotations map[string]string) (err error)
 		err = liberr.Wrap(err)
 		return
 	}
-
-	route, found := r.guessTransferNetworkDefaultRoute(netAttachDef)
-	if found {
-		nse := k8snet.NetworkSelectionElement{
-			Namespace: key.Namespace,
-			Name:      key.Name,
-		}
-
-		if route != AnnForkliftRouteValueNone {
-			ip := net.ParseIP(route)
-			if ip != nil {
-				nse.GatewayRequest = []net.IP{ip}
-			} else {
-				err = liberr.New(
-					"Transfer network default route is not a valid IP address.",
-					"route", route)
-				return
-			}
-		}
-
-		transferNetwork, jErr := json.Marshal([]k8snet.NetworkSelectionElement{nse})
-		if jErr != nil {
-			err = liberr.Wrap(jErr)
-			return
-		}
-		annotations[AnnTransferNetwork] = string(transferNetwork)
-	} else {
-		annotations[AnnLegacyTransferNetwork] = path.Join(key.Namespace, key.Name)
-	}
-
-	return
+	return ctrlbase.ApplyTransferNetworkAnnotations(netAttachDef, annotations)
 }
 
 // Represents a CDI DataVolume, its associated PVC, and added behavior.

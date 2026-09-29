@@ -54,23 +54,6 @@ func TestBuildPod(t *testing.T) {
 	}
 }
 
-func TestBuildPodRootPassword(t *testing.T) {
-	r := Reconciler{}
-	spec := templateSpec()
-	spec.BaseDisk.ContainerImage = "registry.example/rhel:9"
-	spec.Customize.RootPassword = "qum5net"
-	th := &api.ToeholdTemplate{Spec: spec}
-	th.Name = "test"
-	Settings.Toehold.BuilderImage = "builder:latest"
-	pod := r.buildPod(th, "creds", "toehold-ssh-keys-provider-public", "ssh-rsa AAAAB3NzaC1yc2E")
-	for _, env := range pod.Spec.Containers[0].Env {
-		if env.Name == "TOEHOLD_ROOT_PASSWORD" && env.Value == "qum5net" {
-			return
-		}
-	}
-	t.Fatal("expected TOEHOLD_ROOT_PASSWORD env")
-}
-
 func TestBuildPodImagePullSecret(t *testing.T) {
 	r := Reconciler{}
 	spec := templateSpec()

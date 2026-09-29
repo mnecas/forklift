@@ -228,15 +228,6 @@ func (c *Client) SetAnnotationMap(ctx context.Context, vm *object.VirtualMachine
 	return nil
 }
 
-// TemplateHashesFromVM returns stored disk and config hashes from the template.
-func (c *Client) TemplateHashesFromVM(ctx context.Context, vm *object.VirtualMachine) (diskHash, configHash string, err error) {
-	maps, err := c.GetAnnotationMap(ctx, vm)
-	if err != nil {
-		return "", "", err
-	}
-	return maps[DiskHashAnnotation], maps[ConfigHashAnnotation], nil
-}
-
 // SetDiskEnableUUID enables disk.EnableUUID so guests can read stable SCSI
 // identifiers that match VMware backing.Uuid values.
 func (c *Client) SetDiskEnableUUID(ctx context.Context, vm *object.VirtualMachine) error {
@@ -254,23 +245,6 @@ func (c *Client) SetDiskEnableUUID(ctx context.Context, vm *object.VirtualMachin
 		return fmt.Errorf("enable disk.EnableUUID task %s: %w", vm.Reference().Value, err)
 	}
 	log.V(1).Info("Enabled disk.EnableUUID", "moref", vm.Reference().Value)
-	return nil
-}
-
-// SetEFIBoot configures UEFI firmware on a VM.
-func (c *Client) SetEFIBoot(ctx context.Context, vm *object.VirtualMachine) error {
-	log.V(1).Info("Setting EFI boot", "moref", vm.Reference().Value)
-	spec := types.VirtualMachineConfigSpec{
-		Firmware: string(types.GuestOsDescriptorFirmwareTypeEfi),
-	}
-	task, err := vm.Reconfigure(ctx, spec)
-	if err != nil {
-		return fmt.Errorf("set EFI boot reconfigure %s: %w", vm.Reference().Value, err)
-	}
-	if err = task.Wait(ctx); err != nil {
-		return fmt.Errorf("set EFI boot task %s: %w", vm.Reference().Value, err)
-	}
-	log.V(1).Info("Set EFI boot complete", "moref", vm.Reference().Value)
 	return nil
 }
 

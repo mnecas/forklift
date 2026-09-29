@@ -26,8 +26,6 @@ elif [[ -n "${TOEHOLD_SSH_PUBLIC_KEY_FILE:-}" ]]; then
 fi
 args+=(--copy-in "${TARBALL}:/root/" --run /usr/local/bin/extract-appliance-root)
 
-[[ -n "${TOEHOLD_ROOT_PASSWORD:-}" ]] && args+=(--root-password "password:${TOEHOLD_ROOT_PASSWORD}")
-
 virt-customize -vvv -x "${args[@]}"
 
 qemu-img convert -f qcow2 -O vmdk -o subformat=streamOptimized "${OVERLAY}" "${VMDK}"
