@@ -48,7 +48,7 @@ func ExportNbdConnections(appliance *api.CopyAppliance, ssl bool) (map[string]st
 	if len(appliance.Status.Exports) == 0 {
 		return nil, liberr.New("copy appliance has no disk exports yet")
 	}
-	attached := appliance.Spec.AttachedDisks()
+	attached := appliance.Spec.AttachDisks
 	if len(appliance.Status.Exports) < len(attached) {
 		return nil, liberr.New(
 			"copy appliance exports are incomplete",

@@ -89,10 +89,7 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) (err error) {
 		}
 	}
 	appliance.Namespace = provider.Namespace
-	appliance.Spec.ExportRequest = &api.ExportRequest{
-		Target:     api.ExportTargetExport,
-		Generation: 1,
-	}
+	appliance.Spec.Target = api.ExportTargetExport
 
 	// The plan labels are not identity; they are what cleanupOrphanedResources
 	// selects on.
@@ -114,7 +111,7 @@ func (r *Migration) copyAppliances() *cacontroller.Ensurer {
 	return &cacontroller.Ensurer{Client: r.Client, Log: r.Log}
 }
 
-func (r *Migration) patchCopyApplianceExportRequest(vm *plan.VMStatus, target string) error {
+func (r *Migration) patchCopyApplianceTarget(vm *plan.VMStatus, target string) error {
 	appliance, err := r.getCopyAppliance(vm)
 	if err != nil {
 		return err
@@ -122,24 +119,17 @@ func (r *Migration) patchCopyApplianceExportRequest(vm *plan.VMStatus, target st
 	if appliance == nil {
 		return liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
-	next := int64(1)
-	if appliance.Spec.ExportRequest != nil {
-		next = appliance.Spec.ExportRequest.Generation + 1
-	}
 	patch := client.MergeFrom(appliance.DeepCopy())
-	appliance.Spec.ExportRequest = &api.ExportRequest{
-		Target:     target,
-		Generation: next,
-	}
+	appliance.Spec.Target = target
 	return r.Patch(context.TODO(), appliance, patch)
 }
 
 func (r *Migration) releaseCopyAppliance(vm *plan.VMStatus) error {
-	return r.patchCopyApplianceExportRequest(vm, api.ExportTargetRelease)
+	return r.patchCopyApplianceTarget(vm, api.ExportTargetRelease)
 }
 
 func (r *Migration) refreshCopyAppliance(vm *plan.VMStatus) error {
-	return r.patchCopyApplianceExportRequest(vm, api.ExportTargetExport)
+	return r.patchCopyApplianceTarget(vm, api.ExportTargetExport)
 }
 
 func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (ready bool, err error) {
@@ -156,11 +146,6 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (ready bool, err err
 		return false, liberr.New("copy appliance deployment failed")
 	case cacontroller.PhaseDeployCompleted:
 		if !cacontroller.IsDeployReady(appliance) {
-			return false, nil
-		}
-		req := appliance.Spec.ExportRequest
-		if req != nil && req.Target == api.ExportTargetExport &&
-			cacontroller.NeedsExportConvergence(appliance) {
 			return false, nil
 		}
 		_, err = cacontroller.ExportNbdConnections(appliance, r.Source.Provider.ToeholdNbdSsl())
@@ -196,17 +181,10 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (ready bool,
 		}
 	}
 
-	req := appliance.Spec.ExportRequest
-	if req == nil || req.Target != api.ExportTargetRelease {
+	if appliance.Spec.Target != api.ExportTargetRelease {
 		return false, nil
 	}
-	if appliance.Status.Phase != cacontroller.PhaseReleased {
-		return false, nil
-	}
-	if cacontroller.NeedsExportConvergence(appliance) {
-		return false, nil
-	}
-	return true, nil
+	return appliance.Status.Phase == cacontroller.PhaseReleased, nil
 }
 
 func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (done bool, err error) {

@@ -7,40 +7,45 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
 
-func TestNeedsExportConvergence(t *testing.T) {
+func TestPendingExportRequest(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Spec: api.CopyApplianceSpec{
-			ExportRequest: &api.ExportRequest{
-				Target:     api.ExportTargetRelease,
-				Generation: 2,
-			},
+			Target: api.ExportTargetRelease,
+		},
+		Status: api.CopyApplianceStatus{
+			Phase: PhaseDeployCompleted,
 		},
 	}
-	if !NeedsExportConvergence(appliance) {
-		t.Fatal("expected convergence when observed export request is missing")
+	if !PendingExportRequest(appliance) {
+		t.Fatal("expected pending when DeployCompleted and Release requested")
 	}
 
-	appliance.Status.ObservedExportRequest = &api.ExportRequest{
-		Target:     api.ExportTargetExport,
-		Generation: 2,
-	}
-	if !NeedsExportConvergence(appliance) {
-		t.Fatal("expected convergence when target differs")
+	appliance.Spec.Target = api.ExportTargetExport
+	if PendingExportRequest(appliance) {
+		t.Fatal("did not expect pending when DeployCompleted and Export requested")
 	}
 
-	appliance.Status.ObservedExportRequest.Target = api.ExportTargetRelease
-	if NeedsExportConvergence(appliance) {
-		t.Fatal("did not expect convergence when request is observed")
+	appliance.Status.Phase = PhaseReleased
+	if !PendingExportRequest(appliance) {
+		t.Fatal("expected pending when Released and Export requested")
+	}
+
+	appliance.Spec.Target = api.ExportTargetRelease
+	if PendingExportRequest(appliance) {
+		t.Fatal("did not expect pending when Released and Release requested")
+	}
+
+	appliance.Status.Phase = PhaseAttachDisks
+	appliance.Spec.Target = api.ExportTargetExport
+	if PendingExportRequest(appliance) {
+		t.Fatal("did not expect pending while already in the export itinerary")
 	}
 }
 
 func TestExportRunner_BeginSetsReleasePhase(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Spec: api.CopyApplianceSpec{
-			ExportRequest: &api.ExportRequest{
-				Target:     api.ExportTargetRelease,
-				Generation: 2,
-			},
+			Target: api.ExportTargetRelease,
 		},
 		Status: api.CopyApplianceStatus{
 			Phase: PhaseDeployCompleted,
@@ -58,10 +63,7 @@ func TestExportRunner_BeginSetsReleasePhase(t *testing.T) {
 func TestExportRunner_BeginSetsAttachPhase(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Spec: api.CopyApplianceSpec{
-			ExportRequest: &api.ExportRequest{
-				Target:     api.ExportTargetExport,
-				Generation: 3,
-			},
+			Target: api.ExportTargetExport,
 		},
 		Status: api.CopyApplianceStatus{
 			Phase: PhaseReleased,
@@ -114,7 +116,7 @@ func TestExportItinerary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			appliance := &api.CopyAppliance{
 				Spec: api.CopyApplianceSpec{
-					ExportRequest: &api.ExportRequest{Target: tc.target},
+					Target: tc.target,
 				},
 			}
 			runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
@@ -146,7 +148,7 @@ func TestExportItinerary(t *testing.T) {
 	t.Run("an unknown target has no itinerary", func(t *testing.T) {
 		appliance := &api.CopyAppliance{
 			Spec: api.CopyApplianceSpec{
-				ExportRequest: &api.ExportRequest{Target: "Sideways"},
+				Target: "Sideways",
 			},
 		}
 		runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}

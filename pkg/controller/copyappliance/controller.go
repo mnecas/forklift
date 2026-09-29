@@ -92,7 +92,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 
 	deleting := !appliance.DeletionTimestamp.IsZero()
 	terminalPhase := appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased
-	if !deleting && terminalPhase && !NeedsExportConvergence(appliance) {
+	if !deleting && terminalPhase && !PendingExportRequest(appliance) {
 		r.Log.Info("Nothing to do.")
 		return
 	}
@@ -117,8 +117,8 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 			PhaseDeployCompleted, PhaseReleased:
 			err = r.Export(ctx, appliance)
 		case PhaseWaitForExports:
-			// Shared with deploy; only an exportRequest makes it export's job.
-			if appliance.Spec.ExportRequest != nil {
+			// Shared with deploy; only a set target makes it export's job.
+			if appliance.Spec.Target != "" {
 				err = r.Export(ctx, appliance)
 			} else {
 				err = r.Deploy(ctx, appliance)
@@ -133,7 +133,6 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	// phase before it returned, and dropping that means repeating the vSphere
 	// work the pass did manage to do.
 	r.Record(appliance, appliance.Status.Conditions)
-	appliance.Status.ObservedGeneration = appliance.Generation
 	uErr := r.Status().Update(ctx, appliance)
 	if uErr != nil {
 		r.Log.Error(uErr, "Failed to update status.")
@@ -348,8 +347,7 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 	runner := ExportRunner{context: applianceContext}
 	// Begin only from a stable phase. WaitForExports is shared with deploy and
 	// is not an export phase, so calling Begin there would restart attach every pass.
-	if NeedsExportConvergence(appliance) &&
-		(appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased) {
+	if PendingExportRequest(appliance) {
 		err = runner.Begin()
 		if err != nil {
 			r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
