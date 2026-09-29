@@ -305,8 +305,7 @@ func (c *RestClient) buildTransport() (err error) {
 		}
 		pool.AppendCertsFromPEM(ca)
 		transport.TLSClientConfig = &tls.Config{
-			RootCAs:            pool,
-			InsecureSkipVerify: true,
+			RootCAs: pool,
 		}
 	} else if Settings.Development {
 		// Disable TLS for development when certs are missing
