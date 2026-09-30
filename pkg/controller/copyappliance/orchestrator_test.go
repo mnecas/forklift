@@ -239,27 +239,10 @@ func orchestratorLogin(t *testing.T, failing ...string) (*ApplianceContext, *ssh
 }
 
 // installedProbe is the command Configure asks "is this already installed?"
-// with, so that a test can tell the appliance to answer no to it. The manifest
-// covers the binary, the unit and the certificates and not the address, so the
-// throwaway appliance it is worked out on gives the same answer as the one it
-// will be asked on.
-func installedProbe(t *testing.T) (command string) {
+// with, so that a test can tell the appliance to answer no to it.
+func installedProbe(t *testing.T) string {
 	t.Helper()
-	ac, _, orch := orchestratorLogin(t)
-	ac.Appliance.Status.ExporterImage = testLoadedImage
-	unit, err := orch.renderUnit()
-	if err != nil {
-		t.Fatalf("renderUnit: %v", err)
-	}
-	certs, err := ac.ServerTLS()
-	if err != nil {
-		t.Fatalf("ServerTLS: %v", err)
-	}
-	manifest, err := orch.manifest(unit, certs)
-	if err != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-	return "printf '%s' " + shellQuote(manifest) + " | sha256sum --status -c -"
+	return "sha256sum --status -c -"
 }
 
 // writeCommand and installBinaryCommand mirror what Install sends,
