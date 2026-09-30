@@ -366,17 +366,6 @@ func (s *toeholdSync) apply(spec *api.ToeholdTemplateSpec) {
 	spec.BuilderImage = Settings.Toehold.BuilderImage
 }
 
-// Keys of the toehold TLS material within the appliance secret. They are the
-// file names the appliance expects, so that what is in the secret is what lands
-// on the appliance.
-const (
-	tlsCACert     = "ca-cert.pem"
-	tlsServerCert = "server-cert.pem"
-	tlsServerKey  = "server-key.pem"
-	tlsClientCert = "client-cert.pem"
-	tlsClientKey  = "client-key.pem"
-)
-
 // Subject names of the issued certificates. The server is named for the logical
 // service rather than for an address: the appliance is cloned on demand and its
 // address is not known when the certificate is issued, so the client verifies
@@ -414,11 +403,11 @@ func toeholdTLS() (data map[string][]byte, err error) {
 		return
 	}
 	data = map[string][]byte{
-		tlsCACert:     caPEM,
-		tlsServerCert: serverCertPEM,
-		tlsServerKey:  serverKeyPEM,
-		tlsClientCert: clientCertPEM,
-		tlsClientKey:  clientKeyPEM,
+		announce.CACert:     caPEM,
+		announce.ServerCert: serverCertPEM,
+		announce.ServerKey:  serverKeyPEM,
+		announce.ClientCert: clientCertPEM,
+		announce.ClientKey:  clientKeyPEM,
 	}
 	return
 }
@@ -428,7 +417,7 @@ func toeholdTLS() (data map[string][]byte, err error) {
 // chain, so replacing only what is absent would leave the secret unusable.
 func (r *Reconciler) ensureToeholdTLS(secret *v1.Secret) error {
 	complete := true
-	for _, key := range []string{tlsCACert, tlsServerCert, tlsServerKey, tlsClientCert, tlsClientKey} {
+	for _, key := range announce.SecretTLSKeys {
 		if len(secret.Data[key]) == 0 {
 			complete = false
 			break

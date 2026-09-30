@@ -115,9 +115,9 @@ func TestNewClientRejectsUnusableMaterial(t *testing.T) {
 	dir := t.TempDir()
 	ca, caKey := writeCA(t, dir)
 	clientCert(t, dir, ca, caKey)
-	caPEM := read(t, dir, "ca-cert.pem")
-	certPEM := read(t, dir, "client-cert.pem")
-	keyPEM := read(t, dir, "client-key.pem")
+	caPEM := read(t, dir, CACert)
+	certPEM := read(t, dir, ClientCert)
+	keyPEM := read(t, dir, ClientKey)
 
 	tests := []struct {
 		name string
@@ -134,7 +134,7 @@ func TestNewClientRejectsUnusableMaterial(t *testing.T) {
 				other := t.TempDir()
 				otherCA, otherKey := writeCA(t, other)
 				clientCert(t, other, otherCA, otherKey)
-				return read(t, other, "client-key.pem")
+				return read(t, other, ClientKey)
 			}()},
 	}
 	for _, tc := range tests {
@@ -186,9 +186,9 @@ func serve(t *testing.T, dir string, exports []runner.Export) (addr string) {
 func announceClient(t *testing.T, dir string) *Client {
 	t.Helper()
 	client, err := NewClient(
-		read(t, dir, "ca-cert.pem"),
-		read(t, dir, "client-cert.pem"),
-		read(t, dir, "client-key.pem"))
+		read(t, dir, CACert),
+		read(t, dir, ClientCert),
+		read(t, dir, ClientKey))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

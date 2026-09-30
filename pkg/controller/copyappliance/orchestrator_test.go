@@ -95,7 +95,7 @@ func TestOrchestratorInstall(t *testing.T) {
 	}
 
 	t.Run("the certificates are the ones from the secret", func(t *testing.T) {
-		for _, name := range []string{tlsCACert, tlsServerCert, tlsServerKey} {
+		for _, name := range []string{announce.CACert, announce.ServerCert, announce.ServerKey} {
 			got, ran := server.Stdin(writeCommand(applianceCertsDir + "/" + name))
 			if !ran {
 				t.Errorf("%s was never written", name)
@@ -316,11 +316,11 @@ func newTLSMaterial() *tlsMaterial {
 
 	return &tlsMaterial{
 		data: map[string][]byte{
-			tlsCACert:     caPEM,
-			tlsServerCert: serverCertPEM,
-			tlsServerKey:  serverKeyPEM,
-			tlsClientCert: clientCertPEM,
-			tlsClientKey:  clientKeyPEM,
+			announce.CACert:     caPEM,
+			announce.ServerCert: serverCertPEM,
+			announce.ServerKey:  serverKeyPEM,
+			announce.ClientCert: clientCertPEM,
+			announce.ClientKey:  clientKeyPEM,
 		},
 		server: server,
 		pool:   pool,

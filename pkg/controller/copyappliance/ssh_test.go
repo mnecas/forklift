@@ -18,6 +18,7 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"golang.org/x/crypto/ssh"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -671,7 +672,7 @@ func TestConfigure(t *testing.T) {
 	t.Run("a connection lost part way through the install is not a failure", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public, installedProbe(t))
-		server.dropOn(writeCommand(applianceCertsDir + "/" + tlsCACert))
+		server.dropOn(writeCommand(applianceCertsDir + "/" + announce.CACert))
 		runner := DeployRunner{context: configureContext(t, private, server.addr)}
 
 		done, err := runner.Configure(context.TODO())

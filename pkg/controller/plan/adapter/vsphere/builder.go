@@ -36,6 +36,7 @@ import (
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	libref "github.com/kubev2v/forklift/pkg/lib/ref"
 	"github.com/kubev2v/forklift/pkg/lib/util"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/kubev2v/forklift/pkg/storage/resolver"
 	"github.com/kubev2v/forklift/pkg/templateutil"
@@ -669,7 +670,7 @@ func (r *Builder) Secret(vmRef ref.Ref, in, object *core.Secret) (err error) {
 		}, toeholdSecret); err != nil {
 			return fmt.Errorf("failed to get toehold secret %s for NBD TLS: %w", name, err)
 		}
-		for _, key := range []string{"ca-cert.pem", "client-cert.pem", "client-key.pem"} {
+		for _, key := range []string{announce.CACert, announce.ClientCert, announce.ClientKey} {
 			data, found := toeholdSecret.Data[key]
 			if !found || len(data) == 0 {
 				return fmt.Errorf("toehold secret %s missing %s for NBD TLS", name, key)
