@@ -253,8 +253,9 @@ func (p *Provider) Setting(key string) string {
 }
 
 // ToeholdNbdSsl reports whether mutual TLS is required for copy-appliance NBD exports.
+// Enabled by default; set provider setting toeholdNbdSsl to "false" to disable.
 func (p *Provider) ToeholdNbdSsl() bool {
-	return p.Setting(ToeholdNbdSsl) == "true"
+	return p.Setting(ToeholdNbdSsl) != "false"
 }
 
 // ToeholdTemplateName is the name of this provider's toehold template. The

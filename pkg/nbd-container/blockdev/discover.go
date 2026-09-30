@@ -58,11 +58,17 @@ type lsblkOutput struct {
 type flexBool bool
 
 func (f *flexBool) UnmarshalJSON(b []byte) error {
-	switch strings.Trim(string(b), `"`) {
-	case "1", "true":
-		*f = true
-	default:
-		*f = false
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch val := v.(type) {
+	case bool:
+		*f = flexBool(val)
+	case string:
+		*f = val == "1" || val == "true"
+	case float64:
+		*f = val != 0
 	}
 	return nil
 }
