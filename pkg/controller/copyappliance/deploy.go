@@ -232,14 +232,14 @@ func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error
 	}
 	r.context.Appliance.Status.Addresses = addresses
 
-	_, done = applianceAddress(addresses)
+	_, done = r.context.Appliance.Address()
 	return
 }
 
 // Configure installs the NBD orchestrator on the appliance and makes sure it is
 // running.
 func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
-	address, _ := applianceAddress(r.context.Appliance.Status.Addresses)
+	address, _ := r.context.Appliance.Address()
 
 	orch, ready, err := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
 	if err != nil {

@@ -37,8 +37,8 @@ func TestBuildCheck(t *testing.T) {
 	if appliance.Name != "" {
 		t.Errorf("Name = %q, want it left for the API server", appliance.Name)
 	}
-	if appliance.GenerateName != "vcenter-toehold-check-" {
-		t.Errorf("GenerateName = %q, want vcenter-toehold-check-", appliance.GenerateName)
+	if appliance.GenerateName != checkPrefix {
+		t.Errorf("GenerateName = %q, want %q", appliance.GenerateName, checkPrefix)
 	}
 	if _, found := appliance.Labels[LabelVM]; found {
 		t.Errorf("label %q is set, but a check appliance has no source VM", LabelVM)
@@ -57,38 +57,9 @@ func TestBuildCheck(t *testing.T) {
 // VM name over 80 characters. The API server appends its own suffix to the
 // prefix the builder sets, so the prefix has to leave room for it.
 func TestCheckPrefixFitsAVMName(t *testing.T) {
-	tests := []struct {
-		name     string
-		provider string
-		want     string
-	}{
-		{
-			name:     "a short name is used whole",
-			provider: "vcenter",
-			want:     "vcenter-toehold-check-",
-		},
-		{
-			name:     "a long name is truncated",
-			provider: strings.Repeat("a", 200),
-			want: strings.Repeat("a", maxPrefixLength-len(checkNameSuffix)-1) +
-				checkNameSuffix + "-",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			provider := testProvider()
-			provider.Name = tt.provider
-			builder := &Builder{Provider: provider}
-
-			got := builder.checkPrefix()
-			if got != tt.want {
-				t.Errorf("checkPrefix(%d chars) = %q, want %q", len(tt.provider), got, tt.want)
-			}
-			if len(got)+generatedNameSuffixLength > maxVMNameLength {
-				t.Errorf("checkPrefix(%d chars) generates a %d character name, want at most %d",
-					len(tt.provider), len(got)+generatedNameSuffixLength, maxVMNameLength)
-			}
-		})
+	if len(checkPrefix)+generatedNameSuffixLength > maxVMNameLength {
+		t.Errorf("%q generates a %d character name, want at most %d",
+			checkPrefix, len(checkPrefix)+generatedNameSuffixLength, maxVMNameLength)
 	}
 }
 

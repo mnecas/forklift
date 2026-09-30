@@ -19,6 +19,7 @@ spec:
   template: /Datacenter/vm/vcenter-toehold
   datastore: datastore1
   folder: /Datacenter/vm
+  resourcePool: /Datacenter/host/cluster1/Resources
   attachDisks:
     - vmdkPath: "[datastore1] source-vm/disk-0.vmdk"
       diskKey: 2000

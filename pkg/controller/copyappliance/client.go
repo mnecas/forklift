@@ -37,19 +37,10 @@ type ApplianceContext struct {
 	VCenter         *govmomi.Client
 	Log             logging.LevelLogger
 	// NbdSsl requires mutual TLS on nbdkit exports (provider toeholdNbdSsl).
-	NbdSsl bool
-	// sshPort is the port the appliance's sshd answers on. Empty means the
-	// standard port, which is the only one an appliance image is built with;
-	// a test appliance is on whatever it was given.
-	sshPort string
-	// announcePortOverride and orchestratorPath are the same idea for the
-	// export endpoint and for the binary shipped to the appliance: empty means
-	// the real one, and a test supplies its own.
-	announcePortOverride string
-	orchestratorPath     string
-	finder               *find.Finder
-	folder               *object.Folder
-	datacenter           *object.Datacenter
+	NbdSsl     bool
+	finder     *find.Finder
+	folder     *object.Folder
+	datacenter *object.Datacenter
 }
 
 // NewApplianceContext connects to the source vCenter and resolves the
@@ -136,14 +127,7 @@ func (r *ApplianceContext) CheckInstance() (err error) {
 // will do it. If the name is already taken in the target folder, vCenter fails
 // the task with DuplicateName.
 func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err error) {
-	poolPath := r.Appliance.Spec.ResourcePool
-	if poolPath == "" {
-		err = liberr.New(
-			"resource pool is not configured; set copyAppliance.spec.resourcePool or Provider.spec.settings." +
-				api.CopyApplianceResourcePool)
-		return
-	}
-	pool, err := r.finder.ResourcePool(ctx, poolPath)
+	pool, err := r.finder.ResourcePool(ctx, r.Appliance.Spec.ResourcePool)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
@@ -256,19 +240,6 @@ func (r *ApplianceContext) recentTaskFault(ctx context.Context, vm *object.Virtu
 		return info.Error.LocalizedMessage
 	}
 	return ""
-}
-
-// applianceAddress returns the address to reach the appliance at. The appliance
-// has one network, so the choice is only between the addresses the guest holds
-// on it; the first is the one the guest listed first, and it answers on any of
-// them.
-func applianceAddress(addresses []api.ApplianceAddress) (address string, ok bool) {
-	if len(addresses) == 0 {
-		return
-	}
-	address = addresses[0].IP
-	ok = true
-	return
 }
 
 // VM creates a VM object from a moRef.
@@ -395,7 +366,7 @@ func (r *ApplianceContext) DetachDisks(ctx context.Context, vm *object.VirtualMa
 // WaitForExports reports whether the appliance has published the disk exports
 // the migration reads from, and records them.
 func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err error) {
-	address, ok := applianceAddress(r.Appliance.Status.Addresses)
+	address, ok := r.Appliance.Address()
 	if !ok {
 		err = liberr.New(
 			"the appliance reports no address to reach it on",
@@ -412,7 +383,7 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 		return
 	}
 
-	exports, err := client.Disks(ctx, net.JoinHostPort(address, r.announcePort()))
+	exports, err := client.Disks(ctx, net.JoinHostPort(address, Settings.CopyAppliance.AnnouncePort))
 	if err != nil {
 		var timeout interface{ Timeout() bool }
 		if isStarting(err) ||
@@ -539,7 +510,7 @@ func (r *ApplianceContext) buildAttachDiskChanges(devices object.VirtualDeviceLi
 // SSHClient logs in to the appliance, and reports whether it answered. The
 // caller owns the returned client and must Close it.
 func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration) (client *SSHClient, ready bool, err error) {
-	address, ok := applianceAddress(r.Appliance.Status.Addresses)
+	address, ok := r.Appliance.Address()
 	if !ok {
 		err = liberr.New(
 			"the appliance reports no address to reach it on",
@@ -556,12 +527,11 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 			"name", ref.Name)
 		return
 	}
-	port := r.sshPort
-	if port == "" {
-		port = ApplianceSSHPort
-	}
 	client, err = NewSSHClient(
-		Settings.CopyAppliance.SSHUser, address, port, r.ApplianceSecret)
+		Settings.CopyAppliance.SSHUser,
+		address,
+		Settings.CopyAppliance.SSHPort,
+		r.ApplianceSecret)
 	if err != nil {
 		return
 	}
@@ -575,17 +545,6 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 		_ = client.Close()
 		client = nil
 		ready = false
-	}
-	return
-}
-
-// announcePort is the port the appliance announces its exports on. Empty means
-// the port the orchestrator defaults to, which is the only one an appliance is
-// installed with; a test appliance is on whatever it was given.
-func (r *ApplianceContext) announcePort() (port string) {
-	port = r.announcePortOverride
-	if port == "" {
-		port = applianceAnnouncePort
 	}
 	return
 }

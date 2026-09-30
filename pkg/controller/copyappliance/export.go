@@ -159,7 +159,7 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 			r.NextPhase()
 		}
 	case PhaseRestartOrchestrator:
-		address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
+		address, ok := r.context.Appliance.Address()
 		if !ok {
 			return liberr.New(
 				"the appliance reports no address to reach it on",

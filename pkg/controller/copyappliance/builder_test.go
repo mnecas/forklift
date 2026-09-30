@@ -16,6 +16,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// The bounds the builder's GenerateName prefixes have to stay inside: vCenter
+// rejects a VM name over 80 characters, and the API server appends its own
+// suffix to a GenerateName.
+const (
+	maxVMNameLength           = 80
+	generatedNameSuffixLength = 5
+)
+
 // fakeInventory serves an inventory from in-memory maps. Only Find and Get are
 // implemented; the embedded interface is nil, so a lookup through any other
 // method of web.Client panics rather than quietly returning a zero value.
@@ -449,6 +457,8 @@ func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
 		SSHUser:        "root",
 		ContainerImage: "copy-appliance:latest",
+		SSHPort:        settings.DefaultCopyApplianceSSHPort,
+		AnnouncePort:   settings.DefaultCopyApplianceAnnouncePort,
 	}
 }
 

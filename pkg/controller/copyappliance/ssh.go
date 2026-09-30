@@ -14,9 +14,6 @@ import (
 	core "k8s.io/api/core/v1"
 )
 
-// ApplianceSSHPort is the port sshd listens on in the appliance image.
-const ApplianceSSHPort = "22"
-
 // sshPrivateKeyData is the key the appliance's SSH secret holds its private key
 // under. It matches the name the provider's SSH key secrets use.
 const sshPrivateKeyData = "private-key"

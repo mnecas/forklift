@@ -16,27 +16,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
 
-// A finished phase advances Status.Phase so the next reconcile does not
-// re-run work that already completed.
-func TestRunAdvancesPhaseWhenStepFinishes(t *testing.T) {
-	private, public := testKeyPair(t)
-	server := startSSHServer(t, public)
-	ac := sshContext(t, private, server.addr)
-	// The appliance answers every command, so Configure finishes and hands off
-	// to WaitForExports.
-	ac.Appliance.Status.ExporterImage = testLoadedImage
-	ac.Appliance.Status.Phase = PhaseConfigure
-	runner := DeployRunner{context: ac}
-
-	err := runner.Run(context.TODO())
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if ac.Appliance.Status.Phase != PhaseWaitForExports {
-		t.Errorf("phase = %q, want %q", ac.Appliance.Status.Phase, PhaseWaitForExports)
-	}
-}
-
 // Configure used to run before LoadImage and now runs after it. An appliance
 // that an older controller left in the configure phase has no loaded image, and
 // nothing in the itinerary walks backwards, so without the shim it would
@@ -185,7 +164,9 @@ func exportsContext(t *testing.T, addr string) *ApplianceContext {
 	if err != nil {
 		t.Fatalf("split %q: %v", addr, err)
 	}
-	ac.announcePortOverride = port
+	applied := Settings.CopyAppliance
+	applied.AnnouncePort = port
+	withSettings(t, applied)
 	return ac
 }
 

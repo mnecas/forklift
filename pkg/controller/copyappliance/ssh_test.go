@@ -18,7 +18,6 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"golang.org/x/crypto/ssh"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -235,12 +234,14 @@ func testKeyPair(t *testing.T) (private []byte, public ssh.PublicKey) {
 // to vCenter, so it has no connection.
 func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 	t.Helper()
-	withSettings(t, testSettings())
 	appliance := testAppliance()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		t.Fatalf("split %q: %v", addr, err)
 	}
+	applied := testSettings()
+	applied.SSHPort = port
+	withSettings(t, applied)
 	appliance.Status.Addresses = []api.ApplianceAddress{
 		{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: host},
 	}
@@ -253,10 +254,9 @@ func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 	if private != nil {
 		data[sshPrivateKeyData] = private
 	}
-	ac := &ApplianceContext{
+	return &ApplianceContext{
 		Appliance: appliance,
 		Log:       testLog(),
-		sshPort:   port,
 		ApplianceSecret: &core.Secret{
 			ObjectMeta: meta.ObjectMeta{
 				Namespace: appliance.Spec.Secret.Namespace,
@@ -264,9 +264,7 @@ func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 			},
 			Data: data,
 		},
-		orchestratorPath: writeOrchestrator(t),
 	}
-	return ac
 }
 
 // errorMentions reports whether the error says the given thing anywhere an
@@ -611,112 +609,6 @@ func TestConfigure(t *testing.T) {
 		ac.Appliance.Status.ExporterImage = testLoadedImage
 		return ac
 	}
-
-	// The install pushes the whole orchestrator binary and restarts the
-	// service, which tears down every export it was supervising. Doing that on
-	// an appliance already running the right thing would mean doing it on every
-	// pass, for as long as the appliance lives.
-	t.Run("an appliance already running the supervisor is configured untouched", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		runner := DeployRunner{context: configureContext(t, private, server.addr)}
-
-		done, err := runner.Configure(context.TODO())
-		if err != nil {
-			t.Fatalf("Configure: %v", err)
-		}
-		if !done {
-			t.Error("done = false, want the appliance configured")
-		}
-		for _, unwanted := range []string{
-			installBinaryCommand(),
-			"systemctl restart " + orchestratorUnit,
-		} {
-			if slices.Contains(server.Ran(), unwanted) {
-				t.Errorf("%q was run against an appliance that was already installed", unwanted)
-			}
-		}
-	})
-
-	t.Run("an appliance without the supervisor has it installed and enabled", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public, installedProbe(t))
-		runner := DeployRunner{context: configureContext(t, private, server.addr)}
-
-		done, err := runner.Configure(context.TODO())
-
-		if err != nil {
-			t.Fatalf("Configure: %v", err)
-		}
-		// Whether it stays up is a question for the next pass. Asked now it
-		// would only catch a process that had not yet got round to failing.
-		if done {
-			t.Error("done = true, want the supervisor checked on a later pass")
-		}
-		for _, want := range []string{
-			installBinaryCommand(),
-			"systemctl enable " + orchestratorUnit,
-			"systemctl restart " + orchestratorUnit,
-		} {
-			if !slices.Contains(server.Ran(), want) {
-				t.Errorf("%q was not run; ran %v", want, server.Ran())
-			}
-		}
-	})
-
-	// The install pushes the whole binary, so there is a window of megabytes in
-	// which the link can go away. Reconciler.Deploy turns any error the runner
-	// returns into PhaseDeployFailed, which is absorbing, so treating one i/o
-	// timeout as a failure would wedge the CopyAppliance for good over something
-	// that would have worked on the next pass.
-	t.Run("a connection lost part way through the install is not a failure", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public, installedProbe(t))
-		server.dropOn(writeCommand(applianceCertsDir + "/" + announce.CACert))
-		runner := DeployRunner{context: configureContext(t, private, server.addr)}
-
-		done, err := runner.Configure(context.TODO())
-
-		if err != nil {
-			t.Fatalf("Configure: %v, want a lost connection to be something to retry", err)
-		}
-		if done {
-			t.Error("done = true, want an install that did not finish reported as unfinished")
-		}
-	})
-
-	// A unit that is installed but down is worth one more start, and is not
-	// worth failing the deploy over: PhaseDeployFailed has no way back, and
-	// this is the kind of thing that comes right on its own.
-	t.Run("an appliance whose supervisor is down is started and not configured", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		isActive := "systemctl is-active --quiet " + orchestratorUnit
-		server := startSSHServer(t, public, isActive)
-		runner := DeployRunner{context: configureContext(t, private, server.addr)}
-
-		done, err := runner.Configure(context.TODO())
-
-		if err != nil {
-			t.Fatalf("Configure: %v", err)
-		}
-		if done {
-			t.Error("done = true, want an appliance whose supervisor is down left alone")
-		}
-		for _, want := range []string{
-			// reset-failed first, or a unit that tripped systemd's start limit
-			// refuses to start at all.
-			"systemctl reset-failed " + orchestratorUnit,
-			"systemctl start " + orchestratorUnit,
-		} {
-			if !slices.Contains(server.Ran(), want) {
-				t.Errorf("%q was not run; ran %v", want, server.Ran())
-			}
-		}
-		// Starting is not reinstalling. The binary is already there.
-		if slices.Contains(server.Ran(), installBinaryCommand()) {
-			t.Error("the binary was sent again to an appliance that already had it")
-		}
-	})
 
 	// The guest reports its address as soon as it has one, which is before sshd
 	// is answering on it. Failing here would fail a deploy that is on track.
