@@ -2,8 +2,10 @@ package copyappliance
 
 import (
 	"context"
+	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
+	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -54,9 +56,18 @@ func (r *ExportRunner) begin() (err error) {
 	return
 }
 
-// Run runs the current export phase once. A finished step sets Status.Phase
-// to its successor; the next reconcile picks it up.
-func (r *ExportRunner) Run(ctx context.Context) (err error) {
+// Run runs the current export phase once and reports how long to wait before
+// the next pass. A finished step sets Status.Phase to its successor; the next
+// reconcile picks it up.
+func (r *ExportRunner) Run(ctx context.Context) (reQ time.Duration, err error) {
+	// Ended() swallows the error and controller-runtime applies no backoff of
+	// its own, so a failed pass would otherwise retry against vCenter forever
+	// at the error cadence.
+	defer func() {
+		if err != nil {
+			reQ = base.LongReQ
+		}
+	}()
 	// Seed only from a stable phase. WaitForExports is shared with deploy and
 	// is not an export phase, so seeding there would restart attach every pass.
 	if PendingExportRequest(r.context.Appliance) {
@@ -75,7 +86,7 @@ func (r *ExportRunner) Run(ctx context.Context) (err error) {
 		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
 		return
 	}
-	err = r.execute(ctx)
+	reQ, err = r.execute(ctx)
 	if err != nil {
 		r.context.Appliance.Status.Phase = r.failedPhase()
 		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
@@ -122,23 +133,33 @@ func (r *ExportRunner) NextPhase() {
 	nextPhase(r.context.Appliance, itinerary)
 }
 
-func (r *ExportRunner) execute(ctx context.Context) (err error) {
+// execute runs the phase the appliance is on and reports how long to wait
+// before running the next one. A step that advances the phase asks for no wait:
+// writing the new phase to the status fires the watch, which brings the next
+// pass back at once. A step still waiting names the interval it wants to be
+// polled at, and those are deliberately slow because each pass costs a vCenter
+// session.
+func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	phase := r.context.Appliance.Status.Phase
 	switch phase {
 	case PhaseReleaseDisks:
 		detachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		detachTask, detachErr := r.context.DetachAttachedDisks(ctx, detachVM)
 		if detachErr != nil {
-			return detachErr
+			err = detachErr
+			return
 		}
 		r.context.SetTask(detachTask)
 		r.NextPhase()
 	case PhaseWaitForReleaseDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if !done {
+			// A vSphere task, which settles in seconds.
+			reQ = base.SlowReQ
 			return
 		}
 		r.context.Appliance.Status.Exports = nil
@@ -154,31 +175,41 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 		attachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		attachTask, attachErr := r.context.AttachDisks(ctx, attachVM)
 		if attachErr != nil {
-			return attachErr
+			err = attachErr
+			return
 		}
 		r.context.SetTask(attachTask)
 		r.NextPhase()
 	case PhaseWaitForAttachDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		// A vSphere task, which settles in seconds.
+		reQ = base.SlowReQ
 	case PhaseRestartOrchestrator:
 		address, ok := r.context.Appliance.Address()
 		if !ok {
-			return liberr.New(
+			err = liberr.New(
 				"the appliance reports no address to reach it on",
 				"appliance", r.context.Appliance.Name)
+			return
 		}
 		orch, ready, loginErr := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
 		if loginErr != nil {
-			return loginErr
+			err = loginErr
+			return
 		}
 		if !ready {
 			r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
+			// Waiting on sshd, which is seconds away on an appliance that was
+			// answering a moment ago.
+			reQ = base.SlowReQ
 			return
 		}
 		defer func() {
@@ -192,6 +223,7 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 					"address", address,
 					"error", err.Error())
 				err = nil
+				reQ = base.SlowReQ
 			}
 			return
 		}
@@ -199,7 +231,8 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 	case PhaseWaitForExports:
 		done, waitErr := r.context.WaitForExports(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
@@ -211,7 +244,12 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 				Category: libcnd.Required,
 				Message:  "Copy appliance disk export has succeeded.",
 			})
+			return
 		}
+		// Waiting on the guest to enumerate its disks and bring up a container
+		// for each, which is tens of seconds. Polling that at the task cadence
+		// buys nothing but vCenter logins.
+		reQ = base.LongReQ
 	case PhaseReleased, PhaseDeployCompleted:
 		msg := "Copy appliance disk export has succeeded."
 		if phase == PhaseReleased {

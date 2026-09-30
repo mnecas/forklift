@@ -72,7 +72,7 @@ func TestTeardownRunSeeds(t *testing.T) {
 		appliance := testAppliance()
 		appliance.Status.Phase = PhaseDeployFailed
 
-		err := teardownFor(appliance).Run(context.TODO())
+		_, err := teardownFor(appliance).Run(context.TODO())
 
 		if err != nil {
 			t.Fatalf("Run: %v", err)
@@ -89,7 +89,7 @@ func TestTeardownRunSeeds(t *testing.T) {
 		appliance.Status.MoRef = "vm-42"
 		appliance.Status.Phase = PhaseTeardownCompleted
 
-		err := teardownFor(appliance).Run(context.TODO())
+		_, err := teardownFor(appliance).Run(context.TODO())
 
 		if err != nil {
 			t.Fatalf("Run: %v", err)

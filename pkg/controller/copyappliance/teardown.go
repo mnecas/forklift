@@ -2,7 +2,9 @@ package copyappliance
 
 import (
 	"context"
+	"time"
 
+	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -38,9 +40,18 @@ func (r *TeardownRunner) begin() (err error) {
 	return
 }
 
-// Run runs the current teardown phase once. A finished step sets Status.Phase
-// to its successor; the next reconcile picks it up.
-func (r *TeardownRunner) Run(ctx context.Context) (err error) {
+// Run runs the current teardown phase once and reports how long to wait before
+// the next pass. A finished step sets Status.Phase to its successor; the next
+// reconcile picks it up.
+func (r *TeardownRunner) Run(ctx context.Context) (reQ time.Duration, err error) {
+	// Ended() swallows the error and controller-runtime applies no backoff of
+	// its own, so a failed pass would otherwise retry against vCenter forever
+	// at the error cadence.
+	defer func() {
+		if err != nil {
+			reQ = base.LongReQ
+		}
+	}()
 	// A deploy phase, an empty phase, or a previous teardown failure is not a
 	// step of this pipeline. Giving up means an undeletable CR and source vmdks
 	// locked forever, so a failed teardown restarts rather than parking.
@@ -54,7 +65,7 @@ func (r *TeardownRunner) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = r.execute(ctx)
+	reQ, err = r.execute(ctx)
 	if err != nil {
 		r.context.Appliance.Status.Phase = r.failedPhase()
 		r.context.Log.Error(err, "Teardown phase failed.", "phase", r.context.Appliance.Status.Phase)
@@ -85,56 +96,74 @@ func (r *TeardownRunner) NextPhase() {
 	nextPhase(r.context.Appliance, r.itinerary())
 }
 
-func (r *TeardownRunner) execute(ctx context.Context) (err error) {
+// execute runs the phase the appliance is on and reports how long to wait
+// before running the next one. A step that advances the phase asks for no wait:
+// writing the new phase to the status fires the watch, which brings the next
+// pass back at once. A step still waiting names the interval it wants to be
+// polled at. Every wait here is on a vSphere task, which settles in seconds,
+// and each pass costs a vCenter session.
+func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
 	case PhasePowerOff:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, powerErr := libvsphere.PowerOff(ctx, vm)
 		if powerErr != nil {
-			return powerErr
+			err = powerErr
+			return
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
 	case PhaseWaitForPowerOff:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		reQ = base.SlowReQ
 	case PhaseDetachDisks:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, detachErr := r.context.DetachDisks(ctx, vm)
 		if detachErr != nil {
-			return detachErr
+			err = detachErr
+			return
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
 	case PhaseWaitForDetachDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		reQ = base.SlowReQ
 	case PhaseDestroyVM:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, destroyErr := libvsphere.DestroyVM(ctx, vm)
 		if destroyErr != nil {
-			return destroyErr
+			err = destroyErr
+			return
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
 	case PhaseWaitForDestroyVM:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		reQ = base.SlowReQ
 	case PhaseTeardownCompleted:
 		// The VM is gone, so the moRef names nothing and the addresses reach
 		// nothing. Clearing them makes a repeated teardown a no-op rather than
@@ -157,6 +186,9 @@ func (r *TeardownRunner) execute(ctx context.Context) (err error) {
 			Category: libcnd.Critical,
 			Message:  "Tearing down the copy appliance has failed.",
 		})
+		// Defensive: Run re-seeds any phase outside the itinerary, and this one
+		// is not in it, so a failed teardown restarts rather than arriving here.
+		reQ = base.LongReQ
 	default:
 		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
 	}
