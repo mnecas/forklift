@@ -24,7 +24,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
 	basecontroller "github.com/kubev2v/forklift/pkg/controller/base"
-	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
+	appliancectrl "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
 	utils "github.com/kubev2v/forklift/pkg/controller/plan/util"
@@ -920,7 +920,7 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 
 func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) {
 	provider := r.Source.Provider
-	ensure := cacontroller.Ensurer{Client: r.Client, Log: r.Log}
+	ensure := appliancectrl.Ensurer{Client: r.Client, Log: r.Log}
 	appliance, err := ensure.Find(context.TODO(),
 		provider.Namespace,
 		ensure.Labeler.ApplianceLabels(provider, r.Migration.UID, vmRef.ID),
@@ -931,7 +931,7 @@ func (r *Builder) nbdConnectionsForVM(vmRef ref.Ref) (map[string]string, error) 
 	if appliance == nil {
 		return nil, liberr.New("copy appliance is gone", "vm", vmRef.ID)
 	}
-	return cacontroller.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
+	return appliancectrl.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
 }
 
 func (r *Builder) applyHostsConfig(vmRef ref.Ref, url, thumbprint string) (string, string, error) {

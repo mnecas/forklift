@@ -6,7 +6,7 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/ref"
-	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
+	appliancectrl "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,13 +40,19 @@ func testCopyApplianceMigration(t *testing.T, objs ...client.Object) *Migration 
 	context.Source.Provider = &api.Provider{
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter", UID: "provider-uid"},
 	}
-	return &Migration{Context: context}
+	return &Migration{
+		Context: context,
+		copyApplianceEnsurer: appliancectrl.Ensurer{
+			Client: cl,
+			Log:    context.Log,
+		},
+	}
 }
 
 // testCopyAppliance is the appliance serving testVM for the migration, as the
 // API server would have named it.
 func testCopyAppliance() *api.CopyAppliance {
-	labeler := cacontroller.Labeler{}
+	labeler := appliancectrl.Labeler{}
 	return &api.CopyAppliance{
 		ObjectMeta: meta.ObjectMeta{
 			Namespace:  "forklift",
@@ -60,7 +66,7 @@ func testCopyAppliance() *api.CopyAppliance {
 func TestGetCopyAppliance(t *testing.T) {
 	t.Run("no appliance is not an error", func(t *testing.T) {
 		m := testCopyApplianceMigration(t)
-		appliance, err := m.getCopyAppliance(testVM)
+		appliance, err := m.getCopyAppliance(testVM, true)
 		if err != nil {
 			t.Fatalf("getCopyAppliance: %v", err)
 		}
@@ -71,7 +77,7 @@ func TestGetCopyAppliance(t *testing.T) {
 
 	t.Run("the appliance is found by its labels", func(t *testing.T) {
 		m := testCopyApplianceMigration(t, testCopyAppliance())
-		appliance, err := m.getCopyAppliance(testVM)
+		appliance, err := m.getCopyAppliance(testVM, true)
 		if err != nil {
 			t.Fatalf("getCopyAppliance: %v", err)
 		}
@@ -89,7 +95,7 @@ func TestGetCopyAppliance(t *testing.T) {
 		terminating.DeletionTimestamp = &now
 		m := testCopyApplianceMigration(t, terminating)
 
-		appliance, err := m.getCopyAppliance(testVM)
+		appliance, err := m.getCopyAppliance(testVM, true)
 		if err != nil {
 			t.Fatalf("getCopyAppliance: %v", err)
 		}
@@ -138,7 +144,7 @@ func TestTeardownCopyAppliance(t *testing.T) {
 		terminating := testCopyAppliance()
 		now := meta.Now()
 		terminating.DeletionTimestamp = &now
-		terminating.Status.Phase = cacontroller.PhaseTeardownCompleted
+		terminating.Status.Phase = appliancectrl.PhaseTeardownCompleted
 		m := testCopyApplianceMigration(t, terminating)
 
 		done, err := m.teardownCopyAppliance(testVM)

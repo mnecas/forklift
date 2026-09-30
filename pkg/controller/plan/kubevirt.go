@@ -27,7 +27,7 @@ import (
 	ctrlbase "github.com/kubev2v/forklift/pkg/controller/base"
 	convbuilder "github.com/kubev2v/forklift/pkg/controller/conversion"
 	convctx "github.com/kubev2v/forklift/pkg/controller/conversion/context"
-	cacontroller "github.com/kubev2v/forklift/pkg/controller/copyappliance"
+	appliancectrl "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	hvutil "github.com/kubev2v/forklift/pkg/controller/hyperv"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter"
 	planbase "github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
@@ -1723,7 +1723,7 @@ func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
 	}
 
 	provider := r.Source.Provider
-	ensure := cacontroller.Ensurer{Client: r.Client, Log: r.Log}
+	ensure := appliancectrl.Ensurer{Client: r.Client, Log: r.Log}
 	appliance, err := ensure.Find(context.TODO(),
 		provider.Namespace,
 		ensure.Labeler.ApplianceLabels(provider, r.Migration.UID, vm.ID),
@@ -1735,7 +1735,7 @@ func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
 		return liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
 
-	connections, err := cacontroller.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
+	connections, err := appliancectrl.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
 	if err != nil {
 		return liberr.Wrap(err)
 	}
