@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"syscall"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/fault"
@@ -73,13 +73,16 @@ func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, prov
 		err = liberr.Wrap(err)
 		return
 	}
-	ac.finder = find.NewFinder(ac.VCenter.Client, false)
-	ac.datacenter, err = ac.finder.DatacenterOrDefault(ctx, ac.Appliance.Spec.Datacenter)
+	s, err := libvsphere.NewSession(ctx, ac.VCenter, false)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
 	}
-	ac.finder.SetDatacenter(ac.datacenter)
+	ac.finder = s.Finder
+	ac.datacenter, err = s.SetDatacenter(ctx, ac.Appliance.Spec.Datacenter)
+	if err != nil {
+		return
+	}
 	ac.folder, err = ac.finder.FolderOrDefault(ctx, ac.Appliance.Spec.Folder)
 	if err != nil {
 		err = liberr.Wrap(err)
@@ -221,57 +224,21 @@ func (r *ApplianceContext) WaitForTask(ctx context.Context) (done bool, result a
 
 // GetTaskInfo resolves a recorded task moRef back into its vCenter task info.
 func (r *ApplianceContext) GetTaskInfo(ctx context.Context, task string) (info *types.TaskInfo, err error) {
-	moRef := types.ManagedObjectReference{
-		Type:  "Task",
-		Value: task,
-	}
-	t := object.NewTask(r.VCenter.Client, moRef)
-	var managedTask mo.Task
-	err = t.Properties(
-		ctx,
-		t.Reference(),
-		[]string{"info"},
-		&managedTask,
-	)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	info = &managedTask.Info
-	return
+	return libvsphere.GetTaskInfo(ctx, r.VCenter.Client, task)
 }
 
 // GuestAddresses returns any IP addresses the guest tools are reporting.
 func (r *ApplianceContext) GuestAddresses(ctx context.Context, vm *object.VirtualMachine) (addresses []api.ApplianceAddress, err error) {
-	var managedVM mo.VirtualMachine
-	err = vm.Properties(
-		ctx,
-		vm.Reference(),
-		[]string{"guest.net"},
-		&managedVM,
-	)
+	ips, err := libvsphere.GuestAddresses(ctx, vm)
 	if err != nil {
-		err = liberr.Wrap(err, "vm", vm.Reference().Value)
 		return
 	}
-	if managedVM.Guest == nil {
-		return
-	}
-
-	for _, nic := range managedVM.Guest.Net {
-		if nic.IpConfig == nil {
-			continue
-		}
-		for _, ip := range nic.IpConfig.IpAddress {
-			if !isRoutable(ip.IpAddress) {
-				continue
-			}
-			addresses = append(addresses, api.ApplianceAddress{
-				Network: nic.Network,
-				MAC:     strings.ToLower(nic.MacAddress),
-				IP:      ip.IpAddress,
-			})
-		}
+	for _, ip := range ips {
+		addresses = append(addresses, api.ApplianceAddress{
+			Network: ip.Network,
+			MAC:     ip.MAC,
+			IP:      ip.IP,
+		})
 	}
 	return
 }
@@ -291,18 +258,6 @@ func (r *ApplianceContext) recentTaskFault(ctx context.Context, vm *object.Virtu
 		return info.Error.LocalizedMessage
 	}
 	return ""
-}
-
-func isRoutable(address string) (ok bool) {
-	ip := net.ParseIP(address)
-	if ip == nil {
-		return
-	}
-	ok = !ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified()
-	return
 }
 
 // applianceAddress returns the address to reach the appliance at. The appliance

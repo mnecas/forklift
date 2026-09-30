@@ -11,23 +11,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kubev2v/forklift/pkg/lib/util"
 	"github.com/kubev2v/forklift/pkg/settings"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/controller/base"
 	model "github.com/kubev2v/forklift/pkg/controller/provider/model/vsphere"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libmodel "github.com/kubev2v/forklift/pkg/lib/inventory/model"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/property"
-	"github.com/vmware/govmomi/session"
 	"github.com/vmware/govmomi/vapi/rest"
 	"github.com/vmware/govmomi/vapi/tags"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/methods"
-	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -864,37 +860,7 @@ func (r *Collector) validateServerType() error {
 
 // Build the client.
 func (r *Collector) buildClient(ctx context.Context) (*govmomi.Client, error) {
-	url, err := liburl.Parse(r.url)
-	if err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	url.User = liburl.UserPassword(
-		r.user(),
-		r.password())
-	thumbprint := r.thumbprint()
-	skipVerifying := base.GetInsecureSkipVerifyFlag(r.secret)
-
-	if !skipVerifying {
-		cert, errtls := base.VerifyTLSConnection(r.url, r.secret)
-		if errtls != nil {
-			return nil, liberr.Wrap(errtls)
-		}
-		thumbprint = util.Fingerprint(cert)
-	}
-
-	soapClient := soap.NewClient(url, skipVerifying)
-	soapClient.SetThumbprint(url.Host, thumbprint)
-	vimClient, err := vim25.NewClient(ctx, soapClient)
-	if err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	client := &govmomi.Client{
-		SessionManager: session.NewManager(vimClient),
-		Client:         vimClient,
-	}
-	err = client.Login(ctx, url.User)
-	return client, err
-
+	return libvsphere.ConnectProvider(ctx, r.url, r.user(), r.password(), r.thumbprint(), r.secret)
 }
 
 // Close connections.

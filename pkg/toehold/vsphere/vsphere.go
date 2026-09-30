@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
@@ -38,11 +39,7 @@ type Client struct {
 }
 
 // VMRef holds a located virtual machine or template.
-type VMRef struct {
-	Name  string
-	Moref string
-	VM    *object.VirtualMachine
-}
+type VMRef = libvsphere.VMRef
 
 // InventoryPreflight checks vCenter inventory before template build.
 type InventoryPreflight struct {
@@ -55,15 +52,11 @@ type InventoryPreflight struct {
 
 // NewClient wraps an existing govmomi session.
 func NewClient(gc *govmomi.Client) (*Client, error) {
-	if gc == nil {
-		return nil, fmt.Errorf("govmomi client is required")
+	s, err := libvsphere.NewSession(context.Background(), gc, true)
+	if err != nil {
+		return nil, err
 	}
-	finder := find.NewFinder(gc.Client, true)
-	dc, err := finder.DefaultDatacenter(context.Background())
-	if err == nil {
-		finder.SetDatacenter(dc)
-	}
-	return &Client{Govmomi: gc, Finder: finder}, nil
+	return &Client{Govmomi: s.Client, Finder: s.Finder}, nil
 }
 
 // Close logs out of vCenter.
@@ -120,38 +113,23 @@ func (c *Client) ValidateInventory(ctx context.Context, pf InventoryPreflight) e
 
 // FindTemplate locates a template by folder path and name.
 func (c *Client) FindTemplate(ctx context.Context, folderPath, name string) (*VMRef, error) {
-	return c.findVM(ctx, folderPath, name, true)
+	t := true
+	return c.session().FindVM(ctx, folderPath, name, &t)
 }
 
 // FindVM locates a VM by folder path and name.
 func (c *Client) FindVM(ctx context.Context, folderPath, name string) (*VMRef, error) {
-	return c.findVM(ctx, folderPath, name, false)
+	t := false
+	return c.session().FindVM(ctx, folderPath, name, &t)
 }
 
 // DestroyVMIfExists removes a VM or template when present.
 func (c *Client) DestroyVMIfExists(ctx context.Context, folderPath, name string) error {
-	patterns := []string{name, "*/" + name}
-	if path := normalizeInventoryPath(folderPath); path != "" {
-		patterns = append(patterns, path+"/"+name)
-	}
-	seen := map[string]struct{}{}
-	for _, pattern := range patterns {
-		vms, err := c.Finder.VirtualMachineList(ctx, pattern)
-		if err != nil {
-			continue
-		}
-		for _, vm := range vms {
-			id := vm.Reference().Value
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			if err := c.Destroy(ctx, vm); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return c.session().DestroyIfExists(ctx, folderPath, name)
+}
+
+func (c *Client) session() *libvsphere.Session {
+	return &libvsphere.Session{Client: c.Govmomi, Finder: c.Finder}
 }
 
 // GetAnnotationMap reads forklift toehold annotations from a VM/template.
@@ -250,38 +228,7 @@ func (c *Client) SetDiskEnableUUID(ctx context.Context, vm *object.VirtualMachin
 
 // Destroy removes a VM or template.
 func (c *Client) Destroy(ctx context.Context, vm *object.VirtualMachine) error {
-	state, err := vm.PowerState(ctx)
-	if err == nil && state == types.VirtualMachinePowerStatePoweredOn {
-		_, _ = vm.PowerOff(ctx)
-	}
-	_, err = vm.Destroy(ctx)
-	return err
-}
-
-func (c *Client) findVM(ctx context.Context, folderPath, name string, template bool) (*VMRef, error) {
-	// Prefer folder-scoped lookup so reuse does not pick up a same-named
-	// template that still sits in a different inventory folder.
-	var vm *object.VirtualMachine
-	var err error
-	if path := normalizeInventoryPath(folderPath); path != "" {
-		vm, err = c.Finder.VirtualMachine(ctx, path+"/"+name)
-	} else {
-		vm, err = c.Finder.VirtualMachine(ctx, name)
-	}
-	if err != nil {
-		return nil, err
-	}
-	var o mo.VirtualMachine
-	if err = vm.Properties(ctx, vm.Reference(), []string{"config.template", "name"}, &o); err != nil {
-		return nil, err
-	}
-	if template && o.Config != nil && !o.Config.Template {
-		return nil, fmt.Errorf("%q is not a template", name)
-	}
-	if !template && o.Config != nil && o.Config.Template {
-		return nil, fmt.Errorf("%q is a template, expected VM", name)
-	}
-	return &VMRef{Name: o.Name, Moref: vm.Reference().Value, VM: vm}, nil
+	return libvsphere.Destroy(ctx, vm)
 }
 
 func (c *Client) findFolder(ctx context.Context, folderPath string) (*object.Folder, error) {
