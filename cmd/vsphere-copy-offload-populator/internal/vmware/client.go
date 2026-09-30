@@ -64,27 +64,20 @@ const sessionKeepAliveIdle = 5 * time.Minute
 
 func NewClient(vcenterUrl, username, password string) (Client, error) {
 	ctx := context.Background()
-	// Explicit insecure: populator intentionally skips certificate pinning
-	// (does not use controller ConnectProvider thumbprint semantics).
-	c, err := connectInsecure(ctx, vcenterUrl, username, password)
-	if err != nil {
-		return nil, err
-	}
-	c.Client.RoundTripper = session.KeepAlive(c.Client.RoundTripper, sessionKeepAliveIdle)
-	return &VSphereClient{Client: c}, nil
-}
-
-func connectInsecure(ctx context.Context, vcenterUrl, username, password string) (*govmomi.Client, error) {
 	u, err := soap.ParseURL(vcenterUrl)
 	if err != nil {
 		return nil, fmt.Errorf("Failed parsing vCenter URL: %w", err)
 	}
 	u.User = url.UserPassword(username, password)
+
 	soapClient := soap.NewClient(u, true)
 	vimClient, err := vim25.NewClient(ctx, soapClient)
 	if err != nil {
 		return nil, fmt.Errorf("Failed creating vSphere client: %w", err)
 	}
+
+	vimClient.RoundTripper = session.KeepAlive(vimClient.RoundTripper, sessionKeepAliveIdle)
+
 	c := &govmomi.Client{
 		Client:         vimClient,
 		SessionManager: session.NewManager(vimClient),
@@ -92,7 +85,8 @@ func connectInsecure(ctx context.Context, vcenterUrl, username, password string)
 	if err = c.Login(ctx, u.User); err != nil {
 		return nil, fmt.Errorf("Failed to login to vSphere: %w", err)
 	}
-	return c, nil
+
+	return &VSphereClient{Client: c}, nil
 }
 
 // getSciniGuid queries the kernel module system to extract the ioctlIniGuidStr
