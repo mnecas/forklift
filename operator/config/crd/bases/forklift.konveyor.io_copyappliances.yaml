@@ -153,9 +153,8 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               resourcePool:
-                description: |-
-                  Resource pool in which the appliance VM is created. When omitted, the
-                  controller uses Provider.spec.settings.copyApplianceResourcePool.
+                description: Resource pool in which the appliance VM is created.
+                minLength: 1
                 type: string
               secret:
                 description: |-
@@ -237,6 +236,7 @@ spec:
             - datastore
             - folder
             - provider
+            - resourcePool
             - secret
             - template
             type: object

@@ -1,8 +1,6 @@
 package copyappliance
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path"
 
@@ -18,14 +16,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// GenerateName must leave room for the API server's ~5-char suffix so the
-// resulting VM name stays within vSphere's 80-char limit.
+// An appliance is cloned under the name its CR was given, and vCenter rejects a
+// VM name over 80 characters. The API server appends a ~5-char suffix to a
+// GenerateName, so the prefixes below stay well short of that. Nothing reads
+// these names back; appliances are found by their labels.
 const (
-	rootResourcePool          = "Resources"
-	checkNameSuffix           = "-toehold-check"
-	maxVMNameLength           = 80
-	generatedNameSuffixLength = 5
-	maxPrefixLength           = maxVMNameLength - generatedNameSuffixLength
+	rootResourcePool = "Resources"
+	appliancePrefix  = "forklift-copy-"
+	checkPrefix      = "forklift-copy-check-"
 )
 
 // Builder builds an uncreated CopyAppliance from a toehold template.
@@ -52,7 +50,7 @@ func (r *Builder) Appliance(toehold *api.ToeholdTemplate, vmRef ref.Ref, migrati
 	if err = r.attachDisks(vmRef, &appliance.Spec); err != nil {
 		return nil, err
 	}
-	appliance.GenerateName = r.prefix(migrationUID, vmRef.ID)
+	appliance.GenerateName = appliancePrefix + vmRef.ID + "-"
 	appliance.Labels = r.Labeler.ApplianceLabels(r.Provider, migrationUID, vmRef.ID)
 	return appliance, nil
 }
@@ -63,7 +61,7 @@ func (r *Builder) Check(toehold *api.ToeholdTemplate) (*api.CopyAppliance, error
 	if err != nil {
 		return nil, err
 	}
-	appliance.GenerateName = r.checkPrefix()
+	appliance.GenerateName = checkPrefix
 	appliance.Labels = r.Labeler.CheckLabels(r.Provider)
 	return appliance, nil
 }
@@ -176,21 +174,4 @@ func (r *Builder) attachDisks(vmRef ref.Ref, spec *api.CopyApplianceSpec) error 
 		})
 	}
 	return nil
-}
-
-func (r *Builder) prefix(migrationUID types.UID, vmID string) string {
-	sum := sha256.Sum256([]byte(vmID))
-	migShort := string(migrationUID)
-	if len(migShort) > 8 {
-		migShort = migShort[:8]
-	}
-	return fmt.Sprintf("copy-appliance-%s-%s-", migShort, hex.EncodeToString(sum[:4]))
-}
-
-func (r *Builder) checkPrefix() string {
-	name := r.Provider.Name
-	if len(name)+len(checkNameSuffix)+1 > maxPrefixLength {
-		name = name[:maxPrefixLength-len(checkNameSuffix)-1]
-	}
-	return name + checkNameSuffix + "-"
 }

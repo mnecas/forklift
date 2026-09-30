@@ -55,10 +55,9 @@ type CopyApplianceSpec struct {
 	Datacenter string `json:"datacenter,omitempty"`
 	// Datastore that holds the appliance VM home directory.
 	Datastore string `json:"datastore"`
-	// Resource pool in which the appliance VM is created. When omitted, the
-	// controller uses Provider.spec.settings.copyApplianceResourcePool.
-	// +optional
-	ResourcePool string `json:"resourcePool,omitempty"`
+	// Resource pool in which the appliance VM is created.
+	// +kubebuilder:validation:MinLength=1
+	ResourcePool string `json:"resourcePool"`
 	// Inventory folder in which the appliance VM is created.
 	Folder string `json:"folder"`
 	// Disks to attach to the appliance VM for export. Each entry names an
@@ -186,6 +185,18 @@ type CopyAppliance struct {
 	meta.ObjectMeta `json:"metadata,omitempty"`
 	Spec            CopyApplianceSpec   `json:"spec,omitempty"`
 	Status          CopyApplianceStatus `json:"status,omitempty"`
+}
+
+// Address returns the address to reach the appliance at, and whether the guest
+// has reported one yet. The appliance answers on any of its addresses, so the
+// first one will do.
+func (r *CopyAppliance) Address() (address string, ok bool) {
+	if len(r.Status.Addresses) == 0 {
+		return
+	}
+	address = r.Status.Addresses[0].IP
+	ok = true
+	return
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

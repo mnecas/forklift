@@ -29,8 +29,7 @@ const (
 	// rename from /tmp would keep a label systemd will not execute.
 	orchestratorStaging = "/usr/local/bin/.nbd-orchestrator.tmp"
 
-	applianceAnnouncePort = "8443"
-	applianceBasePort     = 10809
+	applianceBasePort = 10809
 )
 
 //go:embed nbd-orchestrator.service.tmpl
@@ -43,7 +42,6 @@ var orchestratorUnitText = template.Must(
 type Orchestrator struct {
 	context *ApplianceContext
 	ssh     *SSHClient
-	binary  string // path on the controller of the binary to ship
 }
 
 // NewOrchestrator logs in. The caller owns the result and must Close it.
@@ -52,11 +50,7 @@ func NewOrchestrator(ctx context.Context, ac *ApplianceContext, timeout time.Dur
 	if err != nil || !ready {
 		return nil, ready, err
 	}
-	binary := ac.orchestratorPath
-	if binary == "" {
-		binary = orchestratorBinary
-	}
-	return &Orchestrator{context: ac, ssh: client, binary: binary}, true, nil
+	return &Orchestrator{context: ac, ssh: client}, true, nil
 }
 
 func (r *Orchestrator) Close() error {
@@ -83,7 +77,7 @@ func (r *Orchestrator) renderUnit() (string, error) {
 		Binary:       orchestratorBinary,
 		CertsDir:     applianceCertsDir,
 		Image:        image,
-		AnnouncePort: r.context.announcePort(),
+		AnnouncePort: Settings.CopyAppliance.AnnouncePort,
 		BasePort:     applianceBasePort,
 		TLS:          r.context.NbdSsl,
 	})
@@ -121,7 +115,7 @@ func (r *Orchestrator) Installed() (bool, error) {
 
 // manifest is a sha256sum -c check file for everything Install writes.
 func (r *Orchestrator) manifest(unit string, certs map[string][]byte) (string, error) {
-	binarySum, err := fileSum(r.binary)
+	binarySum, err := fileSum(orchestratorBinary)
 	if err != nil {
 		return "", err
 	}
@@ -179,9 +173,9 @@ func (r *Orchestrator) put(path string, in io.Reader) error {
 }
 
 func (r *Orchestrator) installBinary() error {
-	f, err := os.Open(r.binary)
+	f, err := os.Open(orchestratorBinary)
 	if err != nil {
-		return liberr.Wrap(err, "path", r.binary)
+		return liberr.Wrap(err, "path", orchestratorBinary)
 	}
 	defer f.Close()
 	return r.ssh.RunWithStdin(

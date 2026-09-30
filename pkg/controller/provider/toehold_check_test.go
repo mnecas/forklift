@@ -123,7 +123,7 @@ func testCheckOn(t *testing.T, cl client.Client, provider *api.Provider) *applia
 		return &api.CopyAppliance{
 			ObjectMeta: meta.ObjectMeta{
 				Namespace:    provider.Namespace,
-				GenerateName: provider.Name + "-toehold-check-",
+				GenerateName: "forklift-copy-check-",
 				Labels:       labeler.CheckLabels(provider),
 			},
 		}, nil

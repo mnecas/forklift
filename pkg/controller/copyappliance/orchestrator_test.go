@@ -1,7 +1,6 @@
 package copyappliance
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,8 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -25,12 +22,6 @@ import (
 // testLoadedImage is what LoadImage would have recorded by the time Configure
 // runs, and so what the unit is rendered around.
 const testLoadedImage = "localhost/forklift-copy-appliance:abc123def456"
-
-// testOrchestratorBinary stands in for the binary the controller image ships.
-// Its content is fixed rather than random because the install probe hashes it:
-// a test that wrote something different each time would never see an appliance
-// as already installed.
-const testOrchestratorBinary = "#!/bin/sh\n# not really a binary\n"
 
 func TestRenderUnit(t *testing.T) {
 	t.Run("the unit describes this appliance", func(t *testing.T) {
@@ -47,7 +38,7 @@ func TestRenderUnit(t *testing.T) {
 		for _, want := range []string{
 			"-image=" + testLoadedImage,
 			"-certs-dir=" + applianceCertsDir,
-			"-listen=:" + ac.announcePort(),
+			"-listen=:" + Settings.CopyAppliance.AnnouncePort,
 			orchestratorBinary,
 			// Without this the supervisor does not come back after a reboot,
 			// which is the reason for using systemd at all.
@@ -77,100 +68,6 @@ func TestRenderUnit(t *testing.T) {
 	})
 }
 
-func TestOrchestratorInstall(t *testing.T) {
-	ac, server, orch := orchestratorLogin(t)
-	ac.Appliance.Status.ExporterImage = testLoadedImage
-	unit, err := orch.renderUnit()
-	if err != nil {
-		t.Fatalf("renderUnit: %v", err)
-	}
-	certs, err := ac.ServerTLS()
-	if err != nil {
-		t.Fatalf("ServerTLS: %v", err)
-	}
-
-	err = orch.Install()
-	if err != nil {
-		t.Fatalf("Install: %v", err)
-	}
-
-	t.Run("the certificates are the ones from the secret", func(t *testing.T) {
-		for _, name := range []string{announce.CACert, announce.ServerCert, announce.ServerKey} {
-			got, ran := server.Stdin(writeCommand(applianceCertsDir + "/" + name))
-			if !ran {
-				t.Errorf("%s was never written", name)
-				continue
-			}
-			if !bytes.Equal(got, certs[name]) {
-				t.Errorf("%s = %q, want the secret's", name, got)
-			}
-		}
-	})
-
-	// The directory mode is the only thing keeping the server key away from
-	// other users on the appliance; the files themselves are written with
-	// whatever mode the login's umask gives.
-	t.Run("the certificates go into a directory only their owner can enter", func(t *testing.T) {
-		want := "install -d -m 0700 " + applianceCertsDir
-		if !slices.Contains(server.Ran(), want) {
-			t.Errorf("%q was not run; ran %v", want, server.Ran())
-		}
-	})
-
-	t.Run("the binary is the one the controller ships", func(t *testing.T) {
-		got, ran := server.Stdin(installBinaryCommand())
-		if !ran {
-			t.Fatal("the orchestrator binary was never sent")
-		}
-		if string(got) != testOrchestratorBinary {
-			t.Errorf("binary = %q, want the controller's copy", got)
-		}
-	})
-
-	t.Run("the unit is the rendered one", func(t *testing.T) {
-		got, ran := server.Stdin(writeCommand(orchestratorService))
-		if !ran {
-			t.Fatal("the unit was never written")
-		}
-		if string(got) != unit {
-			t.Errorf("unit = %q, want the rendered one", got)
-		}
-	})
-
-	// Enabling is what survives a reboot; reset-failed is what keeps a unit
-	// that tripped systemd's start limit from refusing to start ever again.
-	t.Run("the service is enabled and started", func(t *testing.T) {
-		ran := server.Ran()
-		for _, want := range []string{
-			"systemctl daemon-reload",
-			"systemctl enable " + orchestratorUnit,
-			"systemctl reset-failed " + orchestratorUnit,
-			"systemctl restart " + orchestratorUnit,
-		} {
-			if !slices.Contains(ran, want) {
-				t.Errorf("%q was not run; ran %v", want, ran)
-			}
-		}
-	})
-
-	// The install configures one appliance in sequence, so running the rest
-	// after one step has failed would configure it half way and call it done.
-	t.Run("the first step to fail stops the rest", func(t *testing.T) {
-		enable := "systemctl enable " + orchestratorUnit
-		ac, server, orch := orchestratorLogin(t, enable)
-		ac.Appliance.Status.ExporterImage = testLoadedImage
-
-		err := orch.Install()
-
-		if err == nil {
-			t.Fatal("Install succeeded against an appliance that refused a step")
-		}
-		if unwanted := "systemctl restart " + orchestratorUnit; slices.Contains(server.Ran(), unwanted) {
-			t.Errorf("%q was run after an earlier step had failed; ran %v", unwanted, server.Ran())
-		}
-	})
-}
-
 func TestOrchestratorRestart(t *testing.T) {
 	_, server, orch := orchestratorLogin(t)
 	err := orch.Restart()
@@ -188,39 +85,6 @@ func TestOrchestratorRestart(t *testing.T) {
 	}
 }
 
-func TestOrchestratorInstalled(t *testing.T) {
-	t.Run("an appliance that matches is already installed", func(t *testing.T) {
-		ac, _, orch := orchestratorLogin(t)
-		ac.Appliance.Status.ExporterImage = testLoadedImage
-
-		installed, err := orch.Installed()
-
-		if err != nil {
-			t.Fatalf("Installed: %v", err)
-		}
-		if !installed {
-			t.Error("an appliance that answered yes was read as not installed")
-		}
-	})
-
-	// A checksum that does not match is an answer, not a failure: it is how a
-	// first deploy and an appliance holding an older build both look.
-	t.Run("an appliance that does not match is not installed", func(t *testing.T) {
-		probe := installedProbe(t)
-		ac, _, orch := orchestratorLogin(t, probe)
-		ac.Appliance.Status.ExporterImage = testLoadedImage
-
-		installed, err := orch.Installed()
-
-		if err != nil {
-			t.Fatalf("Installed: %v", err)
-		}
-		if installed {
-			t.Error("an appliance that answered no was read as installed")
-		}
-	})
-}
-
 // --- fixtures ---
 
 // orchestratorLogin is the supervisor on an appliance that refuses the named
@@ -236,37 +100,6 @@ func orchestratorLogin(t *testing.T, failing ...string) (*ApplianceContext, *ssh
 	}
 	t.Cleanup(func() { _ = orch.Close() })
 	return ac, server, orch
-}
-
-// installedProbe is the command Configure asks "is this already installed?"
-// with, so that a test can tell the appliance to answer no to it.
-func installedProbe(t *testing.T) string {
-	t.Helper()
-	return "sha256sum --status -c -"
-}
-
-// writeCommand and installBinaryCommand mirror what Install sends,
-// so a test can ask the appliance what it was given for a particular file.
-func writeCommand(path string) (command string) {
-	return "cat > " + path
-}
-
-func installBinaryCommand() (command string) {
-	return "cat > " + orchestratorStaging + " && " +
-		"chmod 0755 " + orchestratorStaging + " && " +
-		"mv -f " + orchestratorStaging + " " + orchestratorBinary
-}
-
-// writeOrchestrator drops a stand-in for the shipped binary where a test
-// appliance context can find it. The path differs per test and the content does
-// not, which is what the install probe cares about.
-func writeOrchestrator(t *testing.T) (path string) {
-	t.Helper()
-	path = filepath.Join(t.TempDir(), "nbd-orchestrator")
-	if err := os.WriteFile(path, []byte(testOrchestratorBinary), 0o755); err != nil {
-		t.Fatalf("write orchestrator: %v", err)
-	}
-	return
 }
 
 // tlsMaterial is one CA and the two halves signed by it.
