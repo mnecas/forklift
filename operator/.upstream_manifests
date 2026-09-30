@@ -3546,10 +3546,10 @@ spec:
                   public key is expected to be installed in the appliance image already.
 
                   The mutual-TLS material the appliance serves its exports with is read from
-                  the data keys named for the files the appliance expects: "ca-cert.pem",
-                  "server-cert.pem", "server-key.pem", "client-cert.pem" and
-                  "client-key.pem". The controller installs the CA and the server half on
-                  the appliance and keeps the client half to query the exports with.
+                  the data keys named for the files the appliance expects (see
+                  pkg/nbd-container/announce). The controller installs the CA and the
+                  server half on the appliance and keeps the client half to query the
+                  exports with.
 
                   The server certificate must be issued for the logical name "nbd-server"
                   rather than for an address. The appliance is cloned on demand and its
