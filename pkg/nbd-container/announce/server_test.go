@@ -99,7 +99,7 @@ func writeCA(t *testing.T, dir string) (*x509.Certificate, *ecdsa.PrivateKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePEM(t, filepath.Join(dir, "ca-cert.pem"), "CERTIFICATE", der)
+	writePEM(t, filepath.Join(dir, CACert), "CERTIFICATE", der)
 	return cert, key
 }
 

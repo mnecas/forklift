@@ -94,17 +94,17 @@ func PowerOff(ctx context.Context, vm *object.VirtualMachine) (*object.Task, err
 	state, err := vm.PowerState(ctx)
 	if err != nil {
 		if fault.Is(err, &types.ManagedObjectNotFound{}) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // no task: VM is already gone
 		}
 		return nil, liberr.Wrap(err, "vm", vm.Reference().Value)
 	}
 	if state == types.VirtualMachinePowerStatePoweredOff {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no task: already off
 	}
 	task, err := vm.PowerOff(ctx)
 	if err != nil {
 		if fault.Is(err, &types.ManagedObjectNotFound{}) || fault.Is(err, &types.InvalidPowerState{}) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // no task: gone or already off
 		}
 		return nil, liberr.Wrap(err, "vm", vm.Reference().Value)
 	}
@@ -116,7 +116,7 @@ func DestroyVM(ctx context.Context, vm *object.VirtualMachine) (*object.Task, er
 	task, err := vm.Destroy(ctx)
 	if err != nil {
 		if fault.Is(err, &types.ManagedObjectNotFound{}) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // no task: VM is already gone
 		}
 		return nil, liberr.Wrap(err, "vm", vm.Reference().Value)
 	}

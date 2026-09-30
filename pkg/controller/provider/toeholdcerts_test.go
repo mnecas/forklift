@@ -29,14 +29,14 @@ func TestToeholdTLSHandshakes(t *testing.T) {
 	}
 
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(data[tlsCACert]) {
-		t.Fatalf("%s contained no certificates", tlsCACert)
+	if !pool.AppendCertsFromPEM(data[announce.CACert]) {
+		t.Fatalf("%s contained no certificates", announce.CACert)
 	}
-	serverCert, err := tls.X509KeyPair(data[tlsServerCert], data[tlsServerKey])
+	serverCert, err := tls.X509KeyPair(data[announce.ServerCert], data[announce.ServerKey])
 	if err != nil {
 		t.Fatalf("server keypair: %v", err)
 	}
-	clientCert, err := tls.X509KeyPair(data[tlsClientCert], data[tlsClientKey])
+	clientCert, err := tls.X509KeyPair(data[announce.ClientCert], data[announce.ClientKey])
 	if err != nil {
 		t.Fatalf("client keypair: %v", err)
 	}
@@ -106,11 +106,11 @@ func TestEnsureToeholdTLS(t *testing.T) {
 		{
 			name: "a secret missing one certificate has all of them replaced",
 			data: map[string][]byte{
-				"private-key": []byte("key"),
-				tlsCACert:     complete[tlsCACert],
-				tlsServerCert: complete[tlsServerCert],
-				tlsServerKey:  complete[tlsServerKey],
-				tlsClientCert: complete[tlsClientCert],
+				"private-key":       []byte("key"),
+				announce.CACert:     complete[announce.CACert],
+				announce.ServerCert: complete[announce.ServerCert],
+				announce.ServerKey:  complete[announce.ServerKey],
+				announce.ClientCert: complete[announce.ClientCert],
 			},
 			wantNew: true,
 		},
@@ -134,14 +134,14 @@ func TestEnsureToeholdTLS(t *testing.T) {
 			if got := string(secret.Data["private-key"]); got != "key" {
 				t.Errorf("private-key = %q, want it untouched", got)
 			}
-			for _, key := range []string{tlsCACert, tlsServerCert, tlsServerKey, tlsClientCert, tlsClientKey} {
+			for _, key := range announce.SecretTLSKeys {
 				if len(secret.Data[key]) == 0 {
 					t.Errorf("%s is empty, want it filled in", key)
 				}
 			}
 			// Replaced together or not at all: a leaf and a CA from different
 			// runs do not chain.
-			replaced := string(secret.Data[tlsCACert]) != string(complete[tlsCACert])
+			replaced := string(secret.Data[announce.CACert]) != string(complete[announce.CACert])
 			if replaced != tt.wantNew {
 				t.Errorf("regenerated = %v, want %v", replaced, tt.wantNew)
 			}

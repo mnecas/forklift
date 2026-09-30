@@ -24,25 +24,25 @@ type Server struct {
 	exports []runner.Export
 }
 
-// New builds an HTTPS server that presents server-cert.pem/server-key.pem from
-// certsDir and requires a client certificate signed by ca-cert.pem (mutual TLS),
-// matching the nbdkit containers.
+// New builds an HTTPS server that presents ServerCert/ServerKey from certsDir
+// and requires a client certificate signed by CACert (mutual TLS), matching
+// the nbdkit containers.
 func New(addr, certsDir string, exports []runner.Export) (*Server, error) {
 	cert, err := tls.LoadX509KeyPair(
-		filepath.Join(certsDir, "server-cert.pem"),
-		filepath.Join(certsDir, "server-key.pem"),
+		filepath.Join(certsDir, ServerCert),
+		filepath.Join(certsDir, ServerKey),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading server keypair: %w", err)
 	}
 
-	caPEM, err := os.ReadFile(filepath.Join(certsDir, "ca-cert.pem"))
+	caPEM, err := os.ReadFile(filepath.Join(certsDir, CACert))
 	if err != nil {
-		return nil, fmt.Errorf("reading ca-cert.pem: %w", err)
+		return nil, fmt.Errorf("reading %s: %w", CACert, err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("ca-cert.pem contained no valid certificates")
+		return nil, fmt.Errorf("%s contained no valid certificates", CACert)
 	}
 
 	s := &Server{exports: exports}

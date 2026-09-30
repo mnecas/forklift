@@ -85,13 +85,12 @@ func (r *SSHClient) Connect(ctx context.Context) (ready bool, err error) {
 	}
 	addr := net.JoinHostPort(r.Address, r.Port)
 	dialer := &net.Dialer{}
-	netConn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
+	netConn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+	if dialErr != nil {
 		// Nothing is listening yet, or nothing answered. The guest reports its
 		// address as soon as it has one, which is before sshd is accepting
 		// connections.
-		err = nil //nolint:nilerr
-		return
+		return false, nil //nolint:nilerr // dial failure means not ready yet
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		// Getting connected is not finished until the handshake is, and an

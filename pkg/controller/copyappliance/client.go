@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"syscall"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
+	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/fault"
 	"github.com/vmware/govmomi/find"
@@ -445,6 +447,54 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 	return
 }
 
+// matchExports finds the announced NBD export for each attached disk by serial.
+// Extra announced exports are ignored; WaitForExports already waits until the
+// guest has at least as many exports as attached disks.
+func matchExports(attached []api.AttachedDisk, announced []runner.Export) ([]api.ApplianceExport, error) {
+	byID := make(map[string]runner.Export, len(announced))
+	for _, export := range announced {
+		if id := normalizeDiskID(export.WWID); id != "" {
+			byID[id] = export
+		}
+	}
+
+	matched := make([]api.ApplianceExport, 0, len(attached))
+	for _, disk := range attached {
+		id := normalizeDiskID(disk.Serial)
+		if id == "" {
+			return nil, liberr.New(
+				"attached disk has no serial to match exports with",
+				"vmdk", disk.VMDKPath)
+		}
+		export, ok := byID[id]
+		if !ok {
+			return nil, liberr.New(
+				"no appliance export matches the attached disk serial",
+				"vmdk", disk.VMDKPath,
+				"serial", disk.Serial)
+		}
+		matched = append(matched, api.ApplianceExport{
+			WWID:         export.WWID,
+			Port:         int32(export.Port), // #nosec G115
+			Device:       export.Device,
+			DiskKey:      disk.DiskKey,
+			VMDKPath:     disk.VMDKPath,
+			SourceSerial: disk.Serial,
+		})
+	}
+	return matched, nil
+}
+
+// normalizeDiskID strips formatting so a VMware backing.Uuid matches a guest scsi_id WWID.
+func normalizeDiskID(id string) string {
+	s := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(id), "-", ""))
+	// scsi_id prefixes NAA identifiers with "3".
+	if len(s) > 1 && s[0] == '3' && strings.HasPrefix(s[1:], "6000c29") {
+		s = s[1:]
+	}
+	return s
+}
+
 // buildAttachDiskChanges returns the device changes that attach the spec's
 // disks to a VM with the given devices.
 //
@@ -545,17 +595,17 @@ func (r *ApplianceContext) announcePort() (port string) {
 // client half stays in the cluster. Keyed by the file name each lands under in
 // applianceCertsDir.
 func (r *ApplianceContext) ServerTLS() (files map[string][]byte, err error) {
-	return r.tlsData(tlsCACert, tlsServerCert, tlsServerKey)
+	return r.tlsData(announce.CACert, announce.ServerCert, announce.ServerKey)
 }
 
 // ClientTLS is the half the controller keeps, to query the appliance's export
 // list with.
 func (r *ApplianceContext) ClientTLS() (ca, certificate, key []byte, err error) {
-	files, err := r.tlsData(tlsCACert, tlsClientCert, tlsClientKey)
+	files, err := r.tlsData(announce.CACert, announce.ClientCert, announce.ClientKey)
 	if err != nil {
 		return
 	}
-	return files[tlsCACert], files[tlsClientCert], files[tlsClientKey], nil
+	return files[announce.CACert], files[announce.ClientCert], files[announce.ClientKey], nil
 }
 
 // tlsData reads the named keys out of the appliance's secret, and reports which

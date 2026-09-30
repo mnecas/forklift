@@ -21,7 +21,7 @@ import (
 
 func main() {
 	certsDir := flag.String("certs-dir", "/etc/pki/nbd",
-		"directory with ca-cert.pem, server-cert.pem, server-key.pem")
+		"directory with "+announce.CACert+", "+announce.ServerCert+", "+announce.ServerKey)
 	image := flag.String("image", "localhost/nbd-container", "nbdkit container image")
 	listen := flag.String("listen", ":8443", "address for the HTTPS announce server")
 	basePort := flag.Int("base-port", 10809, "first host port to allocate for exports")
@@ -46,7 +46,7 @@ func run(logger *slog.Logger, certsDir, image, listen string, basePort int, publ
 	certsDir = absCertsDir
 
 	// Fail fast if the shared certificates are missing.
-	for _, f := range []string{"ca-cert.pem", "server-cert.pem", "server-key.pem"} {
+	for _, f := range []string{announce.CACert, announce.ServerCert, announce.ServerKey} {
 		if _, err := os.Stat(filepath.Join(certsDir, f)); err != nil {
 			return err
 		}

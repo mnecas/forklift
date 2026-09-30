@@ -15,6 +15,7 @@ import (
 	"time"
 
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 )
 
 // Orchestrator is the NBD supervisor on the appliance, reached over an SSH
@@ -70,16 +71,6 @@ const controllerOrchestrator = "/usr/local/bin/nbd-orchestrator"
 const (
 	applianceAnnouncePort = "8443"
 	applianceBasePort     = 10809
-)
-
-// Keys of the TLS material within the appliance secret. They are the file names
-// the appliance expects, so that what is in the secret is what lands on it.
-const (
-	tlsCACert     = "ca-cert.pem"
-	tlsServerCert = "server-cert.pem"
-	tlsServerKey  = "server-key.pem"
-	tlsClientCert = "client-cert.pem"
-	tlsClientKey  = "client-key.pem"
 )
 
 //go:embed nbd-orchestrator.service.tmpl
@@ -200,7 +191,7 @@ func (r *Orchestrator) Install() (err error) {
 	if err != nil {
 		return
 	}
-	for _, name := range []string{tlsCACert, tlsServerCert, tlsServerKey} {
+	for _, name := range []string{announce.CACert, announce.ServerCert, announce.ServerKey} {
 		err = r.ssh.RunWithStdin("cat > "+applianceCertsDir+"/"+name,
 			bytes.NewReader(certs[name]))
 		if err != nil {
