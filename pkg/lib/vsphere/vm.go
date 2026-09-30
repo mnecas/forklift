@@ -28,8 +28,8 @@ type GuestIP struct {
 	IP      string
 }
 
-// FindVM locates a VM/template by folder+name. template nil skips the check.
-func (s *Session) FindVM(ctx context.Context, folderPath, name string, template *bool) (*VMRef, error) {
+// FindVM locates a VM or template by folder+name.
+func (s *Session) FindVM(ctx context.Context, folderPath, name string, asTemplate bool) (*VMRef, error) {
 	path := strings.TrimSpace(folderPath)
 	lookup := name
 	if path != "" {
@@ -44,13 +44,11 @@ func (s *Session) FindVM(ctx context.Context, folderPath, name string, template 
 		return nil, err
 	}
 	isTemplate := o.Config != nil && o.Config.Template
-	if template != nil {
-		if *template && !isTemplate {
-			return nil, fmt.Errorf("%q is not a template", name)
-		}
-		if !*template && isTemplate {
-			return nil, fmt.Errorf("%q is a template, expected VM", name)
-		}
+	if asTemplate && !isTemplate {
+		return nil, fmt.Errorf("%q is not a template", name)
+	}
+	if !asTemplate && isTemplate {
+		return nil, fmt.Errorf("%q is a template, expected VM", name)
 	}
 	return &VMRef{Name: o.Name, Moref: vm.Reference().Value, VM: vm}, nil
 }

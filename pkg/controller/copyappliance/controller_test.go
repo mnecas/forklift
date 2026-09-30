@@ -129,38 +129,6 @@ func TestApplianceRequeueFor(t *testing.T) {
 	}
 }
 
-func TestApplianceForgetVM(t *testing.T) {
-	r := &Reconciler{}
-
-	t.Run("every field describing the VM is cleared together", func(t *testing.T) {
-		appliance := testAppliance()
-		appliance.Status.MoRef = "vm-42"
-		appliance.Status.VCenterInstanceUUID = "uuid-a"
-		appliance.Status.TaskRef = "task-7"
-		appliance.Status.Phase = PhaseWaitForClone
-		appliance.Status.Addresses = []api.ApplianceAddress{
-			{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
-		}
-		// Exports name ports on the VM being forgotten, so they describe it as
-		// surely as its address does.
-		appliance.Status.Exports = []api.ApplianceExport{
-			{WWID: "wwn-abc", Port: 10809, Device: "/dev/sdb"},
-		}
-
-		r.forgetVM(appliance)
-
-		status := appliance.Status
-		if status.MoRef != "" ||
-			status.VCenterInstanceUUID != "" ||
-			status.TaskRef != "" ||
-			status.Phase != "" ||
-			status.Addresses != nil ||
-			status.Exports != nil {
-			t.Errorf("identity not fully cleared: %+v", status)
-		}
-	})
-}
-
 // The finalizer is the only thing keeping the CopyAppliance in the cluster
 // while its VM is still up. Releasing it early leaves an appliance holding read
 // locks on the source vmdks with nothing left to point at it.
@@ -198,6 +166,32 @@ func TestRemoveFinalizer(t *testing.T) {
 // another vCenter would power on, or destroy, an unrelated VM.
 func TestApplianceForgetForeignVM(t *testing.T) {
 	r := &Reconciler{Reconciler: base.Reconciler{Log: testLog()}}
+
+	t.Run("every field describing the VM is cleared together", func(t *testing.T) {
+		appliance := testAppliance()
+		appliance.Status.MoRef = "vm-42"
+		appliance.Status.VCenterInstanceUUID = "uuid-a"
+		appliance.Status.TaskRef = "task-7"
+		appliance.Status.Phase = PhaseWaitForClone
+		appliance.Status.Addresses = []api.ApplianceAddress{
+			{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
+		}
+		appliance.Status.Exports = []api.ApplianceExport{
+			{WWID: "wwn-abc", Port: 10809, Device: "/dev/sdb"},
+		}
+
+		r.forgetForeignVM(appliance, "uuid-b")
+
+		status := appliance.Status
+		if status.MoRef != "" ||
+			status.VCenterInstanceUUID != "" ||
+			status.TaskRef != "" ||
+			status.Phase != "" ||
+			status.Addresses != nil ||
+			status.Exports != nil {
+			t.Errorf("identity not fully cleared: %+v", status)
+		}
+	})
 
 	tests := []struct {
 		name        string

@@ -225,9 +225,12 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("power off the simulated VM: %v", err)
 		}
 
-		err = runner.PowerOff(ctx)
+		done, err := runner.execute(ctx, PhasePowerOff)
 		if err != nil {
 			t.Fatalf("PowerOff: %v", err)
+		}
+		if !done {
+			t.Fatal("PowerOff should finish in one pass when the VM is already off")
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM that is already off started task %q", status.TaskRef)
@@ -241,9 +244,12 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("detach the disks: %v", err)
 		}
-		err = runner.DetachDisks(ctx)
+		done, err = runner.execute(ctx, PhaseDetachDisks)
 		if err != nil {
 			t.Fatalf("DetachDisks: %v", err)
+		}
+		if !done {
+			t.Fatal("DetachDisks should finish in one pass when there are no disks")
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM with no disks started task %q", status.TaskRef)

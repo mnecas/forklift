@@ -79,10 +79,12 @@ func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, prov
 		return
 	}
 	ac.finder = s.Finder
-	ac.datacenter, err = s.SetDatacenter(ctx, ac.Appliance.Spec.Datacenter)
+	ac.datacenter, err = ac.finder.DatacenterOrDefault(ctx, ac.Appliance.Spec.Datacenter)
 	if err != nil {
+		err = liberr.Wrap(err)
 		return
 	}
+	ac.finder.SetDatacenter(ac.datacenter)
 	ac.folder, err = ac.finder.FolderOrDefault(ctx, ac.Appliance.Spec.Folder)
 	if err != nil {
 		err = liberr.Wrap(err)
@@ -205,7 +207,7 @@ func (r *ApplianceContext) WaitForTask(ctx context.Context) (done bool, result a
 		done = true
 		return
 	}
-	info, err := r.GetTaskInfo(ctx, r.Appliance.Status.TaskRef)
+	info, err := libvsphere.GetTaskInfo(ctx, r.VCenter.Client, r.Appliance.Status.TaskRef)
 	if err != nil {
 		return
 	}
@@ -220,11 +222,6 @@ func (r *ApplianceContext) WaitForTask(ctx context.Context) (done bool, result a
 	result = info.Result
 	r.Appliance.Status.TaskRef = ""
 	return
-}
-
-// GetTaskInfo resolves a recorded task moRef back into its vCenter task info.
-func (r *ApplianceContext) GetTaskInfo(ctx context.Context, task string) (info *types.TaskInfo, err error) {
-	return libvsphere.GetTaskInfo(ctx, r.VCenter.Client, task)
 }
 
 // GuestAddresses returns any IP addresses the guest tools are reporting.
@@ -251,7 +248,7 @@ func (r *ApplianceContext) recentTaskFault(ctx context.Context, vm *object.Virtu
 		return ""
 	}
 	for _, taskRef := range managedVM.RecentTask {
-		info, err := r.GetTaskInfo(ctx, taskRef.Value)
+		info, err := libvsphere.GetTaskInfo(ctx, r.VCenter.Client, taskRef.Value)
 		if err != nil || info == nil || info.State != types.TaskInfoStateError || info.Error == nil {
 			continue
 		}
@@ -280,37 +277,6 @@ func (r *ApplianceContext) VM(moRef string) (vm *object.VirtualMachine) {
 		Value: moRef,
 	}
 	vm = object.NewVirtualMachine(r.VCenter.Client, ref)
-	return
-}
-
-// PowerOff asks the appliance VM to power off and returns the task that will do
-// it. A VM that is already off, or that no longer exists, has no work to do and
-// returns no task.
-func (r *ApplianceContext) PowerOff(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
-	state, err := vm.PowerState(ctx)
-	if err != nil {
-		if fault.Is(err, &types.ManagedObjectNotFound{}) {
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err, "vm", vm.Reference().Value)
-		return
-	}
-	if state == types.VirtualMachinePowerStatePoweredOff {
-		return
-	}
-	task, err = vm.PowerOff(ctx)
-	if err != nil {
-		task = nil
-		// The VM may have gone, or powered itself off, between reading the
-		// power state above and asking it to stop.
-		if fault.Is(err, &types.ManagedObjectNotFound{}) || fault.Is(err, &types.InvalidPowerState{}) {
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err, "vm", vm.Reference().Value)
-		return
-	}
 	return
 }
 
@@ -413,22 +379,6 @@ func (r *ApplianceContext) DetachDisks(ctx context.Context, vm *object.VirtualMa
 		return
 	}
 	task, err = vm.Reconfigure(ctx, types.VirtualMachineConfigSpec{DeviceChange: detach})
-	if err != nil {
-		task = nil
-		if fault.Is(err, &types.ManagedObjectNotFound{}) {
-			err = nil
-			return
-		}
-		err = liberr.Wrap(err, "vm", vm.Reference().Value)
-		return
-	}
-	return
-}
-
-// DestroyVM destroys the appliance VM shell and returns the task that will do
-// it. A VM that no longer exists has no work to do and returns no task.
-func (r *ApplianceContext) DestroyVM(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
-	task, err = vm.Destroy(ctx)
 	if err != nil {
 		task = nil
 		if fault.Is(err, &types.ManagedObjectNotFound{}) {

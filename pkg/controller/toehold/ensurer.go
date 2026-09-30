@@ -25,39 +25,43 @@ const (
 	saName            = "toehold-builder"
 )
 
-func credsSecretName(toehold *api.ToeholdTemplate) string {
-	return toehold.Name + credsSecretSuffix
-}
-
-func (r Reconciler) loadToeholdSSHPublicKey(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
-	providerNS := toehold.Spec.Provider.Namespace
+// loadToeholdSSH reads the provider's toehold SSH public key once. Returns the
+// secret name (in the provider namespace) and the key material.
+func (r Reconciler) loadToeholdSSH(ctx context.Context, toehold *api.ToeholdTemplate) (secretName, publicKey, providerNS string, err error) {
+	providerNS = toehold.Spec.Provider.Namespace
 	if providerNS == "" {
 		providerNS = toehold.Namespace
 	}
 	provider := &api.Provider{}
-	err := r.Get(ctx, client.ObjectKey{
+	err = r.Get(ctx, client.ObjectKey{
 		Namespace: providerNS,
 		Name:      toehold.Spec.Provider.Name,
 	}, provider)
 	if err != nil {
-		return "", liberr.Wrap(err, "provider", toehold.Spec.Provider.Name)
+		err = liberr.Wrap(err, "provider", toehold.Spec.Provider.Name)
+		return
 	}
-	name := provider.Status.ToeholdSSHPublicSecret
-	if name == "" {
-		return "", liberr.New(
+	providerNS = provider.Namespace
+	secretName = provider.Status.ToeholdSSHPublicSecret
+	if secretName == "" {
+		err = liberr.New(
 			"provider has no toehold SSH public secret yet",
 			"provider", provider.Name)
+		return
 	}
 	secret := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, secret)
+	err = r.Get(ctx, client.ObjectKey{Namespace: providerNS, Name: secretName}, secret)
 	if err != nil {
-		return "", liberr.Wrap(err, "secret", name)
+		err = liberr.Wrap(err, "secret", secretName)
+		return
 	}
-	publicKey, ok := secret.Data["public-key"]
-	if !ok || len(publicKey) == 0 {
-		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
+	key, ok := secret.Data["public-key"]
+	if !ok || len(key) == 0 {
+		err = liberr.New("toehold SSH public key secret is missing public-key data", "secret", secretName)
+		return
 	}
-	return string(publicKey), nil
+	publicKey = string(key)
+	return
 }
 
 func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) error {
@@ -65,19 +69,6 @@ func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) erro
 		return liberr.New("controller scheme is not configured")
 	}
 	return controllerutil.SetControllerReference(toehold, obj, r.Scheme)
-}
-
-func (r Reconciler) ensureControllerOwner(ctx context.Context, toehold *api.ToeholdTemplate, obj client.Object) error {
-	if toehold.UID == "" || toehold.Namespace != obj.GetNamespace() {
-		return nil
-	}
-	if meta.IsControlledBy(obj, toehold) {
-		return nil
-	}
-	if err := r.setOwner(toehold, obj); err != nil {
-		return liberr.Wrap(err)
-	}
-	return liberr.Wrap(r.Update(ctx, obj))
 }
 
 func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.ToeholdTemplate) error {
@@ -95,7 +86,7 @@ func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.Toeho
 }
 
 func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdTemplate, pctx *providerContext, sshPublicKey string) error {
-	name := credsSecretName(toehold)
+	name := toehold.Name + credsSecretSuffix
 	ns := toehold.TargetNS()
 	data := map[string]string{
 		settings.VCenterURL:                 pctx.Provider.Spec.URL,
@@ -132,7 +123,7 @@ func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdT
 	return liberr.Wrap(r.Update(ctx, secret))
 }
 
-func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) (*core.Pod, error) {
+func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemplate, sshSecretName, sshPublicKey, sshProviderNS string) (*core.Pod, error) {
 	podList := &core.PodList{}
 	if err := r.List(ctx, podList, &client.ListOptions{
 		Namespace:     toehold.TargetNS(),
@@ -150,56 +141,169 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 			}
 			continue
 		case core.PodPending, core.PodRunning, core.PodSucceeded:
-			if err := r.ensureControllerOwner(ctx, toehold, pod); err != nil {
-				return nil, err
+			if toehold.UID != "" && toehold.Namespace == pod.Namespace && !meta.IsControlledBy(pod, toehold) {
+				if err := r.setOwner(toehold, pod); err != nil {
+					return nil, liberr.Wrap(err)
+				}
+				if err := r.Update(ctx, pod); err != nil {
+					return nil, liberr.Wrap(err)
+				}
 			}
 			return pod, nil
 		}
 	}
 
-	sshPublicSecretName, err := r.ensureSSHPublicSecret(ctx, toehold)
+	localSSHSecret, err := r.ensureSSHPublicSecret(ctx, toehold, sshSecretName, sshPublicKey, sshProviderNS)
 	if err != nil {
 		return nil, err
 	}
-	sshPublicKey, err := r.loadToeholdSSHPublicKey(ctx, toehold)
-	if err != nil {
+
+	builderImage := Settings.Toehold.BuilderImage
+	if toehold.Spec.BuilderImage != "" {
+		builderImage = toehold.Spec.BuilderImage
+	}
+	activeDeadline := int64(7200)
+	nodeSelector := map[string]string{"node-role.kubernetes.io/worker": ""}
+	for k, v := range toehold.Spec.NodeSelector {
+		nodeSelector[k] = v
+	}
+	nodeSelector["kubevirt.io/schedulable"] = "true"
+
+	workDir := core.EmptyDirVolumeSource{}
+	if giB := toehold.Spec.BaseDisk.WorkGiB; giB > 0 {
+		workDir.SizeLimit = resource.NewQuantity(giB*1024*1024*1024, resource.BinarySI)
+	}
+
+	cpus := version.DefaultCPU
+	if toehold.Spec.Resources.CPU > 0 {
+		cpus = toehold.Spec.Resources.CPU
+	}
+	memMiB := version.DefaultMemoryMiB
+	if toehold.Spec.Resources.MemoryMiB > 0 {
+		memMiB = toehold.Spec.Resources.MemoryMiB
+	}
+	privileged := true
+	runAsUser := int64(0)
+
+	// Content hash and base image come from the creds secret via EnvFrom.
+	pod := &core.Pod{
+		ObjectMeta: meta.ObjectMeta{
+			GenerateName: toehold.Name + "-build-",
+			Namespace:    toehold.TargetNS(),
+			Labels: map[string]string{
+				labelToehold: toehold.Name,
+			},
+		},
+		Spec: core.PodSpec{
+			RestartPolicy:         core.RestartPolicyNever,
+			ServiceAccountName:    saName,
+			NodeSelector:          nodeSelector,
+			ActiveDeadlineSeconds: &activeDeadline,
+			SecurityContext:       &core.PodSecurityContext{SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
+			Volumes: []core.Volume{
+				{
+					Name: "base-disk",
+					VolumeSource: core.VolumeSource{
+						Image: &core.ImageVolumeSource{
+							Reference:  toehold.Spec.BaseDisk.ContainerImage,
+							PullPolicy: core.PullIfNotPresent,
+						},
+					},
+				},
+				{
+					Name:         "work",
+					VolumeSource: core.VolumeSource{EmptyDir: &workDir},
+				},
+				{
+					Name: "ssh-public-key",
+					VolumeSource: core.VolumeSource{
+						Secret: &core.SecretVolumeSource{
+							SecretName: localSSHSecret,
+							Items: []core.KeyToPath{
+								{Key: "public-key", Path: "public-key"},
+							},
+						},
+					},
+				},
+			},
+			Containers: []core.Container{
+				{
+					Name:            "build",
+					Image:           builderImage,
+					ImagePullPolicy: core.PullAlways,
+					SecurityContext: &core.SecurityContext{
+						Privileged:      &privileged,
+						RunAsUser:       &runAsUser,
+						SELinuxOptions:  &core.SELinuxOptions{Type: "unconfined_t"},
+					},
+					EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
+						LocalObjectReference: core.LocalObjectReference{Name: toehold.Name + credsSecretSuffix},
+					}}},
+					Env: []core.EnvVar{
+						{Name: settings.ToeholdTemplateName, Value: toehold.Spec.TemplateName},
+						{Name: settings.ToeholdDatastore, Value: toehold.Spec.Datastore},
+						{Name: settings.ToeholdFolder, Value: toehold.Spec.Folder},
+						{Name: settings.ToeholdNetwork, Value: toehold.Spec.Network},
+						{Name: settings.ToeholdBuildPodCPUs, Value: fmt.Sprint(cpus)},
+						{Name: settings.ToeholdBuildPodMemoryMiB, Value: fmt.Sprint(memMiB)},
+						{Name: settings.ToeholdTemplateConfigHash, Value: version.ConfigHash(toehold.Spec)},
+						{Name: "TOEHOLD_SSH_PUBLIC_KEY_FILE", Value: "/etc/toehold/ssh/public-key"},
+					},
+					VolumeMounts: []core.VolumeMount{
+						{Name: "base-disk", MountPath: "/disk", ReadOnly: true},
+						{Name: "work", MountPath: "/work"},
+						{Name: "ssh-public-key", MountPath: "/etc/toehold/ssh", ReadOnly: true},
+					},
+					Resources: core.ResourceRequirements{
+						Requests: core.ResourceList{
+							core.ResourceCPU:    resource.MustParse("500m"),
+							core.ResourceMemory: resource.MustParse("2Gi"),
+							core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
+						},
+						Limits: core.ResourceList{
+							core.ResourceCPU:    resource.MustParse("4"),
+							core.ResourceMemory: resource.MustParse("8Gi"),
+							core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+	if toehold.Spec.BaseDisk.ImagePullSecret != nil {
+		pod.Spec.ImagePullSecrets = []core.LocalObjectReference{*toehold.Spec.BaseDisk.ImagePullSecret}
+	}
+
+	if toehold.Spec.TransferNetwork != nil {
+		ns := toehold.Spec.TransferNetwork.Namespace
+		if ns == "" {
+			ns = toehold.TargetNS()
+		}
+		nad := &k8snet.NetworkAttachmentDefinition{}
+		err = r.Get(ctx, client.ObjectKey{
+			Namespace: ns,
+			Name:      toehold.Spec.TransferNetwork.Name,
+		}, nad)
+		if err != nil {
+			return nil, liberr.Wrap(err,
+				"transferNetwork", toehold.Spec.TransferNetwork.Name,
+				"namespace", ns)
+		}
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		if err = base.ApplyTransferNetworkAnnotations(nad, pod.Annotations); err != nil {
+			return nil, err
+		}
+	}
+
+	if err = r.setOwner(toehold, pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
-	pod := r.buildPod(toehold, credsSecretName(toehold), sshPublicSecretName, sshPublicKey)
-	if err := r.applyBuildPodTransferNetwork(ctx, toehold, pod); err != nil {
-		return nil, err
-	}
-	if err := r.setOwner(toehold, pod); err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	if err := r.Create(ctx, pod); err != nil {
+	if err = r.Create(ctx, pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
 	return pod, nil
-}
-
-func (r Reconciler) applyBuildPodTransferNetwork(ctx context.Context, toehold *api.ToeholdTemplate, pod *core.Pod) error {
-	if toehold.Spec.TransferNetwork == nil {
-		return nil
-	}
-	ns := toehold.Spec.TransferNetwork.Namespace
-	if ns == "" {
-		ns = toehold.TargetNS()
-	}
-	nad := &k8snet.NetworkAttachmentDefinition{}
-	err := r.Get(ctx, client.ObjectKey{
-		Namespace: ns,
-		Name:      toehold.Spec.TransferNetwork.Name,
-	}, nad)
-	if err != nil {
-		return liberr.Wrap(err,
-			"transferNetwork", toehold.Spec.TransferNetwork.Name,
-			"namespace", ns)
-	}
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	return base.ApplyTransferNetworkAnnotations(nad, pod.Annotations)
 }
 
 func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) error {
@@ -220,198 +324,54 @@ func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 }
 
 // ensureSSHPublicSecret copies the provider's toehold SSH public key into the
-// build namespace. Pods can only mount secrets from their own namespace.
-func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate) (string, error) {
-	providerNS := toehold.Spec.Provider.Namespace
-	if providerNS == "" {
-		providerNS = toehold.Namespace
-	}
-	provider := &api.Provider{}
-	err := r.Get(ctx, client.ObjectKey{
-		Namespace: providerNS,
-		Name:      toehold.Spec.Provider.Name,
-	}, provider)
-	if err != nil {
-		return "", liberr.Wrap(err, "provider", toehold.Spec.Provider.Name)
-	}
-	name := provider.Status.ToeholdSSHPublicSecret
-	if name == "" {
-		return "", liberr.New(
-			"provider has no toehold SSH public secret yet",
-			"provider", provider.Name)
-	}
-
-	source := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: provider.Namespace, Name: name}, source)
-	if err != nil {
-		return "", liberr.Wrap(err, "secret", name)
-	}
-	publicKey, ok := source.Data["public-key"]
-	if !ok || len(publicKey) == 0 {
-		return "", liberr.New("toehold SSH public key secret is missing public-key data", "secret", name)
-	}
-
+// build namespace when needed. Pods can only mount secrets from their own namespace.
+// secretName/publicKey/providerNS come from loadToeholdSSH.
+func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate, secretName, publicKey, providerNS string) (string, error) {
 	targetNS := toehold.TargetNS()
-	if targetNS == provider.Namespace {
-		return name, nil
+	if targetNS == providerNS {
+		return secretName, nil
 	}
 
 	target := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: name}, target)
+	err := r.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: secretName}, target)
 	if k8serr.IsNotFound(err) {
 		target = &core.Secret{
 			ObjectMeta: meta.ObjectMeta{
-				Name:      name,
+				Name:      secretName,
 				Namespace: targetNS,
 			},
 			Type: core.SecretTypeOpaque,
 			Data: map[string][]byte{
-				"public-key": publicKey,
+				"public-key": []byte(publicKey),
 			},
 		}
 		if err = r.setOwner(toehold, target); err != nil {
 			return "", liberr.Wrap(err)
 		}
-		return name, liberr.Wrap(r.Create(ctx, target))
+		return secretName, liberr.Wrap(r.Create(ctx, target))
 	}
 	if err != nil {
 		return "", liberr.Wrap(err)
 	}
 	target.Data = map[string][]byte{
-		"public-key": publicKey,
+		"public-key": []byte(publicKey),
 	}
 	if err = r.setOwner(toehold, target); err != nil {
 		return "", liberr.Wrap(err)
 	}
-	return name, liberr.Wrap(r.Update(ctx, target))
-}
-
-func (r Reconciler) buildPod(toehold *api.ToeholdTemplate, secretName, sshPublicSecretName, sshPublicKey string) *core.Pod {
-	builderImage := Settings.Toehold.BuilderImage
-	if toehold.Spec.BuilderImage != "" {
-		builderImage = toehold.Spec.BuilderImage
-	}
-	activeDeadline := int64(7200)
-	nodeSelector := map[string]string{"node-role.kubernetes.io/worker": ""}
-	for k, v := range toehold.Spec.NodeSelector {
-		nodeSelector[k] = v
-	}
-	nodeSelector["kubevirt.io/schedulable"] = "true"
-
-	workDir := core.EmptyDirVolumeSource{}
-	if giB := toehold.Spec.BaseDisk.WorkGiB; giB > 0 {
-		workDir.SizeLimit = resource.NewQuantity(giB*1024*1024*1024, resource.BinarySI)
-	}
-
-	buildEnv := []core.EnvVar{
-		{Name: settings.ToeholdTemplateName, Value: toehold.Spec.TemplateName},
-		{Name: settings.ToeholdDatastore, Value: toehold.Spec.Datastore},
-		{Name: settings.ToeholdFolder, Value: toehold.Spec.Folder},
-		{Name: settings.ToeholdNetwork, Value: toehold.Spec.Network},
-		{Name: settings.ToeholdBuildPodCPUs, Value: fmt.Sprint(cpuCount(toehold))},
-		{Name: settings.ToeholdBuildPodMemoryMiB, Value: fmt.Sprint(memoryMiB(toehold))},
-		{Name: settings.ToeholdTemplateContentHash, Value: version.DiskHash(toehold.Spec, sshPublicKey)},
-		{Name: settings.ToeholdTemplateConfigHash, Value: version.ConfigHash(toehold.Spec)},
-		{Name: settings.ToeholdBaseContainerImage, Value: toehold.Spec.BaseDisk.ContainerImage},
-	}
-	buildEnv = append(buildEnv, core.EnvVar{
-		Name:  "TOEHOLD_SSH_PUBLIC_KEY_FILE",
-		Value: "/etc/toehold/ssh/public-key",
-	})
-
-	buildResources := core.ResourceRequirements{
-		Requests: core.ResourceList{
-			core.ResourceCPU:    resource.MustParse("500m"),
-			core.ResourceMemory: resource.MustParse("2Gi"),
-			core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
-		},
-		Limits: core.ResourceList{
-			core.ResourceCPU:    resource.MustParse("4"),
-			core.ResourceMemory: resource.MustParse("8Gi"),
-			core.ResourceName("devices.kubevirt.io/kvm"): resource.MustParse("1"),
-		},
-	}
-
-	podSpec := core.PodSpec{
-		RestartPolicy:         core.RestartPolicyNever,
-		ServiceAccountName:    saName,
-		NodeSelector:          nodeSelector,
-		ActiveDeadlineSeconds: &activeDeadline,
-		SecurityContext:       &core.PodSecurityContext{SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
-		Volumes: []core.Volume{
-			{
-				Name: "base-disk",
-				VolumeSource: core.VolumeSource{
-					Image: &core.ImageVolumeSource{
-						Reference:  toehold.Spec.BaseDisk.ContainerImage,
-						PullPolicy: core.PullIfNotPresent,
-					},
-				},
-			},
-			{
-				Name:         "work",
-				VolumeSource: core.VolumeSource{EmptyDir: &workDir},
-			},
-			{
-				Name: "ssh-public-key",
-				VolumeSource: core.VolumeSource{
-					Secret: &core.SecretVolumeSource{
-						SecretName: sshPublicSecretName,
-						Items: []core.KeyToPath{
-							{Key: "public-key", Path: "public-key"},
-						},
-					},
-				},
-			},
-		},
-		Containers: []core.Container{
-			{
-				Name:            "build",
-				Image:           builderImage,
-				ImagePullPolicy: core.PullAlways,
-				SecurityContext: &core.SecurityContext{Privileged: boolPtr(true), RunAsUser: int64Ptr(0), SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
-				EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
-					LocalObjectReference: core.LocalObjectReference{Name: secretName},
-				}}},
-				Env: buildEnv,
-				VolumeMounts: []core.VolumeMount{
-					{Name: "base-disk", MountPath: "/disk", ReadOnly: true},
-					{Name: "work", MountPath: "/work"},
-					{Name: "ssh-public-key", MountPath: "/etc/toehold/ssh", ReadOnly: true},
-				},
-				Resources: buildResources,
-			},
-		},
-	}
-	if toehold.Spec.BaseDisk.ImagePullSecret != nil {
-		podSpec.ImagePullSecrets = []core.LocalObjectReference{*toehold.Spec.BaseDisk.ImagePullSecret}
-	}
-
-	return &core.Pod{
-		ObjectMeta: meta.ObjectMeta{
-			GenerateName: toehold.Name + "-build-",
-			Namespace:    toehold.TargetNS(),
-			Labels: map[string]string{
-				labelToehold: toehold.Name,
-			},
-		},
-		Spec: podSpec,
-	}
+	return secretName, liberr.Wrap(r.Update(ctx, target))
 }
 
 func cpuCount(toehold *api.ToeholdTemplate) int32 {
 	if toehold.Spec.Resources.CPU > 0 {
 		return toehold.Spec.Resources.CPU
 	}
-	return 2
+	return version.DefaultCPU
 }
 
 func memoryMiB(toehold *api.ToeholdTemplate) int32 {
 	if toehold.Spec.Resources.MemoryMiB > 0 {
 		return toehold.Spec.Resources.MemoryMiB
 	}
-	return 4096
+	return version.DefaultMemoryMiB
 }
-
-func boolPtr(v bool) *bool    { return &v }
-func int64Ptr(v int64) *int64 { return &v }
