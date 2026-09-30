@@ -15,7 +15,7 @@ type ExportRunner struct {
 }
 
 // PendingExportRequest reports whether a terminal appliance must re-enter the
-// export itinerary. Terminal phase encodes the last converged target
+// export pipeline. Terminal phase encodes the last converged target
 // (DeployCompleted = Export, Released = Release), so only a mismatched
 // target is pending. Warm precopy always Release→Export; there is no
 // same-target re-export path.
@@ -34,71 +34,60 @@ func PendingExportRequest(appliance *api.CopyAppliance) bool {
 	}
 }
 
-// Begin seeds the export itinerary from the requested target.
+// Begin seeds the export pipeline from the requested target.
 func (r *ExportRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
 	if r.context.Appliance.Spec.Target == "" {
 		return
 	}
-	itinerary, _, err := r.itinerary()
+	itinerary, err := r.itinerary()
 	if err != nil {
-		r.context.Appliance.Status.Phase = PhaseDeployFailed
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		return
 	}
 	step, err := itinerary.First()
 	if err != nil {
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		return
 	}
 	r.context.Appliance.Status.Phase = step.Name
 	return
 }
 
-// Run advances the export pipeline by one pass.
+// Run runs the current export phase once. A finished step sets Status.Phase
+// to its successor; the next reconcile picks it up.
 func (r *ExportRunner) Run(ctx context.Context) (err error) {
 	err = r.context.CheckInstance()
 	if err != nil {
 		return
 	}
-
-	itinerary, completed, err := r.itinerary()
-	if err != nil {
-		r.context.Appliance.Status.Phase = PhaseDeployFailed
+	if r.context.Appliance.Spec.Target == "" {
+		err = liberr.New("export target is not set")
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
 		return
 	}
-
-	err = advance(
-		ctx,
-		r.context.Appliance,
-		itinerary,
-		r.execute,
-		completed,
-		PhaseDeployFailed)
+	err = r.execute(ctx)
 	if err != nil {
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
 	}
 	return
 }
 
-func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed string, err error) {
-	target := r.context.Appliance.Spec.Target
-	if target == "" {
-		err = liberr.New("export target is not set")
-		return
-	}
-	switch target {
+func (r *ExportRunner) itinerary() (*libitr.Itinerary, error) {
+	switch r.context.Appliance.Spec.Target {
 	case api.ExportTargetRelease:
-		itinerary = &libitr.Itinerary{
+		return &libitr.Itinerary{
 			Name: "Release",
 			Pipeline: libitr.Pipeline{
 				{Name: PhaseReleaseDisks},
 				{Name: PhaseWaitForReleaseDisks},
 				{Name: PhaseReleased},
 			},
-		}
-		completed = PhaseReleased
+		}, nil
 	case api.ExportTargetExport:
-		itinerary = &libitr.Itinerary{
+		return &libitr.Itinerary{
 			Name: "Export",
 			Pipeline: libitr.Pipeline{
 				{Name: PhaseAttachDisks},
@@ -107,54 +96,71 @@ func (r *ExportRunner) itinerary() (itinerary *libitr.Itinerary, completed strin
 				{Name: PhaseWaitForExports},
 				{Name: PhaseDeployCompleted},
 			},
-		}
-		completed = PhaseDeployCompleted
+		}, nil
 	default:
-		err = liberr.New("unknown export target", "target", target)
+		return nil, liberr.New("unknown export target", "target", r.context.Appliance.Spec.Target)
 	}
-	return
 }
 
-func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, err error) {
+func (r *ExportRunner) failedPhase() string {
+	return PhaseDeployFailed
+}
+
+func (r *ExportRunner) NextPhase() {
+	itinerary, err := r.itinerary()
+	if err != nil {
+		return
+	}
+	nextPhase(r.context.Appliance, itinerary)
+}
+
+func (r *ExportRunner) execute(ctx context.Context) (err error) {
+	phase := r.context.Appliance.Status.Phase
 	switch phase {
 	case PhaseReleaseDisks:
 		detachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		detachTask, detachErr := r.context.DetachAttachedDisks(ctx, detachVM)
 		if detachErr != nil {
-			err = detachErr
-			return
+			return detachErr
 		}
 		r.context.SetTask(detachTask)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForReleaseDisks:
-		done, _, err = r.context.WaitForTask(ctx)
-		if err != nil || !done {
+		done, _, waitErr := r.context.WaitForTask(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if !done {
 			return
 		}
 		r.context.Appliance.Status.Exports = nil
+		r.NextPhase()
 	case PhaseAttachDisks:
 		attachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		attachTask, attachErr := r.context.AttachDisks(ctx, attachVM)
 		if attachErr != nil {
-			err = attachErr
-			return
+			return attachErr
 		}
 		r.context.SetTask(attachTask)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForAttachDisks:
-		done, _, err = r.context.WaitForTask(ctx)
+		done, _, waitErr := r.context.WaitForTask(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseRestartOrchestrator:
 		address, ok := applianceAddress(r.context.Appliance.Status.Addresses)
 		if !ok {
-			err = liberr.New(
+			return liberr.New(
 				"the appliance reports no address to reach it on",
 				"appliance", r.context.Appliance.Name)
-			return
 		}
 		orch, ready, loginErr := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
 		if loginErr != nil {
-			err = loginErr
-			return
+			return loginErr
 		}
 		if !ready {
 			r.context.Log.Info("The appliance is not answering on SSH yet.", "address", address)
@@ -174,9 +180,15 @@ func (r *ExportRunner) execute(ctx context.Context, phase string) (done bool, er
 			}
 			return
 		}
-		done = true
+		r.NextPhase()
 	case PhaseWaitForExports:
-		done, err = r.context.WaitForExports(ctx)
+		done, waitErr := r.context.WaitForExports(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseReleased, PhaseDeployCompleted:
 		msg := "Copy appliance disk export has succeeded."
 		if phase == PhaseReleased {

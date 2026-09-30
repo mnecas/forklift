@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -36,12 +37,12 @@ type DeployRunner struct {
 	registry *ClusterRegistry
 }
 
-// Begin seeds the deploy itinerary and records the vCenter the appliance VM
+// Begin seeds the deploy pipeline and records the vCenter the appliance VM
 // will belong to.
 func (r *DeployRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
 	r.context.Appliance.Status.VCenterInstanceUUID = r.context.InstanceUUID()
-	step, err := r.Itinerary().First()
+	step, err := r.itinerary().First()
 	if err != nil {
 		return
 	}
@@ -49,21 +50,16 @@ func (r *DeployRunner) Begin() (err error) {
 	return
 }
 
-// Run advances the deployment by one pass.
+// Run runs the current deploy phase once. A finished step sets Status.Phase
+// to its successor; the next reconcile picks it up.
 func (r *DeployRunner) Run(ctx context.Context) (err error) {
 	err = r.context.CheckInstance()
 	if err != nil {
 		return
 	}
-
-	err = advance(
-		ctx,
-		r.context.Appliance,
-		r.Itinerary(),
-		r.execute,
-		PhaseDeployCompleted,
-		PhaseDeployFailed)
+	err = r.execute(ctx)
 	if err != nil {
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		log := []interface{}{"phase", r.context.Appliance.Status.Phase}
 		var detail *liberr.Error
 		if errors.As(err, &detail) && len(detail.Context()) > 0 {
@@ -74,26 +70,72 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 	return
 }
 
-// execute runs one deploy step and reports whether it finished. A step with
-// nothing to wait for finishes, and the walk moves on to the next step within
-// the same pass. The terminal phases report not finished, which parks the walk
-// on them.
-func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, err error) {
-	switch phase {
+func (r *DeployRunner) itinerary() *libitr.Itinerary {
+	return &libitr.Itinerary{
+		Name: "Deploy",
+		Pipeline: libitr.Pipeline{
+			{Name: PhaseCloneVM},
+			{Name: PhaseWaitForClone},
+			{Name: PhaseWaitForNetwork},
+			{Name: PhaseLoadImage},
+			{Name: PhaseConfigure},
+			{Name: PhaseWaitForExports},
+			{Name: PhaseDeployCompleted},
+		},
+	}
+}
+
+func (r *DeployRunner) failedPhase() string {
+	return PhaseDeployFailed
+}
+
+// NextPhase sets Status.Phase to itinerary.Next of the current phase.
+func (r *DeployRunner) NextPhase() {
+	nextPhase(r.context.Appliance, r.itinerary())
+}
+
+// nextPhase sets Status.Phase to itinerary.Next of the current phase.
+func nextPhase(appliance *api.CopyAppliance, itinerary *libitr.Itinerary) {
+	step, done, err := itinerary.Next(appliance.Status.Phase)
+	if done || err != nil {
+		return
+	}
+	appliance.Status.Phase = step.Name
+}
+
+func (r *DeployRunner) execute(ctx context.Context) (err error) {
+	switch r.context.Appliance.Status.Phase {
 	case PhaseCloneVM:
 		task, cloneErr := r.context.CloneVM(ctx)
 		if cloneErr != nil {
-			err = cloneErr
-			return
+			return cloneErr
 		}
 		r.context.SetTask(task)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForClone:
-		done, err = r.WaitForClone(ctx)
+		done, waitErr := r.WaitForClone(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseWaitForNetwork:
-		done, err = r.WaitForNetwork(ctx)
+		done, waitErr := r.WaitForNetwork(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseLoadImage:
-		done, err = r.InjectImage(ctx)
+		done, injectErr := r.InjectImage(ctx)
+		if injectErr != nil {
+			return injectErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseConfigure:
 		// LoadImage used to run after this step and now runs before it. An
 		// appliance an older controller left sitting here has therefore not
@@ -103,9 +145,21 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 			r.context.Appliance.Status.Phase = PhaseLoadImage
 			return
 		}
-		done, err = r.Configure(ctx)
+		done, cfgErr := r.Configure(ctx)
+		if cfgErr != nil {
+			return cfgErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseWaitForExports:
-		done, err = r.context.WaitForExports(ctx)
+		done, waitErr := r.context.WaitForExports(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseDeployCompleted:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
@@ -121,7 +175,7 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 			Message:  "Deploying the copy appliance has failed.",
 		})
 	default:
-		err = liberr.New("unknown phase", "phase", phase)
+		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
 	}
 	return
 }
@@ -317,22 +371,4 @@ func makeTag(img v1.Image) (tag name.Tag, err error) {
 		return
 	}
 	return
-}
-
-// Itinerary is the ordered pipeline of deploy phases. PhaseDeployFailed is not
-// in it: a failure is not a step the walk arrives at, it is where the walk ends
-// when a step returns an error.
-func (r *DeployRunner) Itinerary() *libitr.Itinerary {
-	return &libitr.Itinerary{
-		Name: "Deploy",
-		Pipeline: libitr.Pipeline{
-			{Name: PhaseCloneVM},
-			{Name: PhaseWaitForClone},
-			{Name: PhaseWaitForNetwork},
-			{Name: PhaseLoadImage},
-			{Name: PhaseConfigure},
-			{Name: PhaseWaitForExports},
-			{Name: PhaseDeployCompleted},
-		},
-	}
 }

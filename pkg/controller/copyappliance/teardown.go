@@ -16,15 +16,21 @@ type TeardownRunner struct {
 	context *ApplianceContext
 }
 
-// Begin seeds the teardown itinerary. An appliance with no recorded VM has
+// Begin seeds the teardown pipeline. An appliance with no recorded VM has
 // nothing to tear down and is already complete.
 func (r *TeardownRunner) Begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
+	itinerary := r.itinerary()
 	if r.context.Appliance.Status.MoRef == "" {
-		r.context.Appliance.Status.Phase = PhaseTeardownCompleted
+		list, listErr := itinerary.List()
+		if listErr != nil || len(list) == 0 {
+			err = listErr
+			return
+		}
+		r.context.Appliance.Status.Phase = list[len(list)-1].Name
 		return
 	}
-	step, err := r.Itinerary().First()
+	step, err := itinerary.First()
 	if err != nil {
 		return
 	}
@@ -32,65 +38,94 @@ func (r *TeardownRunner) Begin() (err error) {
 	return
 }
 
-// Run advances the teardown by one pass.
+// Run runs the current teardown phase once. A finished step sets Status.Phase
+// to its successor; the next reconcile picks it up.
 func (r *TeardownRunner) Run(ctx context.Context) (err error) {
 	err = r.context.CheckInstance()
 	if err != nil {
 		return
 	}
-
-	err = advance(
-		ctx,
-		r.context.Appliance,
-		r.Itinerary(),
-		r.execute,
-		PhaseTeardownCompleted,
-		PhaseTeardownFailed)
+	err = r.execute(ctx)
 	if err != nil {
+		r.context.Appliance.Status.Phase = r.failedPhase()
 		r.context.Log.Error(err, "Teardown phase failed.", "phase", r.context.Appliance.Status.Phase)
 	}
 	return
 }
 
-// execute runs one teardown step and reports whether it finished. A step with
-// nothing to wait for finishes, and the walk moves on to the next step within
-// the same pass. The terminal phases report not finished, which parks the walk
-// on them.
-func (r *TeardownRunner) execute(ctx context.Context, phase string) (done bool, err error) {
-	switch phase {
+func (r *TeardownRunner) itinerary() *libitr.Itinerary {
+	return &libitr.Itinerary{
+		Name: "Teardown",
+		Pipeline: libitr.Pipeline{
+			{Name: PhasePowerOff},
+			{Name: PhaseWaitForPowerOff},
+			{Name: PhaseDetachDisks},
+			{Name: PhaseWaitForDetachDisks},
+			{Name: PhaseDestroyVM},
+			{Name: PhaseWaitForDestroyVM},
+			{Name: PhaseTeardownCompleted},
+		},
+	}
+}
+
+func (r *TeardownRunner) failedPhase() string {
+	return PhaseTeardownFailed
+}
+
+func (r *TeardownRunner) NextPhase() {
+	nextPhase(r.context.Appliance, r.itinerary())
+}
+
+func (r *TeardownRunner) execute(ctx context.Context) (err error) {
+	switch r.context.Appliance.Status.Phase {
 	case PhasePowerOff:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, powerErr := libvsphere.PowerOff(ctx, vm)
 		if powerErr != nil {
-			err = powerErr
-			return
+			return powerErr
 		}
 		r.context.SetTask(task)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForPowerOff:
-		done, _, err = r.context.WaitForTask(ctx)
+		done, _, waitErr := r.context.WaitForTask(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseDetachDisks:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, detachErr := r.context.DetachDisks(ctx, vm)
 		if detachErr != nil {
-			err = detachErr
-			return
+			return detachErr
 		}
 		r.context.SetTask(task)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForDetachDisks:
-		done, _, err = r.context.WaitForTask(ctx)
+		done, _, waitErr := r.context.WaitForTask(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseDestroyVM:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, destroyErr := libvsphere.DestroyVM(ctx, vm)
 		if destroyErr != nil {
-			err = destroyErr
-			return
+			return destroyErr
 		}
 		r.context.SetTask(task)
-		done = true
+		r.NextPhase()
 	case PhaseWaitForDestroyVM:
-		done, _, err = r.context.WaitForTask(ctx)
+		done, _, waitErr := r.context.WaitForTask(ctx)
+		if waitErr != nil {
+			return waitErr
+		}
+		if done {
+			r.NextPhase()
+		}
 	case PhaseTeardownCompleted:
 		// The VM is gone, so the moRef names nothing and the addresses reach
 		// nothing. Clearing them makes a repeated teardown a no-op rather than
@@ -114,26 +149,7 @@ func (r *TeardownRunner) execute(ctx context.Context, phase string) (done bool, 
 			Message:  "Tearing down the copy appliance has failed.",
 		})
 	default:
-		err = liberr.New("unknown phase", "phase", phase)
+		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
 	}
 	return
-}
-
-// Itinerary is the ordered pipeline of teardown phases. PhaseTeardownFailed is
-// not in the pipeline: a failure is not a step the walk arrives at, it is where
-// the walk ends when a step returns an error. Callers with no MoRef should set
-// PhaseTeardownCompleted in Begin rather than walking this pipeline.
-func (r *TeardownRunner) Itinerary() *libitr.Itinerary {
-	return &libitr.Itinerary{
-		Name: "Teardown",
-		Pipeline: libitr.Pipeline{
-			{Name: PhasePowerOff},
-			{Name: PhaseWaitForPowerOff},
-			{Name: PhaseDetachDisks},
-			{Name: PhaseWaitForDetachDisks},
-			{Name: PhaseDestroyVM},
-			{Name: PhaseWaitForDestroyVM},
-			{Name: PhaseTeardownCompleted},
-		},
-	}
 }
