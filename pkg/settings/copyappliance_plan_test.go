@@ -15,7 +15,7 @@ func TestCopyApplianceEnabledForPlan(t *testing.T) {
 	vsphere, openshift := api.VSphere, api.OpenShift
 	p := &api.Plan{
 		Spec: api.PlanSpec{
-			Type:              api.MigrationCold,
+			Type:               api.MigrationCold,
 			MigrateSharedDisks: true,
 			VMs: []plan.VM{{
 				Ref: ref.Ref{ID: "vm-1", Name: "vm-1"},

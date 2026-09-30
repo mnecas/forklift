@@ -18,7 +18,7 @@ const (
 	DiskHashAnnotation           = annotationPrefix + "disk-hash"
 	ConfigHashAnnotation         = annotationPrefix + "config-hash"
 	BaseContainerImageAnnotation = annotationPrefix + "base-container-image"
-	ImportedAtAnnotation = annotationPrefix + "imported-at"
+	ImportedAtAnnotation         = annotationPrefix + "imported-at"
 	// Rough floor for a new template upload; the real size comes from the base image.
 	DefaultTemplateDatastoreFreeBytes = 10 * 1024 * 1024 * 1024
 )

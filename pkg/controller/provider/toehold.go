@@ -50,12 +50,12 @@ type applianceCheck struct {
 
 func newApplianceCheck(client client.Client, provider *api.Provider) *applianceCheck {
 	return &applianceCheck{
-		client:     client,
+		client: client,
 		appliances: copyappliance.Ensurer{
 			Client: client,
 			Log:    logging.WithName("provider|appliance-check"),
 		},
-		provider:   provider,
+		provider: provider,
 		build: func(provider *api.Provider, toehold *api.ToeholdTemplate) (*api.CopyAppliance, error) {
 			builder, err := copyappliance.NewBuilder(provider)
 			if err != nil {
