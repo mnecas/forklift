@@ -27,13 +27,14 @@ const (
 
 // loadToeholdSSH reads the provider's toehold SSH public key once. Returns the
 // secret name (in the provider namespace) and the key material.
-func (r Reconciler) loadToeholdSSH(ctx context.Context, toehold *api.ToeholdTemplate) (secretName, publicKey, providerNS string, err error) {
+func (c *ToeholdContext) loadToeholdSSH(ctx context.Context) (secretName, publicKey, providerNS string, err error) {
+	toehold := c.Toehold
 	providerNS = toehold.Spec.Provider.Namespace
 	if providerNS == "" {
 		providerNS = toehold.Namespace
 	}
 	provider := &api.Provider{}
-	err = r.Get(ctx, client.ObjectKey{
+	err = c.Client.Get(ctx, client.ObjectKey{
 		Namespace: providerNS,
 		Name:      toehold.Spec.Provider.Name,
 	}, provider)
@@ -50,7 +51,7 @@ func (r Reconciler) loadToeholdSSH(ctx context.Context, toehold *api.ToeholdTemp
 		return
 	}
 	secret := &core.Secret{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: providerNS, Name: secretName}, secret)
+	err = c.Client.Get(ctx, client.ObjectKey{Namespace: providerNS, Name: secretName}, secret)
 	if err != nil {
 		err = liberr.Wrap(err, "secret", secretName)
 		return
@@ -64,28 +65,29 @@ func (r Reconciler) loadToeholdSSH(ctx context.Context, toehold *api.ToeholdTemp
 	return
 }
 
-func (r Reconciler) setOwner(toehold *api.ToeholdTemplate, obj meta.Object) error {
-	if r.Scheme == nil {
+func (c *ToeholdContext) setOwner(obj meta.Object) error {
+	if c.Scheme == nil {
 		return liberr.New("controller scheme is not configured")
 	}
-	return controllerutil.SetControllerReference(toehold, obj, r.Scheme)
+	return controllerutil.SetControllerReference(c.Toehold, obj, c.Scheme)
 }
 
-func (r Reconciler) ensureServiceAccount(ctx context.Context, toehold *api.ToeholdTemplate) error {
+func (c *ToeholdContext) ensureServiceAccount(ctx context.Context) error {
 	sa := &core.ServiceAccount{
 		ObjectMeta: meta.ObjectMeta{
 			Name:      saName,
-			Namespace: toehold.TargetNS(),
+			Namespace: c.Toehold.TargetNS(),
 		},
 	}
-	err := r.Create(ctx, sa)
+	err := c.Client.Create(ctx, sa)
 	if err != nil && !k8serr.IsAlreadyExists(err) {
 		return liberr.Wrap(err)
 	}
 	return nil
 }
 
-func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdTemplate, pctx *providerContext, sshPublicKey string) error {
+func (c *ToeholdContext) ensureCredsSecret(ctx context.Context, pctx *providerContext, sshPublicKey string) error {
+	toehold := c.Toehold
 	name := toehold.Name + credsSecretSuffix
 	ns := toehold.TargetNS()
 	data := map[string]string{
@@ -98,7 +100,7 @@ func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdT
 		settings.ToeholdBaseContainerImage:  toehold.Spec.BaseDisk.ContainerImage,
 	}
 	secret := &core.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, secret)
+	err := c.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, secret)
 	if k8serr.IsNotFound(err) {
 		secret = &core.Secret{
 			ObjectMeta: meta.ObjectMeta{
@@ -108,24 +110,25 @@ func (r Reconciler) ensureCredsSecret(ctx context.Context, toehold *api.ToeholdT
 			Type:       core.SecretTypeOpaque,
 			StringData: data,
 		}
-		if err = r.setOwner(toehold, secret); err != nil {
+		if err = c.setOwner(secret); err != nil {
 			return liberr.Wrap(err)
 		}
-		return liberr.Wrap(r.Create(ctx, secret))
+		return liberr.Wrap(c.Client.Create(ctx, secret))
 	}
 	if err != nil {
 		return liberr.Wrap(err)
 	}
 	secret.StringData = data
-	if err = r.setOwner(toehold, secret); err != nil {
+	if err = c.setOwner(secret); err != nil {
 		return liberr.Wrap(err)
 	}
-	return liberr.Wrap(r.Update(ctx, secret))
+	return liberr.Wrap(c.Client.Update(ctx, secret))
 }
 
-func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemplate, sshSecretName, sshPublicKey, sshProviderNS string) (*core.Pod, error) {
+func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshPublicKey, sshProviderNS string) (*core.Pod, error) {
+	toehold := c.Toehold
 	podList := &core.PodList{}
-	if err := r.List(ctx, podList, &client.ListOptions{
+	if err := c.Client.List(ctx, podList, &client.ListOptions{
 		Namespace:     toehold.TargetNS(),
 		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
 	}); err != nil {
@@ -136,16 +139,16 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		pod := &podList.Items[i]
 		switch pod.Status.Phase {
 		case core.PodFailed:
-			if err := r.Delete(ctx, pod); err != nil && !k8serr.IsNotFound(err) {
+			if err := c.Client.Delete(ctx, pod); err != nil && !k8serr.IsNotFound(err) {
 				return nil, liberr.Wrap(err)
 			}
 			continue
 		case core.PodPending, core.PodRunning, core.PodSucceeded:
 			if toehold.UID != "" && toehold.Namespace == pod.Namespace && !meta.IsControlledBy(pod, toehold) {
-				if err := r.setOwner(toehold, pod); err != nil {
+				if err := c.setOwner(pod); err != nil {
 					return nil, liberr.Wrap(err)
 				}
-				if err := r.Update(ctx, pod); err != nil {
+				if err := c.Client.Update(ctx, pod); err != nil {
 					return nil, liberr.Wrap(err)
 				}
 			}
@@ -153,7 +156,7 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		}
 	}
 
-	localSSHSecret, err := r.ensureSSHPublicSecret(ctx, toehold, sshSecretName, sshPublicKey, sshProviderNS)
+	localSSHSecret, err := c.ensureSSHPublicSecret(ctx, sshSecretName, sshPublicKey, sshProviderNS)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +283,7 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 			ns = toehold.TargetNS()
 		}
 		nad := &k8snet.NetworkAttachmentDefinition{}
-		err = r.Get(ctx, client.ObjectKey{
+		err = c.Client.Get(ctx, client.ObjectKey{
 			Namespace: ns,
 			Name:      toehold.Spec.TransferNetwork.Name,
 		}, nad)
@@ -297,18 +300,19 @@ func (r Reconciler) ensureBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		}
 	}
 
-	if err = r.setOwner(toehold, pod); err != nil {
+	if err = c.setOwner(pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
-	if err = r.Create(ctx, pod); err != nil {
+	if err = c.Client.Create(ctx, pod); err != nil {
 		return nil, liberr.Wrap(err)
 	}
 	return pod, nil
 }
 
-func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemplate) error {
+func (c *ToeholdContext) deleteBuildPod(ctx context.Context) error {
+	toehold := c.Toehold
 	podList := &core.PodList{}
-	err := r.List(ctx, podList, &client.ListOptions{
+	err := c.Client.List(ctx, podList, &client.ListOptions{
 		Namespace:     toehold.TargetNS(),
 		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
 	})
@@ -316,7 +320,7 @@ func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 		return liberr.Wrap(err)
 	}
 	for i := range podList.Items {
-		if err = r.Delete(ctx, &podList.Items[i]); err != nil && !k8serr.IsNotFound(err) {
+		if err = c.Client.Delete(ctx, &podList.Items[i]); err != nil && !k8serr.IsNotFound(err) {
 			return liberr.Wrap(err)
 		}
 	}
@@ -326,14 +330,14 @@ func (r Reconciler) deleteBuildPod(ctx context.Context, toehold *api.ToeholdTemp
 // ensureSSHPublicSecret copies the provider's toehold SSH public key into the
 // build namespace when needed. Pods can only mount secrets from their own namespace.
 // secretName/publicKey/providerNS come from loadToeholdSSH.
-func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.ToeholdTemplate, secretName, publicKey, providerNS string) (string, error) {
-	targetNS := toehold.TargetNS()
+func (c *ToeholdContext) ensureSSHPublicSecret(ctx context.Context, secretName, publicKey, providerNS string) (string, error) {
+	targetNS := c.Toehold.TargetNS()
 	if targetNS == providerNS {
 		return secretName, nil
 	}
 
 	target := &core.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: secretName}, target)
+	err := c.Client.Get(ctx, client.ObjectKey{Namespace: targetNS, Name: secretName}, target)
 	if k8serr.IsNotFound(err) {
 		target = &core.Secret{
 			ObjectMeta: meta.ObjectMeta{
@@ -345,10 +349,10 @@ func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.Toeh
 				"public-key": []byte(publicKey),
 			},
 		}
-		if err = r.setOwner(toehold, target); err != nil {
+		if err = c.setOwner(target); err != nil {
 			return "", liberr.Wrap(err)
 		}
-		return secretName, liberr.Wrap(r.Create(ctx, target))
+		return secretName, liberr.Wrap(c.Client.Create(ctx, target))
 	}
 	if err != nil {
 		return "", liberr.Wrap(err)
@@ -356,10 +360,10 @@ func (r Reconciler) ensureSSHPublicSecret(ctx context.Context, toehold *api.Toeh
 	target.Data = map[string][]byte{
 		"public-key": []byte(publicKey),
 	}
-	if err = r.setOwner(toehold, target); err != nil {
+	if err = c.setOwner(target); err != nil {
 		return "", liberr.Wrap(err)
 	}
-	return secretName, liberr.Wrap(r.Update(ctx, target))
+	return secretName, liberr.Wrap(c.Client.Update(ctx, target))
 }
 
 func cpuCount(toehold *api.ToeholdTemplate) int32 {

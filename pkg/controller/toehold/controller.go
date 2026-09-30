@@ -127,8 +127,8 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		return
 	}
 
-	runner := &Runner{ctx: ctx, r: &r, toehold: toehold}
-	done, pipeErr := runner.Run()
+	runner := &Runner{context: &ToeholdContext{Client: r.Client, Scheme: r.Scheme, Toehold: toehold}}
+	done, pipeErr := runner.Run(ctx)
 	if pipeErr != nil {
 		r.fail(toehold, pipeErr)
 	} else if done {
@@ -183,8 +183,8 @@ func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) 
 	if !controllerutil.ContainsFinalizer(toehold, api.ToeholdTemplateFinalizer) {
 		return reconcile.Result{}, nil
 	}
-	pctx, err := r.providerContext(ctx, toehold)
-	if err == nil {
+	tc := &ToeholdContext{Client: r.Client, Scheme: r.Scheme, Toehold: toehold}
+	if pctx, err := tc.providerContext(ctx); err == nil {
 		defer pctx.Client.Close(ctx)
 		if !toehold.Spec.RetainTemplateEnabled() {
 			if ref, findErr := pctx.Client.FindVM(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName, true); findErr == nil {
@@ -192,7 +192,7 @@ func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) 
 			}
 		}
 	}
-	if err := r.deleteBuildPod(ctx, toehold); err != nil {
+	if err := tc.deleteBuildPod(ctx); err != nil {
 		return reconcile.Result{}, err
 	}
 	controllerutil.RemoveFinalizer(toehold, api.ToeholdTemplateFinalizer)

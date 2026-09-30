@@ -13,144 +13,154 @@ import (
 	vimtypes "github.com/vmware/govmomi/vim25/types"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Runner drives a ToeholdTemplate to a ready vCenter template. It holds no
 // state of its own: every pass reads where it got to from the status and
 // leaves the next stage behind — same shape as the copy-appliance runners.
+// ToeholdContext is the template's cluster client and CR. Runners read and
+// write status through the same object the reconciler persists — same shape as
+// copyappliance.ApplianceContext (k8s/CR half; vSphere is opened per stage).
+type ToeholdContext struct {
+	Client  client.Client
+	Scheme  *runtime.Scheme
+	Toehold *api.ToeholdTemplate
+}
+
 type Runner struct {
-	ctx     context.Context
-	r       *Reconciler
-	toehold *api.ToeholdTemplate
+	context *ToeholdContext
 }
 
 // Run runs the current stage once. A finished stage sets Status.Stage to its
 // successor; the next reconcile picks it up. done is true only when the
 // Finished stage has been reached.
-func (run *Runner) Run() (done bool, err error) {
-	sshSecretName, sshPublicKey, sshProviderNS, err := run.r.loadToeholdSSH(run.ctx, run.toehold)
+func (run *Runner) Run(ctx context.Context) (done bool, err error) {
+	toehold := run.context.Toehold
+	sshSecretName, sshPublicKey, sshProviderNS, err := run.context.loadToeholdSSH(ctx)
 	if err != nil {
 		return false, err
 	}
-	run.toehold.Status.Template.DiskHash = version.DiskHash(run.toehold.Spec, sshPublicKey)
-	run.toehold.Status.Template.ConfigHash = version.ConfigHash(run.toehold.Spec)
-	run.toehold.Status.Template.BaseContainerImage = run.toehold.Spec.BaseDisk.ContainerImage
-	if run.toehold.Status.Stage == "" || run.toehold.Status.Stage == api.StageEnsurePrerequisites {
-		run.toehold.Status.Stage = api.StageEnsureTemplate
+	toehold.Status.Template.DiskHash = version.DiskHash(toehold.Spec, sshPublicKey)
+	toehold.Status.Template.ConfigHash = version.ConfigHash(toehold.Spec)
+	toehold.Status.Template.BaseContainerImage = toehold.Spec.BaseDisk.ContainerImage
+	if toehold.Status.Stage == "" || toehold.Status.Stage == api.StageEnsurePrerequisites {
+		toehold.Status.Stage = api.StageEnsureTemplate
 	}
-	run.toehold.Status.Phase = api.ToeholdTemplatePhaseRunning
+	toehold.Status.Phase = api.ToeholdTemplatePhaseRunning
 
 	log.Info("toehold template stage",
-		"toeholdTemplate", run.toehold.Name,
-		"namespace", run.toehold.Namespace,
-		"stage", run.toehold.Status.Stage,
-		"phase", run.toehold.Status.Phase,
+		"toeholdTemplate", toehold.Name,
+		"namespace", toehold.Namespace,
+		"stage", toehold.Status.Stage,
+		"phase", toehold.Status.Phase,
 	)
 
-	switch run.toehold.Status.Stage {
+	switch toehold.Status.Stage {
 	case api.StageToeholdFinished:
-		run.toehold.Status.Phase = api.ToeholdTemplatePhaseSucceeded
+		toehold.Status.Phase = api.ToeholdTemplatePhaseSucceeded
 		now := meta.Now()
-		run.toehold.Status.CompletionTime = &now
+		toehold.Status.CompletionTime = &now
 		return true, nil
 	case api.StageEnsureTemplate:
-		next, ensureErr := run.ensureTemplate(sshSecretName, sshPublicKey, sshProviderNS)
+		next, ensureErr := run.ensureTemplate(ctx, sshSecretName, sshPublicKey, sshProviderNS)
 		if ensureErr != nil {
 			return false, ensureErr
 		}
-		run.toehold.Status.Stage = next
+		toehold.Status.Stage = next
 	case api.StageBuildAndUpload:
-		built, buildErr := run.buildAndUpload(sshSecretName, sshPublicKey, sshProviderNS)
+		built, buildErr := run.buildAndUpload(ctx, sshSecretName, sshPublicKey, sshProviderNS)
 		if buildErr != nil {
 			return false, buildErr
 		}
 		if built {
-			run.toehold.Status.Stage = api.StageToeholdFinished
+			toehold.Status.Stage = api.StageToeholdFinished
 		}
 	default:
-		return false, liberr.New(fmt.Sprintf("unknown toehold stage %q", run.toehold.Status.Stage))
+		return false, liberr.New(fmt.Sprintf("unknown toehold stage %q", toehold.Status.Stage))
 	}
 	return false, nil
 }
 
-func (run *Runner) ensureTemplate(sshSecretName, sshPublicKey, sshProviderNS string) (next api.ToeholdTemplateStage, err error) {
-	if err = run.r.ensureServiceAccount(run.ctx, run.toehold); err != nil {
+func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicKey, sshProviderNS string) (next api.ToeholdTemplateStage, err error) {
+	if err = run.context.ensureServiceAccount(ctx); err != nil {
 		return
 	}
-	pctx, err := run.r.providerContext(run.ctx, run.toehold)
+	pctx, err := run.context.providerContext(ctx)
 	if err != nil {
 		return
 	}
-	defer pctx.Client.Close(run.ctx)
+	defer pctx.Client.Close(ctx)
 
-	if _, err = run.r.ensureSSHPublicSecret(run.ctx, run.toehold, sshSecretName, sshPublicKey, sshProviderNS); err != nil {
+	if _, err = run.context.ensureSSHPublicSecret(ctx, sshSecretName, sshPublicKey, sshProviderNS); err != nil {
 		return
 	}
-	if err = run.r.ensureCredsSecret(run.ctx, run.toehold, pctx, sshPublicKey); err != nil {
+	if err = run.context.ensureCredsSecret(ctx, pctx, sshPublicKey); err != nil {
 		return
 	}
-	if err = pctx.Client.ValidateInventory(run.ctx, toeholdvsphere.InventoryPreflight{
-		Folder:    run.toehold.Spec.Folder,
-		Datastore: run.toehold.Spec.Datastore,
-		Network:   run.toehold.Spec.Network,
+	if err = pctx.Client.ValidateInventory(ctx, toeholdvsphere.InventoryPreflight{
+		Folder:    run.context.Toehold.Spec.Folder,
+		Datastore: run.context.Toehold.Spec.Datastore,
+		Network:   run.context.Toehold.Spec.Network,
 	}); err != nil {
 		return
 	}
 
-	diskHash := run.toehold.Status.Template.DiskHash
-	configHash := run.toehold.Status.Template.ConfigHash
+	diskHash := run.context.Toehold.Status.Template.DiskHash
+	configHash := run.context.Toehold.Status.Template.ConfigHash
 
-	if run.toehold.RebuildRequested() {
-		_ = pctx.Client.DestroyIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
-		run.toehold.Status.RebuildRequestedAt = run.toehold.Annotations[api.AnnRebuildRequestedAt]
-		return run.requireBuild(pctx)
+	if run.context.Toehold.RebuildRequested() {
+		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
+		run.context.Toehold.Status.RebuildRequestedAt = run.context.Toehold.Annotations[api.AnnRebuildRequestedAt]
+		return run.requireBuild(ctx, pctx)
 	}
-	ref, err := pctx.Client.FindVM(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName, true)
+	ref, err := pctx.Client.FindVM(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName, true)
 	if err != nil {
-		_ = pctx.Client.DestroyIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
-		return run.requireBuild(pctx)
+		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
+		return run.requireBuild(ctx, pctx)
 	}
-	anns, err := pctx.Client.GetAnnotationMap(run.ctx, ref.VM)
+	anns, err := pctx.Client.GetAnnotationMap(ctx, ref.VM)
 	if err != nil {
 		return
 	}
 	storedDisk, storedConfig := anns[toeholdvsphere.DiskHashAnnotation], anns[toeholdvsphere.ConfigHashAnnotation]
 	if storedDisk == "" || storedDisk != diskHash {
-		_ = pctx.Client.DestroyIfExists(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName)
-		run.toehold.Status.SetCondition(libcnd.Condition{
+		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
+		run.context.Toehold.Status.SetCondition(libcnd.Condition{
 			Type:     api.ToeholdTemplateRebuildRequired,
 			Status:   libcnd.True,
 			Category: libcnd.Advisory,
 			Message:  "Template disk hash mismatch; rebuild required.",
 		})
-		return run.requireBuild(pctx)
+		return run.requireBuild(ctx, pctx)
 	}
 
-	run.toehold.Status.Template.Reused = true
-	run.toehold.Status.Template.Moref = ref.Moref
+	run.context.Toehold.Status.Template.Reused = true
+	run.context.Toehold.Status.Template.Moref = ref.Moref
 	if storedConfig != configHash {
 		spec := vimtypes.VirtualMachineConfigSpec{
-			NumCPUs:  cpuCount(run.toehold),
-			MemoryMB: int64(memoryMiB(run.toehold)),
+			NumCPUs:  cpuCount(run.context.Toehold),
+			MemoryMB: int64(memoryMiB(run.context.Toehold)),
 		}
-		task, reconfErr := ref.VM.Reconfigure(run.ctx, spec)
+		task, reconfErr := ref.VM.Reconfigure(ctx, spec)
 		if reconfErr != nil {
 			return "", liberr.Wrap(reconfErr, "reconfigure template hardware")
 		}
-		if err = task.Wait(run.ctx); err != nil {
+		if err = task.Wait(ctx); err != nil {
 			return "", liberr.Wrap(err, "reconfigure template hardware task")
 		}
-		if err = pctx.Client.SetAnnotationMap(run.ctx, ref.VM, map[string]string{
+		if err = pctx.Client.SetAnnotationMap(ctx, ref.VM, map[string]string{
 			toeholdvsphere.DiskHashAnnotation:           diskHash,
 			toeholdvsphere.ConfigHashAnnotation:         configHash,
-			toeholdvsphere.BaseContainerImageAnnotation: run.toehold.Spec.BaseDisk.ContainerImage,
-			toeholdvsphere.ImportedAtAnnotation:         run.toehold.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
+			toeholdvsphere.BaseContainerImageAnnotation: run.context.Toehold.Spec.BaseDisk.ContainerImage,
+			toeholdvsphere.ImportedAtAnnotation:         run.context.Toehold.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
 		}); err != nil {
 			return "", fmt.Errorf("stamp template %q moref=%s: %w", ref.Name, ref.Moref, err)
 		}
 	}
-	run.toehold.Status.SetCondition(libcnd.Condition{
+	run.context.Toehold.Status.SetCondition(libcnd.Condition{
 		Type:     api.ToeholdTemplateUpToDate,
 		Status:   libcnd.True,
 		Category: libcnd.Advisory,
@@ -159,15 +169,15 @@ func (run *Runner) ensureTemplate(sshSecretName, sshPublicKey, sshProviderNS str
 	return api.StageToeholdFinished, nil
 }
 
-func (run *Runner) requireBuild(pctx *providerContext) (api.ToeholdTemplateStage, error) {
-	run.toehold.Status.Template.Reused = false
-	if err := run.r.deleteBuildPod(run.ctx, run.toehold); err != nil {
+func (run *Runner) requireBuild(ctx context.Context, pctx *providerContext) (api.ToeholdTemplateStage, error) {
+	run.context.Toehold.Status.Template.Reused = false
+	if err := run.context.deleteBuildPod(ctx); err != nil {
 		return "", err
 	}
-	if err := pctx.Client.ValidateInventory(run.ctx, toeholdvsphere.InventoryPreflight{
-		Folder:       run.toehold.Spec.Folder,
-		Datastore:    run.toehold.Spec.Datastore,
-		Network:      run.toehold.Spec.Network,
+	if err := pctx.Client.ValidateInventory(ctx, toeholdvsphere.InventoryPreflight{
+		Folder:       run.context.Toehold.Spec.Folder,
+		Datastore:    run.context.Toehold.Spec.Datastore,
+		Network:      run.context.Toehold.Spec.Network,
 		MinFreeBytes: toeholdvsphere.DefaultTemplateDatastoreFreeBytes,
 	}); err != nil {
 		return "", err
@@ -177,34 +187,34 @@ func (run *Runner) requireBuild(pctx *providerContext) (api.ToeholdTemplateStage
 
 // buildAndUpload returns true once the build pod has succeeded and the
 // template is stamped; false means still waiting.
-func (run *Runner) buildAndUpload(sshSecretName, sshPublicKey, sshProviderNS string) (done bool, err error) {
-	pod, err := run.r.ensureBuildPod(run.ctx, run.toehold, sshSecretName, sshPublicKey, sshProviderNS)
+func (run *Runner) buildAndUpload(ctx context.Context, sshSecretName, sshPublicKey, sshProviderNS string) (done bool, err error) {
+	pod, err := run.context.ensureBuildPod(ctx, sshSecretName, sshPublicKey, sshProviderNS)
 	if err != nil {
 		return false, err
 	}
-	run.toehold.Status.BuildPod = &core.ObjectReference{
+	run.context.Toehold.Status.BuildPod = &core.ObjectReference{
 		Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name,
 	}
 	if pod.Status.Phase == core.PodFailed {
 		return false, liberr.New("toehold build pod failed")
 	}
 	if pod.Status.Phase != core.PodSucceeded {
-		run.toehold.Status.Message = "Waiting for toehold build pod"
+		run.context.Toehold.Status.Message = "Waiting for toehold build pod"
 		return false, nil
 	}
-	pctx, err := run.r.providerContext(run.ctx, run.toehold)
+	pctx, err := run.context.providerContext(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer pctx.Client.Close(run.ctx)
-	ref, err := pctx.Client.FindVM(run.ctx, run.toehold.Spec.Folder, run.toehold.Spec.TemplateName, true)
+	defer pctx.Client.Close(ctx)
+	ref, err := pctx.Client.FindVM(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName, true)
 	if err != nil {
-		return false, fmt.Errorf("find template %q after build: %w", run.toehold.Spec.TemplateName, err)
+		return false, fmt.Errorf("find template %q after build: %w", run.context.Toehold.Spec.TemplateName, err)
 	}
 	now := meta.Now()
-	run.toehold.Status.Template.ImportedAt = &now
-	run.toehold.Status.Template.Moref = ref.Moref
-	run.toehold.Status.Template.Reused = false
+	run.context.Toehold.Status.Template.ImportedAt = &now
+	run.context.Toehold.Status.Template.Moref = ref.Moref
+	run.context.Toehold.Status.Template.Reused = false
 	// ImportOVF already stamps disk/config hashes before mark-as-template.
 	return true, nil
 }
@@ -215,9 +225,10 @@ type providerContext struct {
 	Client   *toeholdvsphere.Client
 }
 
-func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTemplate) (*providerContext, error) {
+func (c *ToeholdContext) providerContext(ctx context.Context) (*providerContext, error) {
+	toehold := c.Toehold
 	provider := &api.Provider{}
-	err := r.Get(ctx, types.NamespacedName{
+	err := c.Client.Get(ctx, types.NamespacedName{
 		Namespace: toehold.Spec.Provider.Namespace,
 		Name:      toehold.Spec.Provider.Name,
 	}, provider)
@@ -225,7 +236,7 @@ func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTem
 		return nil, err
 	}
 	secret := &core.Secret{}
-	err = r.Get(ctx, types.NamespacedName{
+	err = c.Client.Get(ctx, types.NamespacedName{
 		Namespace: provider.Spec.Secret.Namespace,
 		Name:      provider.Spec.Secret.Name,
 	}, secret)
@@ -243,9 +254,9 @@ func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTem
 	if err != nil {
 		return nil, err
 	}
-	client, err := toeholdvsphere.NewClient(gc)
+	vsClient, err := toeholdvsphere.NewClient(gc)
 	if err != nil {
 		return nil, err
 	}
-	return &providerContext{Provider: provider, Secret: secret, Client: client}, nil
+	return &providerContext{Provider: provider, Secret: secret, Client: vsClient}, nil
 }
