@@ -16,17 +16,14 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
 
-// A pass walks as many steps as it can, so the phase it records is not the
-// phase it started on. Recording the entry phase instead would send the next
-// pass back to a step that is already done, and would tell an operator the
-// appliance is waiting on something it is not.
-func TestRunRecordsTheStepItStoppedIn(t *testing.T) {
+// A finished phase advances Status.Phase so the next reconcile does not
+// re-run work that already completed.
+func TestRunAdvancesPhaseWhenStepFinishes(t *testing.T) {
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public)
 	ac := sshContext(t, private, server.addr)
-	// The appliance answers every command, so it reads as already installed and
-	// running. Nothing is announcing exports, so the step after it cannot
-	// finish, and that is where the pass has to stop.
+	// The appliance answers every command, so Configure finishes and hands off
+	// to WaitForExports.
 	ac.Appliance.Status.ExporterImage = testLoadedImage
 	ac.Appliance.Status.Phase = PhaseConfigure
 	runner := DeployRunner{context: ac}
@@ -36,8 +33,7 @@ func TestRunRecordsTheStepItStoppedIn(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if ac.Appliance.Status.Phase != PhaseWaitForExports {
-		t.Errorf("phase = %q, want %q: the pass configured the appliance and stopped waiting for its exports",
-			ac.Appliance.Status.Phase, PhaseWaitForExports)
+		t.Errorf("phase = %q, want %q", ac.Appliance.Status.Phase, PhaseWaitForExports)
 	}
 }
 
@@ -63,34 +59,6 @@ func TestRunSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
 	}
 	if ran := server.Ran(); len(ran) != 0 {
 		t.Errorf("ran %v, want the appliance left alone until it has an image", ran)
-	}
-}
-
-// The pipeline is the order the pass walks in, so it has to agree with the
-// order execute implements. LoadImage before Configure is the part that has
-// already been got wrong once, and the shim above is what it cost.
-func TestDeployItinerary(t *testing.T) {
-	runner := DeployRunner{context: &ApplianceContext{Appliance: testAppliance()}}
-
-	got := phaseNames(t, runner.Itinerary())
-
-	want := []string{
-		PhaseCloneVM,
-		PhaseWaitForClone,
-		PhaseWaitForNetwork,
-		PhaseLoadImage,
-		PhaseConfigure,
-		PhaseWaitForExports,
-		PhaseDeployCompleted,
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("pipeline = %v, want %v", got, want)
-	}
-	// The failure phase is not a step the walk arrives at; it is where the walk
-	// ends when a step errors. A pipeline that contains it would hand it back
-	// as the step after DeployCompleted.
-	if slices.Contains(got, PhaseDeployFailed) {
-		t.Errorf("pipeline %v walks to %q", got, PhaseDeployFailed)
 	}
 }
 

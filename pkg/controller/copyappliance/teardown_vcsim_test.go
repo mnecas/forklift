@@ -107,6 +107,10 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 		}
 		phases = append(phases, status.Phase)
 		if status.Phase == PhaseTeardownCompleted || status.Phase == PhaseTeardownFailed {
+			if status.Phase == PhaseTeardownCompleted && status.MoRef != "" {
+				// TeardownCompleted clears MoRef on the pass that runs it.
+				continue
+			}
 			return
 		}
 	}
@@ -225,12 +229,13 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("power off the simulated VM: %v", err)
 		}
 
-		done, err := runner.execute(ctx, PhasePowerOff)
+		status.Phase = PhasePowerOff
+		err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("PowerOff: %v", err)
 		}
-		if !done {
-			t.Fatal("PowerOff should finish in one pass when the VM is already off")
+		if status.Phase != PhaseWaitForPowerOff {
+			t.Fatalf("phase = %q, want %q", status.Phase, PhaseWaitForPowerOff)
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM that is already off started task %q", status.TaskRef)
@@ -244,12 +249,13 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("detach the disks: %v", err)
 		}
-		done, err = runner.execute(ctx, PhaseDetachDisks)
+		status.Phase = PhaseDetachDisks
+		err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("DetachDisks: %v", err)
 		}
-		if !done {
-			t.Fatal("DetachDisks should finish in one pass when there are no disks")
+		if status.Phase != PhaseWaitForDetachDisks {
+			t.Fatalf("phase = %q, want %q", status.Phase, PhaseWaitForDetachDisks)
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM with no disks started task %q", status.TaskRef)

@@ -1,41 +1,10 @@
 package copyappliance
 
 import (
-	"slices"
 	"testing"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
-
-// The pipeline is the order the pass walks in, so it has to agree with the
-// order execute implements. The failure phase is in no pipeline: it is not a
-// step the walk arrives at, it is where the walk ends when a step errors.
-func TestTeardownItinerary(t *testing.T) {
-	t.Run("the pipeline walks every VM step then completed", func(t *testing.T) {
-		got := phaseNames(t, teardownFor(testAppliance()).Itinerary())
-
-		want := []string{
-			PhasePowerOff,
-			PhaseWaitForPowerOff,
-			PhaseDetachDisks,
-			PhaseWaitForDetachDisks,
-			PhaseDestroyVM,
-			PhaseWaitForDestroyVM,
-			PhaseTeardownCompleted,
-		}
-		if !slices.Equal(got, want) {
-			t.Errorf("pipeline = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("the failure phase is not a step", func(t *testing.T) {
-		got := phaseNames(t, teardownFor(testAppliance()).Itinerary())
-
-		if slices.Contains(got, PhaseTeardownFailed) {
-			t.Errorf("pipeline %v walks to %q", got, PhaseTeardownFailed)
-		}
-	})
-}
 
 func teardownFor(appliance *api.CopyAppliance) *TeardownRunner {
 	return &TeardownRunner{context: &ApplianceContext{Appliance: appliance}}
