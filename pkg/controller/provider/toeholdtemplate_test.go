@@ -35,7 +35,6 @@ func syncProvider() *api.Provider {
 // syncTemplate is a toehold template as someone else created it: the fields the
 // provider dictates are empty or wrong, and the ones it does not are set.
 func syncTemplate() *api.ToeholdTemplate {
-	retain := false
 	return &api.ToeholdTemplate{
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
 		Spec: api.ToeholdTemplateSpec{
@@ -43,7 +42,6 @@ func syncTemplate() *api.ToeholdTemplate {
 			TargetNamespace: "toehold-builds",
 			TransferNetwork: &core.ObjectReference{Name: "migration-net", Namespace: "openshift-mtv"},
 			NodeSelector:    map[string]string{"kubernetes.io/arch": "amd64"},
-			RetainTemplate:  &retain,
 		},
 	}
 }
@@ -68,8 +66,8 @@ func getTemplate(t *testing.T, s *toeholdSync) *api.ToeholdTemplate {
 	return found
 }
 
-// The spec has eleven fields and the provider dictates eight of them. Replacing
-// the whole spec wipes the other three, which nothing else ever writes back.
+// The spec has fields the provider dictates and fields it does not. Replacing
+// the whole spec would wipe the ones nothing else ever writes back.
 func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	withSyncSettings(t)
 	provider := syncProvider()
@@ -89,11 +87,8 @@ func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	if spec.NodeSelector["kubernetes.io/arch"] != "amd64" {
 		t.Errorf("NodeSelector = %v, want it left alone", spec.NodeSelector)
 	}
-	if spec.RetainTemplate == nil || *spec.RetainTemplate {
-		t.Errorf("RetainTemplate = %v, want the false it was created with", spec.RetainTemplate)
-	}
 
-	// The eight the provider does own.
+	// The fields the provider does own.
 	if spec.Provider.Name != "vcenter" || spec.Provider.Namespace != "forklift" {
 		t.Errorf("Provider = %v, want the provider", spec.Provider)
 	}

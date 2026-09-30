@@ -2208,11 +2208,6 @@ func (in *ToeholdTemplateSpec) DeepCopyInto(out *ToeholdTemplateSpec) {
 			(*out)[key] = val
 		}
 	}
-	if in.RetainTemplate != nil {
-		in, out := &in.RetainTemplate, &out.RetainTemplate
-		*out = new(bool)
-		**out = **in
-	}
 	out.Resources = in.Resources
 }
 

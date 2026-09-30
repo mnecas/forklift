@@ -22,7 +22,8 @@ import (
 const (
 	credsSecretSuffix = "-vcenter-creds"
 	labelToehold      = "forklift.konveyor.io/toehold"
-	saName            = "toehold-builder"
+	qemuUser          = int64(107)
+	qemuGroup         = int64(107)
 )
 
 // loadToeholdSSH reads the provider's toehold SSH public key once. Returns the
@@ -70,20 +71,6 @@ func (c *ToeholdContext) setOwner(obj meta.Object) error {
 		return liberr.New("controller scheme is not configured")
 	}
 	return controllerutil.SetControllerReference(c.Toehold, obj, c.Scheme)
-}
-
-func (c *ToeholdContext) ensureServiceAccount(ctx context.Context) error {
-	sa := &core.ServiceAccount{
-		ObjectMeta: meta.ObjectMeta{
-			Name:      saName,
-			Namespace: c.Toehold.TargetNS(),
-		},
-	}
-	err := c.Client.Create(ctx, sa)
-	if err != nil && !k8serr.IsAlreadyExists(err) {
-		return liberr.Wrap(err)
-	}
-	return nil
 }
 
 func (c *ToeholdContext) ensureCredsSecret(ctx context.Context, pctx *providerContext, sshPublicKey string) error {
@@ -185,10 +172,19 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 	if toehold.Spec.Resources.MemoryMiB > 0 {
 		memMiB = toehold.Spec.Resources.MemoryMiB
 	}
-	privileged := true
-	runAsUser := int64(0)
+	nonRoot := true
+	allowPrivilegeEscalation := false
+	user, fsGroup := qemuUser, qemuGroup
+	seccompProfile := core.SeccompProfile{Type: core.SeccompProfileTypeRuntimeDefault}
+	if settings.Settings.OpenShift {
+		unshare := "profiles/unshare.json"
+		seccompProfile = core.SeccompProfile{
+			Type:             core.SeccompProfileTypeLocalhost,
+			LocalhostProfile: &unshare,
+		}
+	}
 
-	// Content hash and base image come from the creds secret via EnvFrom.
+	// Same security model as virt-v2v conversion pods (non-root + unshare, KVM device).
 	pod := &core.Pod{
 		ObjectMeta: meta.ObjectMeta{
 			GenerateName: toehold.Name + "-build-",
@@ -199,10 +195,14 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 		},
 		Spec: core.PodSpec{
 			RestartPolicy:         core.RestartPolicyNever,
-			ServiceAccountName:    saName,
 			NodeSelector:          nodeSelector,
 			ActiveDeadlineSeconds: &activeDeadline,
-			SecurityContext:       &core.PodSecurityContext{SELinuxOptions: &core.SELinuxOptions{Type: "unconfined_t"}},
+			SecurityContext: &core.PodSecurityContext{
+				FSGroup:        &fsGroup,
+				RunAsUser:      &user,
+				RunAsNonRoot:   &nonRoot,
+				SeccompProfile: &seccompProfile,
+			},
 			Volumes: []core.Volume{
 				{
 					Name: "base-disk",
@@ -235,9 +235,8 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 					Image:           builderImage,
 					ImagePullPolicy: core.PullAlways,
 					SecurityContext: &core.SecurityContext{
-						Privileged:      &privileged,
-						RunAsUser:       &runAsUser,
-						SELinuxOptions:  &core.SELinuxOptions{Type: "unconfined_t"},
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+						Capabilities:             &core.Capabilities{Drop: []core.Capability{"ALL"}},
 					},
 					EnvFrom: []core.EnvFromSource{{SecretRef: &core.SecretEnvSource{
 						LocalObjectReference: core.LocalObjectReference{Name: toehold.Name + credsSecretSuffix},

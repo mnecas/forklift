@@ -135,6 +135,13 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 		}
 		r.context.Appliance.Status.Exports = nil
 		r.NextPhase()
+		// Ready must be set on this pass: the reconciler idles on Released.
+		r.context.Appliance.Status.SetCondition(libcnd.Condition{
+			Type:     libcnd.Ready,
+			Status:   libcnd.True,
+			Category: libcnd.Required,
+			Message:  "Copy appliance disks have been released.",
+		})
 	case PhaseAttachDisks:
 		attachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		attachTask, attachErr := r.context.AttachDisks(ctx, attachVM)
@@ -188,6 +195,14 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 		}
 		if done {
 			r.NextPhase()
+			// Ready must be set on this pass: the reconciler idles on
+			// DeployCompleted, so the case below would never run.
+			r.context.Appliance.Status.SetCondition(libcnd.Condition{
+				Type:     libcnd.Ready,
+				Status:   libcnd.True,
+				Category: libcnd.Required,
+				Message:  "Copy appliance disk export has succeeded.",
+			})
 		}
 	case PhaseReleased, PhaseDeployCompleted:
 		msg := "Copy appliance disk export has succeeded."
