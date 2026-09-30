@@ -275,7 +275,7 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 	if !active {
-		sErr := orch.systemctl("start")
+		sErr := orch.Start()
 		if sErr != nil {
 			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
 				"address", address)

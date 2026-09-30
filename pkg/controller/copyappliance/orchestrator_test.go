@@ -173,9 +173,9 @@ func TestOrchestratorInstall(t *testing.T) {
 
 func TestOrchestratorRestart(t *testing.T) {
 	_, server, orch := orchestratorLogin(t)
-	err := orch.systemctl("restart")
+	err := orch.Restart()
 	if err != nil {
-		t.Fatalf("systemctl restart: %v", err)
+		t.Fatalf("Restart: %v", err)
 	}
 	ran := server.Ran()
 	for _, want := range []string{

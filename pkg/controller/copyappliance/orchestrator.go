@@ -227,17 +227,13 @@ func (r *Orchestrator) Install() (err error) {
 	for _, command := range []string{
 		"systemctl daemon-reload",
 		"systemctl enable " + orchestratorUnit,
-		// Clears a start limit tripped by an earlier install, which would
-		// otherwise make every restart below exit non-zero for good.
-		"systemctl reset-failed " + orchestratorUnit,
-		"systemctl restart " + orchestratorUnit,
 	} {
 		err = r.ssh.RunCommand(command)
 		if err != nil {
 			return
 		}
 	}
-	return
+	return r.Restart()
 }
 
 // Active reports whether the supervisor is running. This is not proof that it
@@ -258,17 +254,25 @@ func (r *Orchestrator) Active() (ok bool, err error) {
 	return
 }
 
-// systemctl clears a tripped start limit and then runs the verb ("start" or
-// "restart"). A unit that has tripped the limit stays failed and refuses both
-// verbs until it is reset. Prefer "start" when the unit may already be up so
-// running exports are not torn down; use "restart" after hot-attaching disks.
-func (r *Orchestrator) systemctl(verb string) (err error) {
+// Start brings the supervisor up if it is down. Prefer this over Restart when
+// the unit may already be running so exports are not torn down. Clears a
+// tripped start limit first; without that both start and restart stay failed.
+func (r *Orchestrator) Start() error {
+	return r.resetAndRun("start")
+}
+
+// Restart reloads the supervisor after hot-attaching disks so it rediscovers
+// exports. Clears a tripped start limit first.
+func (r *Orchestrator) Restart() error {
+	return r.resetAndRun("restart")
+}
+
+func (r *Orchestrator) resetAndRun(verb string) (err error) {
 	err = r.ssh.RunCommand("systemctl reset-failed " + orchestratorUnit)
 	if err != nil {
 		return
 	}
-	err = r.ssh.RunCommand("systemctl " + verb + " " + orchestratorUnit)
-	return
+	return r.ssh.RunCommand("systemctl " + verb + " " + orchestratorUnit)
 }
 
 // Log is the tail of the supervisor's journal, for logging when it will not

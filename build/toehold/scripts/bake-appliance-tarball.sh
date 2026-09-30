@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
+# Build-time: install CentOS Stream 9 tools into a tarball that virt-customize
+# unpacks onto the toehold base image (see extract-appliance-root).
 set -euxo pipefail
 
-root=/tmp/appliance-root
+staging=/tmp/appliance-staging
+root="${staging}/opt/toehold/appliance-root"
 tarball=/usr/share/toehold/appliance-root.tar.gz
 
-rm -rf "${root}"
+rm -rf "${staging}"
 mkdir -p "${root}" "$(dirname "${tarball}")"
 
 dnf install -y \
@@ -19,28 +22,18 @@ dnf install -y \
   podman \
   containernetworking-plugins
 
-test -x "${root}/usr/bin/vmtoolsd"
-test -x "${root}/usr/bin/VGAuthService"
-test -x "${root}/usr/bin/podman"
-test -x "${root}/usr/bin/conmon"
-test -f "${root}/etc/containers/storage.conf"
-test -f "${root}/etc/containers/policy.json"
+# Installroot podman needs vfs (no kernel overlay in the guest appliance) and a
+# policy path that survives under /opt/toehold/appliance-root.
 conf="${root}/etc/containers"
-if [[ ! -f "${conf}/containers.conf" ]]; then
-  cat > "${conf}/containers.conf" <<EOF
+sed -i 's/^driver = "overlay"/driver = "vfs"/' "${conf}/storage.conf"
+cat > "${conf}/containers.conf" <<EOF
 [engine]
 signature_policy = "/opt/toehold/appliance-root/etc/containers/policy.json"
 EOF
-fi
-sed -i 's/^driver = "overlay"/driver = "vfs"/' "${conf}/storage.conf"
-if [[ -f "${root}/etc/vmware-tools/tools.conf.example" && ! -f "${root}/etc/vmware-tools/tools.conf" ]]; then
+[[ -f "${root}/etc/vmware-tools/tools.conf" ]] || \
   cp "${root}/etc/vmware-tools/tools.conf.example" "${root}/etc/vmware-tools/tools.conf"
-fi
 
-staging=/tmp/appliance-staging
-rm -rf "${staging}"
 mkdir -p \
-  "${staging}/opt/toehold" \
   "${staging}/etc/containers" \
   "${staging}/etc/systemd/system/multi-user.target.wants" \
   "${staging}/etc/systemd/system/timers.target.wants" \
@@ -48,26 +41,26 @@ mkdir -p \
   "${staging}/usr/local/bin" \
   "${staging}/usr/bin"
 
-cp -a "${root}" "${staging}/opt/toehold/appliance-root"
-cp /usr/share/toehold/systemd/*.service /usr/share/toehold/systemd/*.timer "${staging}/etc/systemd/system/"
-cp /usr/local/bin/toehold-publish-guestinfo.sh /usr/local/bin/toehold-podman.sh "${staging}/usr/local/bin/"
-chmod +x "${staging}/usr/local/bin/toehold-publish-guestinfo.sh" "${staging}/usr/local/bin/toehold-podman.sh"
+cp /usr/share/toehold/systemd/*.service /usr/share/toehold/systemd/*.timer \
+  "${staging}/etc/systemd/system/"
+install -m755 \
+  /usr/local/bin/toehold-publish-guestinfo.sh \
+  /usr/local/bin/toehold-podman.sh \
+  "${staging}/usr/local/bin/"
 ln -sfn toehold-podman.sh "${staging}/usr/local/bin/toehold-podman"
-ln -sfn toehold-podman "${staging}/usr/local/bin/podman"
-ln -sfn ../usr/local/bin/toehold-podman "${staging}/usr/bin/podman"
+ln -sfn /usr/local/bin/toehold-podman.sh "${staging}/usr/local/bin/podman"
+ln -sfn /usr/local/bin/toehold-podman.sh "${staging}/usr/bin/podman"
 
-aproot=/opt/toehold/appliance-root
+# Host /etc sees the same configs the installroot binaries use.
 for f in policy.json storage.conf registries.conf; do
-  if [[ -f "${staging}${aproot}/etc/containers/${f}" ]]; then
-    ln -sfn "${aproot}/etc/containers/${f}" "${staging}/etc/containers/${f}"
-  fi
+  ln -sfn /opt/toehold/appliance-root/etc/containers/${f} \
+    "${staging}/etc/containers/${f}"
 done
-ln -sfn "${aproot}/etc/vmware-tools" "${staging}/etc/vmware-tools"
+ln -sfn /opt/toehold/appliance-root/etc/vmware-tools "${staging}/etc/vmware-tools"
 
 want="${staging}/etc/systemd/system/multi-user.target.wants"
-for unit in toehold-vgauthd.service toehold-vmtoolsd.service; do
-  ln -sfn "../${unit}" "${want}/${unit}"
-done
+ln -sfn ../toehold-vgauthd.service "${want}/toehold-vgauthd.service"
+ln -sfn ../toehold-vmtoolsd.service "${want}/toehold-vmtoolsd.service"
 ln -sfn ../toehold-guestinfo-sync.timer \
   "${staging}/etc/systemd/system/timers.target.wants/toehold-guestinfo-sync.timer"
 

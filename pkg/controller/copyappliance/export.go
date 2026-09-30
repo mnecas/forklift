@@ -169,7 +169,7 @@ func (r *ExportRunner) execute(ctx context.Context) (err error) {
 		defer func() {
 			_ = orch.Close()
 		}()
-		err = orch.systemctl("restart")
+		err = orch.Restart()
 		if err != nil {
 			if !IsExitError(err) {
 				r.context.Log.Info(
