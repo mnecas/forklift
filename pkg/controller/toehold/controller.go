@@ -129,9 +129,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 
 	runner := &Runner{ctx: ctx, r: &r, toehold: toehold}
 	done, pipeErr := runner.Run()
-	if pipeErr == errRequeue {
-		result.RequeueAfter = base.SlowReQ
-	} else if pipeErr != nil {
+	if pipeErr != nil {
 		r.fail(toehold, pipeErr)
 	} else if done {
 		toehold.Status.Phase = api.ToeholdTemplatePhaseSucceeded
