@@ -24,6 +24,7 @@ const (
 	VCenterThumbprint             = "VCENTER_THUMBPRINT"
 	DefaultBuildPodVMDKPath       = "/work/disk-0.vmdk"
 	DefaultToeholdNetwork         = "VM Network"
+	DefaultBaseDiskContainerImage = "registry.redhat.io/rhel9/rhel-guest-image:latest"
 )
 
 // Toehold settings for the toehold template controller and build pod.
@@ -40,6 +41,9 @@ func (r *Toehold) Load() error {
 		r.BuilderImage = "quay.io/kubev2v/toehold-builder:latest"
 	}
 	r.BaseDiskContainerImage = os.Getenv(ToeholdBaseDiskContainerImage)
+	if r.BaseDiskContainerImage == "" {
+		r.BaseDiskContainerImage = DefaultBaseDiskContainerImage
+	}
 	r.TemplateCPU = int32(LookupInt(ToeholdTemplateCPU, 2))
 	r.TemplateMemoryMiB = int32(LookupInt(ToeholdTemplateMemoryMiB, 4096))
 	return nil

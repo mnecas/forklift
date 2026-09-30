@@ -79,8 +79,6 @@ spec:
                       Unset means no limit.
                     format: int64
                     type: integer
-                required:
-                - containerImage
                 type: object
               builderImage:
                 description: |-
@@ -156,10 +154,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              retainTemplate:
-                default: true
-                description: Keep the vCenter template on ToeholdTemplate deletion.
-                type: boolean
               targetNamespace:
                 description: Namespace where the build pod runs. Defaults to the CR
                   namespace.

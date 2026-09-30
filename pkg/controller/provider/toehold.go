@@ -286,8 +286,8 @@ func (s *toeholdSync) Run(ctx context.Context) error {
 
 	found := template.DeepCopy()
 	// Fields the provider dictates. The rest — TargetNamespace,
-	// TransferNetwork, NodeSelector and RetainTemplate — belong to whoever
-	// created the template and are left as found.
+	// TransferNetwork and NodeSelector — belong to whoever created the
+	// template and are left as found.
 	template.Spec.Provider = v1.ObjectReference{
 		Name:      s.provider.Name,
 		Namespace: s.provider.Namespace,

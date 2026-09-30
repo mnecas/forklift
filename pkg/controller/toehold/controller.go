@@ -186,10 +186,8 @@ func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) 
 	tc := &ToeholdContext{Client: r.Client, Scheme: r.Scheme, Toehold: toehold}
 	if pctx, err := tc.providerContext(ctx); err == nil {
 		defer pctx.Client.Close(ctx)
-		if !toehold.Spec.RetainTemplateEnabled() {
-			if ref, findErr := pctx.Client.FindVM(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName, true); findErr == nil {
-				_ = libvsphere.Destroy(ctx, ref.VM)
-			}
+		if ref, findErr := pctx.Client.FindVM(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName, true); findErr == nil {
+			_ = libvsphere.Destroy(ctx, ref.VM)
 		}
 	}
 	if err := tc.deleteBuildPod(ctx); err != nil {
@@ -249,6 +247,9 @@ func toeholdForBuildPodMapper() handler.TypedEventHandler[*core.Pod, reconcile.R
 func (r Reconciler) validate(ctx context.Context, toehold *api.ToeholdTemplate) error {
 	if toehold.Spec.Provider.Name == "" {
 		return liberr.New("spec.provider.name is required")
+	}
+	if toehold.Spec.BaseDisk.ContainerImage == "" {
+		toehold.Spec.BaseDisk.ContainerImage = Settings.Toehold.BaseDiskContainerImage
 	}
 	if toehold.Spec.BaseDisk.ContainerImage == "" {
 		return liberr.New("spec.baseDisk.containerImage is required")

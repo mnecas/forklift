@@ -51,7 +51,8 @@ type ToeholdResources struct {
 // ToeholdBaseDisk configures the read-only containerdisk base image.
 type ToeholdBaseDisk struct {
 	// OCI image embedding the base qcow2 (KubeVirt containerdisk layout under /disk).
-	ContainerImage string `json:"containerImage"`
+	// +optional
+	ContainerImage string `json:"containerImage,omitempty"`
 	// Optional dockerconfigjson secret for pulling containerImage.
 	// +optional
 	ImagePullSecret *core.LocalObjectReference `json:"imagePullSecret,omitempty"`
@@ -83,10 +84,6 @@ type ToeholdTemplateSpec struct {
 	// Optional node selector for the build pod.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-	// Keep the vCenter template on ToeholdTemplate deletion.
-	// +optional
-	// +kubebuilder:default:=true
-	RetainTemplate *bool `json:"retainTemplate,omitempty"`
 	// OVF hardware descriptor overrides.
 	// +optional
 	Resources ToeholdResources `json:"resources,omitempty"`
@@ -167,14 +164,6 @@ type ToeholdTemplateList struct {
 
 func init() {
 	SchemeBuilder.Register(&ToeholdTemplate{}, &ToeholdTemplateList{})
-}
-
-// RetainTemplateEnabled returns whether to keep the template on delete.
-func (s *ToeholdTemplateSpec) RetainTemplateEnabled() bool {
-	if s.RetainTemplate == nil {
-		return true
-	}
-	return *s.RetainTemplate
 }
 
 // TargetNS returns the namespace for managed resources.

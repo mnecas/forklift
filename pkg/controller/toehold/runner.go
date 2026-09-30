@@ -85,9 +85,6 @@ func (run *Runner) Run(ctx context.Context) (done bool, err error) {
 }
 
 func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicKey, sshProviderNS string) (next api.ToeholdTemplateStage, err error) {
-	if err = run.context.ensureServiceAccount(ctx); err != nil {
-		return
-	}
 	pctx, err := run.context.providerContext(ctx)
 	if err != nil {
 		return

@@ -159,6 +159,14 @@ func (r *DeployRunner) execute(ctx context.Context) (err error) {
 		}
 		if done {
 			r.NextPhase()
+			// Ready must be set on this pass: the reconciler idles on
+			// DeployCompleted, so the case below would never run.
+			r.context.Appliance.Status.SetCondition(libcnd.Condition{
+				Type:     libcnd.Ready,
+				Status:   libcnd.True,
+				Category: libcnd.Required,
+				Message:  "Deploying the copy appliance has succeeded.",
+			})
 		}
 	case PhaseDeployCompleted:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
