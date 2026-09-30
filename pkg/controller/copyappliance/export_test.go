@@ -51,8 +51,8 @@ func TestExportRunner_BeginSetsReleasePhase(t *testing.T) {
 		},
 	}
 	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
-	if err := runner.Begin(); err != nil {
-		t.Fatalf("Begin: %v", err)
+	if err := runner.begin(); err != nil {
+		t.Fatalf("begin: %v", err)
 	}
 	if appliance.Status.Phase != PhaseReleaseDisks {
 		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseReleaseDisks)
@@ -69,8 +69,8 @@ func TestExportRunner_BeginSetsAttachPhase(t *testing.T) {
 		},
 	}
 	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
-	if err := runner.Begin(); err != nil {
-		t.Fatalf("Begin: %v", err)
+	if err := runner.begin(); err != nil {
+		t.Fatalf("begin: %v", err)
 	}
 	if appliance.Status.Phase != PhaseAttachDisks {
 		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseAttachDisks)
@@ -84,8 +84,8 @@ func TestExportRunner_BeginUnknownTarget(t *testing.T) {
 		},
 	}
 	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
-	if err := runner.Begin(); err == nil {
-		t.Fatal("Begin accepted an unknown target")
+	if err := runner.begin(); err == nil {
+		t.Fatal("begin accepted an unknown target")
 	}
 	if appliance.Status.Phase != PhaseDeployFailed {
 		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseDeployFailed)

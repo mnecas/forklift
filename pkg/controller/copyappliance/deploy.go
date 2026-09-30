@@ -37,9 +37,9 @@ type DeployRunner struct {
 	registry *ClusterRegistry
 }
 
-// Begin seeds the deploy pipeline and records the vCenter the appliance VM
+// begin seeds the deploy pipeline and records the vCenter the appliance VM
 // will belong to.
-func (r *DeployRunner) Begin() (err error) {
+func (r *DeployRunner) begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
 	r.context.Appliance.Status.VCenterInstanceUUID = r.context.InstanceUUID()
 	step, err := r.itinerary().First()
@@ -53,6 +53,15 @@ func (r *DeployRunner) Begin() (err error) {
 // Run runs the current deploy phase once. A finished step sets Status.Phase
 // to its successor; the next reconcile picks it up.
 func (r *DeployRunner) Run(ctx context.Context) (err error) {
+	// Only an appliance that has not started yet is seeded. A phase outside
+	// the pipeline is a failed deploy, which execute parks; seeding it would
+	// restart the deploy on every pass.
+	if r.context.Appliance.Status.Phase == "" {
+		err = r.begin()
+		if err != nil {
+			return
+		}
+	}
 	err = r.context.CheckInstance()
 	if err != nil {
 		return

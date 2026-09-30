@@ -314,14 +314,6 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := DeployRunner{context: applianceContext}
-	if appliance.Status.Phase == "" {
-		err = runner.Begin()
-		if err != nil {
-			r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
-			err = nil
-			return
-		}
-	}
 	err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
@@ -345,16 +337,6 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := ExportRunner{context: applianceContext}
-	// Begin only from a stable phase. WaitForExports is shared with deploy and
-	// is not an export phase, so calling Begin there would restart attach every pass.
-	if PendingExportRequest(appliance) {
-		err = runner.Begin()
-		if err != nil {
-			r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
-			err = nil
-			return
-		}
-	}
 	err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
@@ -380,23 +362,6 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := TeardownRunner{context: applianceContext}
-	switch appliance.Status.Phase {
-	case PhasePowerOff, PhaseWaitForPowerOff,
-		PhaseDetachDisks, PhaseWaitForDetachDisks,
-		PhaseDestroyVM, PhaseWaitForDestroyVM,
-		PhaseTeardownCompleted:
-		// Already tearing down; resume where the last pass left off.
-	default:
-		// A deploy phase, an empty phase, or a previous teardown failure.
-		// Giving up means an undeletable CR and source vmdks locked forever,
-		// so a failed teardown restarts rather than parking.
-		err = runner.Begin()
-		if err != nil {
-			r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
-			err = nil
-			return
-		}
-	}
 	err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
