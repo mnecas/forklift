@@ -18,8 +18,9 @@ const (
 	DiskHashAnnotation           = annotationPrefix + "disk-hash"
 	ConfigHashAnnotation         = annotationPrefix + "config-hash"
 	BaseContainerImageAnnotation = annotationPrefix + "base-container-image"
-	ImportedAtAnnotation              = annotationPrefix + "imported-at"
-	defaultTemplateDatastoreFreeBytes = 10 * 1024 * 1024 * 1024
+	ImportedAtAnnotation = annotationPrefix + "imported-at"
+	// Rough floor for a new template upload; the real size comes from the base image.
+	DefaultTemplateDatastoreFreeBytes = 10 * 1024 * 1024 * 1024
 )
 
 var log = logging.WithName("toehold|vsphere")
@@ -44,8 +45,8 @@ type InventoryPreflight struct {
 	Folder    string
 	Datastore string
 	Network   string
-	// RequireTemplateSpace adds defaultTemplateDatastoreFreeBytes for a new template upload.
-	RequireTemplateSpace bool
+	// MinFreeBytes, when > 0, requires the datastore to have at least that much free space.
+	MinFreeBytes int64
 }
 
 // NewClient wraps an existing govmomi session.
@@ -86,12 +87,12 @@ func (c *Client) ValidateInventory(ctx context.Context, pf InventoryPreflight) e
 	if !accessible {
 		return fmt.Errorf("datastore %q is not accessible", pf.Datastore)
 	}
-	if pf.RequireTemplateSpace && free < defaultTemplateDatastoreFreeBytes {
+	if pf.MinFreeBytes > 0 && free < pf.MinFreeBytes {
 		return fmt.Errorf(
 			"datastore %q has %s free but at least %s is required",
 			pf.Datastore,
 			formatBytes(free),
-			formatBytes(defaultTemplateDatastoreFreeBytes),
+			formatBytes(pf.MinFreeBytes),
 		)
 	}
 	if _, err = c.findImportHost(ctx, datastore, net); err != nil {

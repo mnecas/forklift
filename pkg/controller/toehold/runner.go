@@ -169,10 +169,10 @@ func (run *Runner) requireBuild() error {
 		return err
 	}
 	return run.pctx.Client.ValidateInventory(run.ctx, toeholdvsphere.InventoryPreflight{
-		Folder:               run.toehold.Spec.Folder,
-		Datastore:            run.toehold.Spec.Datastore,
-		Network:              run.toehold.Spec.Network,
-		RequireTemplateSpace: true,
+		Folder:       run.toehold.Spec.Folder,
+		Datastore:    run.toehold.Spec.Datastore,
+		Network:      run.toehold.Spec.Network,
+		MinFreeBytes: toeholdvsphere.DefaultTemplateDatastoreFreeBytes,
 	})
 }
 
