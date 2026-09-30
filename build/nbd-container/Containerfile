@@ -8,7 +8,7 @@ RUN dnf install -y nbdkit && dnf clean all
 # Default NBD port.
 EXPOSE 10809
 
-COPY entrypoint.sh /entrypoint.sh
+COPY build/nbd-container/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

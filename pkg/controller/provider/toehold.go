@@ -2,7 +2,15 @@ package provider
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"reflect"
 	"slices"
 	"time"
 
@@ -10,6 +18,8 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
+	v1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -262,4 +272,251 @@ func (i checkInputs) Match(recorded *libcnd.Condition) bool {
 func (i checkInputs) Describe() string {
 	return fmt.Sprintf("template %s (disk %s, config %s), appliance image %s",
 		i.moref, i.diskHash, i.configHash, i.image)
+}
+
+// toeholdSync keeps a provider's toehold template in step with the provider's
+// settings and the controller's own image settings. The template itself is
+// created by the console or the API; this only maintains one that is already
+// there. Built for a single reconcile pass and discarded.
+type toeholdSync struct {
+	client    client.Client
+	provider  *api.Provider
+	datastore string
+	folder    string
+	network   string
+}
+
+// newToeholdSync reads the placement settings once, so that the gate in Run and
+// the write in apply cannot disagree about them.
+func newToeholdSync(client client.Client, provider *api.Provider) *toeholdSync {
+	return &toeholdSync{
+		client:    client,
+		provider:  provider,
+		datastore: provider.Setting(api.ToeholdDatastore),
+		folder:    provider.Setting(api.ToeholdFolder),
+		network:   provider.Setting(api.ToeholdNetwork),
+	}
+}
+
+// Run applies the provider's settings to its toehold template.
+func (s *toeholdSync) Run(ctx context.Context) (err error) {
+	if !inventoryReady(s.provider) {
+		return
+	}
+	if Settings.Toehold.BaseDiskContainerImage == "" ||
+		s.datastore == "" || s.folder == "" || s.network == "" {
+		return
+	}
+
+	template := &api.ToeholdTemplate{}
+	key := client.ObjectKey{
+		Namespace: s.provider.Namespace,
+		Name:      s.provider.ToeholdTemplateName(),
+	}
+	err = s.client.Get(ctx, key, template)
+	if k8serr.IsNotFound(err) {
+		// Created explicitly by the console or the API; not ours to make.
+		err = nil
+		return
+	}
+	if err != nil {
+		err = liberr.Wrap(err, "template", key.Name)
+		return
+	}
+
+	found := template.DeepCopy()
+	s.apply(&template.Spec)
+	err = k8sutil.SetControllerReference(s.provider, template, s.client.Scheme())
+	if err != nil {
+		err = liberr.Wrap(err)
+		return
+	}
+	if reflect.DeepEqual(found.Spec, template.Spec) &&
+		reflect.DeepEqual(found.OwnerReferences, template.OwnerReferences) {
+		return
+	}
+	// Update rather than Patch: a patch is sent even when the diff is empty,
+	// which would turn every pass into a write.
+	err = s.client.Update(ctx, template)
+	if err != nil {
+		err = liberr.Wrap(err, "template", key.Name)
+	}
+	return
+}
+
+// apply writes the fields of the spec that the provider dictates. The rest —
+// TargetNamespace, TransferNetwork, NodeSelector and RetainTemplate — belong to
+// whoever created the template (console/API), and are left as they were found.
+func (s *toeholdSync) apply(spec *api.ToeholdTemplateSpec) {
+	spec.Provider = v1.ObjectReference{
+		Name:      s.provider.Name,
+		Namespace: s.provider.Namespace,
+	}
+	spec.TemplateName = s.provider.ToeholdTemplateName()
+	spec.BaseDisk = api.ToeholdBaseDisk{
+		ContainerImage: Settings.Toehold.BaseDiskContainerImage,
+	}
+	spec.Resources = api.ToeholdResources{
+		CPU:       Settings.Toehold.TemplateCPU,
+		MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
+	}
+	spec.Datastore = s.datastore
+	spec.Folder = s.folder
+	spec.Network = s.network
+	spec.BuilderImage = Settings.Toehold.BuilderImage
+}
+
+// Keys of the toehold TLS material within the appliance secret. They are the
+// file names the appliance expects, so that what is in the secret is what lands
+// on the appliance.
+const (
+	tlsCACert     = "ca-cert.pem"
+	tlsServerCert = "server-cert.pem"
+	tlsServerKey  = "server-key.pem"
+	tlsClientCert = "client-cert.pem"
+	tlsClientKey  = "client-key.pem"
+)
+
+// Subject names of the issued certificates. The server is named for the logical
+// service rather than for an address: the appliance is cloned on demand and its
+// address is not known when the certificate is issued, so the client verifies
+// the name instead of where it reached it.
+const (
+	tlsCAName     = "forklift-toehold-ca"
+	tlsClientName = "forklift-controller"
+)
+
+// tlsLifetime is how long the issued certificates are good for. There is no
+// renewal: the material is regenerated with the provider's SSH keys, and an
+// appliance is a transient clone that outlives neither.
+const tlsLifetime = 10 * 365 * 24 * time.Hour
+
+// tlsClockSkew backdates NotBefore so that a verifier whose clock runs behind
+// the controller's does not reject a freshly issued certificate.
+const tlsClockSkew = time.Hour
+
+// toeholdTLS issues the mutual-TLS material a toehold appliance serves its
+// exports with: a private CA, the server half the appliance presents, and the
+// client half the controller queries it with. The CA key is discarded once the
+// leaves are signed, so nothing else can be issued against it. Keyed by the
+// file name each lands under on the appliance.
+func toeholdTLS() (data map[string][]byte, err error) {
+	caKey, ca, caPEM, err := issueCertificate(nil, nil, tlsCAName)
+	if err != nil {
+		return
+	}
+	serverCertPEM, serverKeyPEM, err := issueLeaf(ca, caKey, announce.ServerName, x509.ExtKeyUsageServerAuth)
+	if err != nil {
+		return
+	}
+	clientCertPEM, clientKeyPEM, err := issueLeaf(ca, caKey, tlsClientName, x509.ExtKeyUsageClientAuth)
+	if err != nil {
+		return
+	}
+	data = map[string][]byte{
+		tlsCACert:     caPEM,
+		tlsServerCert: serverCertPEM,
+		tlsServerKey:  serverKeyPEM,
+		tlsClientCert: clientCertPEM,
+		tlsClientKey:  clientKeyPEM,
+	}
+	return
+}
+
+// ensureToeholdTLS fills in the TLS material an appliance secret is missing.
+// All five are regenerated together: a leaf and a CA from different runs do not
+// chain, so replacing only what is absent would leave the secret unusable.
+func (r *Reconciler) ensureToeholdTLS(secret *v1.Secret) error {
+	complete := true
+	for _, key := range []string{tlsCACert, tlsServerCert, tlsServerKey, tlsClientCert, tlsClientKey} {
+		if len(secret.Data[key]) == 0 {
+			complete = false
+			break
+		}
+	}
+	if complete {
+		return nil
+	}
+
+	r.Log.Info("Generating toehold TLS material for existing secret", "secret", secret.Name)
+	data, err := toeholdTLS()
+	if err != nil {
+		return err
+	}
+	if secret.Data == nil {
+		secret.Data = make(map[string][]byte, len(data))
+	}
+	for key, value := range data {
+		secret.Data[key] = value
+	}
+	err = r.Update(context.TODO(), secret)
+	if err != nil {
+		return fmt.Errorf("failed to update secret %s with toehold TLS material: %w", secret.Name, err)
+	}
+	return nil
+}
+
+// issueLeaf signs an end-entity certificate against the CA and returns it with
+// its key, both PEM encoded.
+func issueLeaf(ca *x509.Certificate, caKey *ecdsa.PrivateKey, name string, eku x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
+	key, _, certPEM, err := issueCertificate(ca, caKey, name, eku)
+	if err != nil {
+		return
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		err = fmt.Errorf("failed to marshal %s key: %w", name, err)
+		return
+	}
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	return
+}
+
+// issueCertificate signs a certificate, self-signing it as a CA when there is
+// no parent. A leaf carries the name as a DNS SAN as well as in the subject,
+// because that is the half a Go client verifies.
+func issueCertificate(parent *x509.Certificate, parentKey *ecdsa.PrivateKey, name string, eku ...x509.ExtKeyUsage) (key *ecdsa.PrivateKey, cert *x509.Certificate, certPEM []byte, err error) {
+	key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		err = fmt.Errorf("failed to generate %s key: %w", name, err)
+		return
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		err = fmt.Errorf("failed to generate %s serial: %w", name, err)
+		return
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: name},
+		NotBefore:             now.Add(-tlsClockSkew),
+		NotAfter:              now.Add(tlsLifetime),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           eku,
+		BasicConstraintsValid: true,
+	}
+	if parent == nil {
+		template.IsCA = true
+		template.KeyUsage |= x509.KeyUsageCertSign
+	} else {
+		template.DNSNames = []string{name}
+	}
+
+	signer, signerKey := template, key
+	if parent != nil {
+		signer, signerKey = parent, parentKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, signer, &key.PublicKey, signerKey)
+	if err != nil {
+		err = fmt.Errorf("failed to sign %s certificate: %w", name, err)
+		return
+	}
+	cert, err = x509.ParseCertificate(der)
+	if err != nil {
+		err = fmt.Errorf("failed to parse %s certificate: %w", name, err)
+		return
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return
 }
