@@ -127,9 +127,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		runner := TeardownRunner{context: applianceContext}
 
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
-		}
+		// No begin: an appliance that has never been torn down is seeded by
+		// the first pass, which is how the reconciler drives it.
 		phases := runTeardown(t, ctx, runner)
 
 		status := applianceContext.Appliance.Status
@@ -152,8 +151,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			context: &ApplianceContext{Appliance: appliance, VCenter: client, Log: testLog()},
 		}
 
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
+		if err := runner.begin(); err != nil {
+			t.Fatalf("begin: %v", err)
 		}
 		phases := runTeardown(t, ctx, runner)
 
@@ -179,9 +178,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		runner := TeardownRunner{context: applianceContext}
 		status := &applianceContext.Appliance.Status
 
-		err := runner.Begin()
+		err := runner.begin()
 		if err != nil {
-			t.Fatalf("Begin: %v", err)
+			t.Fatalf("begin: %v", err)
 		}
 		err = runner.Run(ctx)
 		if err != nil {
@@ -287,8 +286,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("destroy the simulated VM: %v", err)
 		}
 
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
+		if err := runner.begin(); err != nil {
+			t.Fatalf("begin: %v", err)
 		}
 		phases := runTeardown(t, ctx, runner)
 
@@ -306,8 +305,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		applianceContext.Appliance.Status.VCenterInstanceUUID = "some-other-vcenter"
 		runner := TeardownRunner{context: applianceContext}
 
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
+		if err := runner.begin(); err != nil {
+			t.Fatalf("begin: %v", err)
 		}
 		err := runner.Run(ctx)
 

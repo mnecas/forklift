@@ -207,8 +207,8 @@ func TestDeployBegin(t *testing.T) {
 		appliance.Status.TaskRef = "task-7"
 
 		runner := DeployRunner{context: testContext(appliance, "uuid-a")}
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
+		if err := runner.begin(); err != nil {
+			t.Fatalf("begin: %v", err)
 		}
 
 		if appliance.Status.Phase != PhaseCloneVM {
@@ -225,8 +225,8 @@ func TestDeployBegin(t *testing.T) {
 		appliance := testAppliance()
 
 		runner := DeployRunner{context: testContext(appliance, "uuid-a")}
-		if err := runner.Begin(); err != nil {
-			t.Fatalf("Begin: %v", err)
+		if err := runner.begin(); err != nil {
+			t.Fatalf("begin: %v", err)
 		}
 
 		if appliance.Status.VCenterInstanceUUID != "uuid-a" {

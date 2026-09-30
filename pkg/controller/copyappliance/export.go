@@ -34,8 +34,8 @@ func PendingExportRequest(appliance *api.CopyAppliance) bool {
 	}
 }
 
-// Begin seeds the export pipeline from the requested target.
-func (r *ExportRunner) Begin() (err error) {
+// begin seeds the export pipeline from the requested target.
+func (r *ExportRunner) begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
 	if r.context.Appliance.Spec.Target == "" {
 		return
@@ -57,6 +57,14 @@ func (r *ExportRunner) Begin() (err error) {
 // Run runs the current export phase once. A finished step sets Status.Phase
 // to its successor; the next reconcile picks it up.
 func (r *ExportRunner) Run(ctx context.Context) (err error) {
+	// Seed only from a stable phase. WaitForExports is shared with deploy and
+	// is not an export phase, so seeding there would restart attach every pass.
+	if PendingExportRequest(r.context.Appliance) {
+		err = r.begin()
+		if err != nil {
+			return
+		}
+	}
 	err = r.context.CheckInstance()
 	if err != nil {
 		return

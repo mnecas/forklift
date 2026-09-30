@@ -16,9 +16,9 @@ type TeardownRunner struct {
 	context *ApplianceContext
 }
 
-// Begin seeds the teardown pipeline. An appliance with no recorded VM has
+// begin seeds the teardown pipeline. An appliance with no recorded VM has
 // nothing to tear down and is already complete.
-func (r *TeardownRunner) Begin() (err error) {
+func (r *TeardownRunner) begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
 	itinerary := r.itinerary()
 	if r.context.Appliance.Status.MoRef == "" {
@@ -41,6 +41,15 @@ func (r *TeardownRunner) Begin() (err error) {
 // Run runs the current teardown phase once. A finished step sets Status.Phase
 // to its successor; the next reconcile picks it up.
 func (r *TeardownRunner) Run(ctx context.Context) (err error) {
+	// A deploy phase, an empty phase, or a previous teardown failure is not a
+	// step of this pipeline. Giving up means an undeletable CR and source vmdks
+	// locked forever, so a failed teardown restarts rather than parking.
+	if _, gErr := r.itinerary().Get(r.context.Appliance.Status.Phase); gErr != nil {
+		err = r.begin()
+		if err != nil {
+			return
+		}
+	}
 	err = r.context.CheckInstance()
 	if err != nil {
 		return
