@@ -80,7 +80,7 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	if err != nil {
 		return nil, err
 	}
-	datastore, err := c.findDatastore(ctx, opts.Datastore)
+	datastore, err := c.Finder.Datastore(ctx, opts.Datastore)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	}
 	var net object.NetworkReference
 	if opts.Network != "" {
-		net, err = c.findNetwork(ctx, opts.Network)
+		net, err = c.Finder.Network(ctx, opts.Network)
 		if err != nil {
 			return nil, err
 		}
@@ -108,14 +108,14 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	}
 
 	req := types.CreateImportSpec{
-		This:          *c.Govmomi.ServiceContent.OvfManager,
+		This:          *c.Client.ServiceContent.OvfManager,
 		OvfDescriptor: descriptor,
 		ResourcePool:  pool.Reference(),
 		Datastore:     datastore.Reference(),
 		Cisp:          params,
 	}
 	log.V(1).Info("Creating import spec")
-	res, err := methods.CreateImportSpec(ctx, c.Govmomi.Client, &req)
+	res, err := methods.CreateImportSpec(ctx, c.Client.Client, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	}
 
 	log.V(1).Info("Locating imported object", "name", opts.Name, "folder", opts.FolderPath)
-	vmRef, err := c.FindVM(ctx, opts.FolderPath, opts.Name)
+	vmRef, err := c.FindVM(ctx, opts.FolderPath, opts.Name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +208,7 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	if err = vmRef.VM.MarkAsTemplate(ctx); err != nil {
 		return nil, fmt.Errorf("mark %s as template: %w", vmRef.Moref, err)
 	}
-	ref, err := c.FindTemplate(ctx, opts.FolderPath, opts.Name)
+	ref, err := c.FindVM(ctx, opts.FolderPath, opts.Name, true)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func uploadLeaseFile(ctx context.Context, c *Client, item nfc.FileItem, f io.Rea
 		opts.Method = "POST"
 		opts.Type = "application/x-vnd.vmware-streamVmdk"
 	}
-	err := c.Govmomi.Client.Upload(ctx, f, item.URL, &opts)
+	err := c.Client.Client.Upload(ctx, f, item.URL, &opts)
 	if err == nil {
 		return nil
 	}

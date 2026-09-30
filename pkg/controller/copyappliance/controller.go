@@ -409,7 +409,9 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 
 // forgetForeignVM discards a recorded moRef that was written against a
 // different vCenter than the one we are connected to. Acting on it would mean
-// powering on — or destroying — an unrelated VM.
+// powering on — or destroying — an unrelated VM. Status fields that describe a
+// specific VM are only meaningful together, so they are always cleared
+// together; clearing the phase restarts the itinerary on the next pass.
 func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID string) {
 	recorded := appliance.Status.VCenterInstanceUUID
 	if appliance.Status.MoRef == "" || recorded == "" || instanceUUID == "" || recorded == instanceUUID {
@@ -419,13 +421,6 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 		"vm", appliance.Status.MoRef,
 		"recorded", recorded,
 		"connected", instanceUUID)
-	r.forgetVM(appliance)
-}
-
-// forgetVM clears every status field that describes a specific VM. They are
-// only meaningful together, so they are always cleared together. Clearing the
-// phase restarts the itinerary from the beginning on the next pass.
-func (r *Reconciler) forgetVM(appliance *api.CopyAppliance) {
 	appliance.Status.MoRef = ""
 	appliance.Status.Addresses = nil
 	appliance.Status.Exports = nil

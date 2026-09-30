@@ -6,7 +6,6 @@ import (
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
-	"github.com/vmware/govmomi/object"
 )
 
 // Session is a govmomi login plus inventory Finder.
@@ -37,14 +36,4 @@ func (s *Session) Close(ctx context.Context) error {
 	s.Client = nil
 	s.Finder = nil
 	return err
-}
-
-// SetDatacenter scopes the Finder to name (or the default when empty).
-func (s *Session) SetDatacenter(ctx context.Context, name string) (*object.Datacenter, error) {
-	dc, err := s.Finder.DatacenterOrDefault(ctx, name)
-	if err != nil {
-		return nil, liberr.Wrap(err)
-	}
-	s.Finder.SetDatacenter(dc)
-	return dc, nil
 }

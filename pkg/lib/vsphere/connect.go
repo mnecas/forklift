@@ -39,11 +39,6 @@ func Connect(ctx context.Context, rawURL, user, password, thumbprint string, ins
 	return client, nil
 }
 
-// ConnectInsecure logs in with TLS verification disabled and no thumbprint pin.
-func ConnectInsecure(ctx context.Context, rawURL, user, password string) (*govmomi.Client, error) {
-	return Connect(ctx, rawURL, user, password, "", true)
-}
-
 // ConnectProvider applies provider-secret TLS semantics then Connect.
 func ConnectProvider(ctx context.Context, rawURL, user, password, thumbprint string, secret *core.Secret) (*govmomi.Client, error) {
 	if secret == nil {

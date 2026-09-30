@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"text/template"
 
+	"github.com/kubev2v/forklift/pkg/toehold/version"
 	"github.com/vmware/govmomi/vmdk"
 )
 
@@ -138,10 +139,10 @@ func Descriptor(opts DescriptorOptions) (string, error) {
 		opts.Network = "VM Network"
 	}
 	if opts.CPUs == 0 {
-		opts.CPUs = 2
+		opts.CPUs = version.DefaultCPU
 	}
 	if opts.MemoryMiB == 0 {
-		opts.MemoryMiB = 4096
+		opts.MemoryMiB = version.DefaultMemoryMiB
 	}
 
 	var size int64

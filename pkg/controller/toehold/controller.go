@@ -8,8 +8,9 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
-	libref "github.com/kubev2v/forklift/pkg/lib/ref"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	libref "github.com/kubev2v/forklift/pkg/lib/ref"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
@@ -54,7 +55,11 @@ func Add(mgr manager.Manager) error {
 		return err
 	}
 	return cnt.Watch(
-		source.Kind(mgr.GetCache(), &core.Pod{}, toeholdForBuildPodMapper(), predicate.NewTypedPredicateFuncs(buildPodOwnedByToehold)))
+		source.Kind(mgr.GetCache(), &core.Pod{}, toeholdForBuildPodMapper(),
+			predicate.NewTypedPredicateFuncs(func(obj *core.Pod) bool {
+				_, ok := obj.Labels[labelToehold]
+				return ok
+			})))
 }
 
 type Reconciler struct {
@@ -124,7 +129,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 
 	runner := &Runner{ctx: ctx, r: &r, toehold: toehold}
 	done, pipeErr := runner.Run()
-	if isRequeue(pipeErr) {
+	if pipeErr == errRequeue {
 		result.RequeueAfter = base.SlowReQ
 	} else if pipeErr != nil {
 		r.fail(toehold, pipeErr)
@@ -140,7 +145,18 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		result.RequeueAfter = base.SlowReQ
 	}
 
-	resolveMessage(toehold)
+	if toehold.Status.Message == "" {
+		switch toehold.Status.Stage {
+		case api.StageEnsurePrerequisites, api.StageEnsureTemplate:
+			toehold.Status.Message = "Ensuring template prerequisites and reuse."
+		case api.StageBuildAndUpload:
+			toehold.Status.Message = "Building and uploading template."
+		case api.StageToeholdFinished:
+			toehold.Status.Message = "Toehold template is ready."
+		default:
+			toehold.Status.Message = "Reconciling toehold template."
+		}
+	}
 	toehold.Status.EndStagingConditions()
 	r.Record(toehold, toehold.Status.Conditions)
 	toehold.Status.ObservedGeneration = toehold.Generation
@@ -165,24 +181,6 @@ func (r Reconciler) fail(toehold *api.ToeholdTemplate, cause error) {
 	})
 }
 
-func resolveMessage(toehold *api.ToeholdTemplate) {
-	if toehold.Status.Message != "" {
-		return
-	}
-	switch toehold.Status.Stage {
-	case api.StageEnsurePrerequisites:
-		toehold.Status.Message = "Ensuring prerequisites."
-	case api.StageEnsureTemplate:
-		toehold.Status.Message = "Checking template reuse."
-	case api.StageBuildAndUpload:
-		toehold.Status.Message = "Building and uploading template."
-	case api.StageToeholdFinished:
-		toehold.Status.Message = "Toehold template is ready."
-	default:
-		toehold.Status.Message = "Reconciling toehold template."
-	}
-}
-
 func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) (reconcile.Result, error) {
 	if !controllerutil.ContainsFinalizer(toehold, api.ToeholdTemplateFinalizer) {
 		return reconcile.Result{}, nil
@@ -191,8 +189,8 @@ func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) 
 	if err == nil {
 		defer pctx.Client.Close(ctx)
 		if !toehold.Spec.RetainTemplateEnabled() {
-			if ref, findErr := pctx.Client.FindTemplate(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName); findErr == nil {
-				_ = pctx.Client.Destroy(ctx, ref.VM)
+			if ref, findErr := pctx.Client.FindVM(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName, true); findErr == nil {
+				_ = libvsphere.Destroy(ctx, ref.VM)
 			}
 		}
 	}
@@ -248,11 +246,6 @@ func toeholdForBuildPodMapper() handler.TypedEventHandler[*core.Pod, reconcile.R
 			},
 		}}
 	})
-}
-
-func buildPodOwnedByToehold(obj *core.Pod) bool {
-	_, ok := obj.Labels[labelToehold]
-	return ok
 }
 
 func (r Reconciler) validate(ctx context.Context, toehold *api.ToeholdTemplate) error {

@@ -267,22 +267,10 @@ func (r *Orchestrator) Active() (ok bool, err error) {
 	return
 }
 
-// Start starts an already-installed supervisor that is not running. It starts
-// rather than restarts: a restart would tear down the exports of a service that
-// is in fact up, and reset-failed first because a unit that has tripped
-// systemd's start limit stays failed and refuses to start at all.
-func (r *Orchestrator) Start() (err error) {
-	return r.systemctl("start")
-}
-
-// Restart restarts the supervisor so it rediscovers block devices after disks
-// are hot-attached to the appliance VM.
-func (r *Orchestrator) Restart() (err error) {
-	return r.systemctl("restart")
-}
-
-// systemctl clears a tripped start limit and then runs the verb. A unit that
-// has tripped the limit stays failed and refuses both verbs until it is reset.
+// systemctl clears a tripped start limit and then runs the verb ("start" or
+// "restart"). A unit that has tripped the limit stays failed and refuses both
+// verbs until it is reset. Prefer "start" when the unit may already be up so
+// running exports are not torn down; use "restart" after hot-attaching disks.
 func (r *Orchestrator) systemctl(verb string) (err error) {
 	err = r.ssh.RunCommand("systemctl reset-failed " + orchestratorUnit)
 	if err != nil {

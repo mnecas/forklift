@@ -36,19 +36,6 @@ type DeployRunner struct {
 	registry *ClusterRegistry
 }
 
-// clusterRegistry returns the registry the appliance image is read from,
-// building the real one on first use.
-func (r *DeployRunner) clusterRegistry() (registry *ClusterRegistry, err error) {
-	if r.registry == nil {
-		r.registry, err = NewClusterRegistry()
-		if err != nil {
-			return
-		}
-	}
-	registry = r.registry
-	return
-}
-
 // Begin seeds the deploy itinerary and records the vCenter the appliance VM
 // will belong to.
 func (r *DeployRunner) Begin() (err error) {
@@ -94,10 +81,12 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, err error) {
 	switch phase {
 	case PhaseCloneVM:
-		err = r.CloneVM(ctx)
-		if err != nil {
+		task, cloneErr := r.context.CloneVM(ctx)
+		if cloneErr != nil {
+			err = cloneErr
 			return
 		}
+		r.context.SetTask(task)
 		done = true
 	case PhaseWaitForClone:
 		done, err = r.WaitForClone(ctx)
@@ -134,16 +123,6 @@ func (r *DeployRunner) execute(ctx context.Context, phase string) (done bool, er
 	default:
 		err = liberr.New("unknown phase", "phase", phase)
 	}
-	return
-}
-
-// CloneVM clones the template into the appliance VM.
-func (r *DeployRunner) CloneVM(ctx context.Context) (err error) {
-	task, err := r.context.CloneVM(ctx)
-	if err != nil {
-		return
-	}
-	r.context.SetTask(task)
 	return
 }
 
@@ -242,7 +221,7 @@ func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
 		return
 	}
 	if !active {
-		sErr := orch.Start()
+		sErr := orch.systemctl("start")
 		if sErr != nil {
 			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
 				"address", address)
@@ -273,11 +252,13 @@ func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
 	defer func() {
 		_ = client.Close()
 	}()
-	registry, err := r.clusterRegistry()
-	if err != nil {
-		return
+	if r.registry == nil {
+		r.registry, err = NewClusterRegistry()
+		if err != nil {
+			return
+		}
 	}
-	img, err := registry.Image(ctx, r.context.Appliance.Spec.ContainerImage)
+	img, err := r.registry.Image(ctx, r.context.Appliance.Spec.ContainerImage)
 	if err != nil {
 		return
 	}

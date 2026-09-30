@@ -8,7 +8,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/vmware/govmomi"
-	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
@@ -32,10 +31,9 @@ var templateAnnotationKeys = []string{
 	ImportedAtAnnotation,
 }
 
-// Client wraps a govmomi session and inventory helpers.
+// Client wraps a shared vSphere Session with toehold-specific helpers.
 type Client struct {
-	Govmomi *govmomi.Client
-	Finder  *find.Finder
+	*libvsphere.Session
 }
 
 // VMRef holds a located virtual machine or template.
@@ -56,15 +54,7 @@ func NewClient(gc *govmomi.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{Govmomi: s.Client, Finder: s.Finder}, nil
-}
-
-// Close logs out of vCenter.
-func (c *Client) Close(ctx context.Context) error {
-	if c == nil || c.Govmomi == nil {
-		return nil
-	}
-	return c.Govmomi.Logout(ctx)
+	return &Client{Session: s}, nil
 }
 
 // ValidateInventory verifies folder, network, and datastore exist, are accessible,
@@ -79,57 +69,35 @@ func (c *Client) ValidateInventory(ctx context.Context, pf InventoryPreflight) e
 	var net object.NetworkReference
 	var err error
 	if pf.Network != "" {
-		net, err = c.findNetwork(ctx, pf.Network)
+		net, err = c.Finder.Network(ctx, pf.Network)
 		if err != nil {
 			return fmt.Errorf("network %q: %w", pf.Network, err)
 		}
 	}
-	datastore, err := c.findDatastore(ctx, pf.Datastore)
+	datastore, err := c.Finder.Datastore(ctx, pf.Datastore)
 	if err != nil {
 		return fmt.Errorf("datastore %q: %w", pf.Datastore, err)
 	}
-	free, accessible, err := c.datastoreFreeSpace(ctx, datastore)
-	if err != nil {
+	var props mo.Datastore
+	if err = datastore.Properties(ctx, datastore.Reference(), []string{"summary"}, &props); err != nil {
 		return fmt.Errorf("datastore %q: %w", pf.Datastore, err)
 	}
+	free, accessible := props.Summary.FreeSpace, props.Summary.Accessible
 	if !accessible {
 		return fmt.Errorf("datastore %q is not accessible", pf.Datastore)
 	}
-	if required := requiredDatastoreFreeBytes(pf); required >= 0 {
-		if free < required {
-			return fmt.Errorf(
-				"datastore %q has %s free but at least %s is required",
-				pf.Datastore,
-				formatBytes(free),
-				formatBytes(required),
-			)
-		}
+	if pf.RequireTemplateSpace && free < defaultTemplateDatastoreFreeBytes {
+		return fmt.Errorf(
+			"datastore %q has %s free but at least %s is required",
+			pf.Datastore,
+			formatBytes(free),
+			formatBytes(defaultTemplateDatastoreFreeBytes),
+		)
 	}
 	if _, err = c.findImportHost(ctx, datastore, net); err != nil {
 		return fmt.Errorf("no suitable ESXi host for import on datastore %q: %w", pf.Datastore, err)
 	}
 	return nil
-}
-
-// FindTemplate locates a template by folder path and name.
-func (c *Client) FindTemplate(ctx context.Context, folderPath, name string) (*VMRef, error) {
-	t := true
-	return c.session().FindVM(ctx, folderPath, name, &t)
-}
-
-// FindVM locates a VM by folder path and name.
-func (c *Client) FindVM(ctx context.Context, folderPath, name string) (*VMRef, error) {
-	t := false
-	return c.session().FindVM(ctx, folderPath, name, &t)
-}
-
-// DestroyVMIfExists removes a VM or template when present.
-func (c *Client) DestroyVMIfExists(ctx context.Context, folderPath, name string) error {
-	return c.session().DestroyIfExists(ctx, folderPath, name)
-}
-
-func (c *Client) session() *libvsphere.Session {
-	return &libvsphere.Session{Client: c.Govmomi, Finder: c.Finder}
 }
 
 // GetAnnotationMap reads forklift toehold annotations from a VM/template.
@@ -226,25 +194,14 @@ func (c *Client) SetDiskEnableUUID(ctx context.Context, vm *object.VirtualMachin
 	return nil
 }
 
-// Destroy removes a VM or template.
-func (c *Client) Destroy(ctx context.Context, vm *object.VirtualMachine) error {
-	return libvsphere.Destroy(ctx, vm)
-}
-
 func (c *Client) findFolder(ctx context.Context, folderPath string) (*object.Folder, error) {
-	path := normalizeInventoryPath(folderPath)
+	// Keep a leading "/": with Finder.SetDatacenter, "Datacenter/vm/child" fails
+	// while "/Datacenter/vm/child" and "vm/child" succeed.
+	path := strings.TrimSpace(folderPath)
 	if path == "" {
 		return c.Finder.DefaultFolder(ctx)
 	}
 	return c.Finder.Folder(ctx, path)
-}
-
-func (c *Client) findDatastore(ctx context.Context, name string) (*object.Datastore, error) {
-	return c.Finder.Datastore(ctx, name)
-}
-
-func (c *Client) findNetwork(ctx context.Context, name string) (object.NetworkReference, error) {
-	return c.Finder.Network(ctx, name)
 }
 
 func (c *Client) findResourcePool(ctx context.Context, folderPath string) (*object.ResourcePool, error) {
@@ -263,10 +220,10 @@ func (c *Client) findResourcePool(ctx context.Context, folderPath string) (*obje
 	for _, child := range children {
 		ref := child.Reference()
 		if ref.Type == "ResourcePool" {
-			return object.NewResourcePool(c.Govmomi.Client, ref), nil
+			return object.NewResourcePool(c.Client.Client, ref), nil
 		}
 		if ref.Type == "ClusterComputeResource" || ref.Type == "ComputeResource" {
-			cr := object.NewComputeResource(c.Govmomi.Client, ref)
+			cr := object.NewComputeResource(c.Client.Client, ref)
 			p, perr := cr.ResourcePool(ctx)
 			if perr == nil {
 				return p, nil
@@ -317,32 +274,6 @@ func (c *Client) findImportHost(ctx context.Context, datastore *object.Datastore
 		"moref", hosts[0].Reference().Value,
 	)
 	return hosts[0], nil
-}
-
-func (c *Client) datastoreFreeSpace(ctx context.Context, datastore *object.Datastore) (free int64, accessible bool, err error) {
-	var props mo.Datastore
-	if err = datastore.Properties(ctx, datastore.Reference(), []string{"summary"}, &props); err != nil {
-		return 0, false, err
-	}
-	return props.Summary.FreeSpace, props.Summary.Accessible, nil
-}
-
-// normalizeInventoryPath trims space but keeps a leading "/".
-// With Finder.SetDatacenter, paths like "Datacenter/vm/child" fail while
-// "/Datacenter/vm/child" and "vm/child" succeed; stripping "/" broke nested folders.
-func normalizeInventoryPath(folder string) string {
-	return strings.TrimSpace(folder)
-}
-
-func requiredDatastoreFreeBytes(pf InventoryPreflight) int64 {
-	required := int64(0)
-	if pf.RequireTemplateSpace {
-		required += defaultTemplateDatastoreFreeBytes
-	}
-	if required == 0 {
-		return -1
-	}
-	return required
 }
 
 func formatBytes(n int64) string {

@@ -11,24 +11,8 @@ import (
 // order execute implements. The failure phase is in no pipeline: it is not a
 // step the walk arrives at, it is where the walk ends when a step errors.
 func TestTeardownItinerary(t *testing.T) {
-	// Every step but the last acts on a VM, so an appliance that never recorded
-	// one has nothing to walk and is already torn down.
-	t.Run("an appliance with no VM has only the completed step", func(t *testing.T) {
-		runner := teardownFor(testAppliance())
-
-		got := phaseNames(t, runner.Itinerary())
-
-		if want := []string{PhaseTeardownCompleted}; !slices.Equal(got, want) {
-			t.Errorf("pipeline = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("an appliance with a VM walks every step", func(t *testing.T) {
-		appliance := testAppliance()
-		appliance.Status.MoRef = "vm-42"
-		runner := teardownFor(appliance)
-
-		got := phaseNames(t, runner.Itinerary())
+	t.Run("the pipeline walks every VM step then completed", func(t *testing.T) {
+		got := phaseNames(t, teardownFor(testAppliance()).Itinerary())
 
 		want := []string{
 			PhasePowerOff,
@@ -45,10 +29,7 @@ func TestTeardownItinerary(t *testing.T) {
 	})
 
 	t.Run("the failure phase is not a step", func(t *testing.T) {
-		appliance := testAppliance()
-		appliance.Status.MoRef = "vm-42"
-
-		got := phaseNames(t, teardownFor(appliance).Itinerary())
+		got := phaseNames(t, teardownFor(testAppliance()).Itinerary())
 
 		if slices.Contains(got, PhaseTeardownFailed) {
 			t.Errorf("pipeline %v walks to %q", got, PhaseTeardownFailed)

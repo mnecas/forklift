@@ -9,6 +9,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/settings"
+	"github.com/kubev2v/forklift/pkg/toehold/version"
 	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
 	core "k8s.io/api/core/v1"
 )
@@ -56,13 +57,13 @@ func run(ctx context.Context) error {
 		Network:            settings.Lookup(settings.ToeholdNetwork, settings.DefaultToeholdNetwork),
 		Name:               os.Getenv(settings.ToeholdTemplateName),
 		VMDKPath:           settings.Lookup(settings.ToeholdVMDKPath, settings.DefaultBuildPodVMDKPath),
-		CPUs:               int32(settings.LookupInt(settings.ToeholdBuildPodCPUs, 2)),
-		MemoryMiB:          int32(settings.LookupInt(settings.ToeholdBuildPodMemoryMiB, 4096)),
+		CPUs:               int32(settings.LookupInt(settings.ToeholdBuildPodCPUs, int(version.DefaultCPU))),
+		MemoryMiB:          int32(settings.LookupInt(settings.ToeholdBuildPodMemoryMiB, int(version.DefaultMemoryMiB))),
 		TemplateDiskHash:   os.Getenv(settings.ToeholdTemplateContentHash),
 		TemplateConfigHash: os.Getenv(settings.ToeholdTemplateConfigHash),
 		BaseContainerImage: os.Getenv(settings.ToeholdBaseContainerImage),
 	}
-	_ = client.DestroyVMIfExists(ctx, opts.FolderPath, opts.Name)
+	_ = client.DestroyIfExists(ctx, opts.FolderPath, opts.Name)
 	ref, err := client.ImportOVF(ctx, opts)
 	if err != nil {
 		return err

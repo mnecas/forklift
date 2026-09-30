@@ -9,6 +9,12 @@ import (
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
 
+// Default OVF / template hardware when Spec.Resources leaves CPU or memory unset.
+const (
+	DefaultCPU       int32 = 2
+	DefaultMemoryMiB int32 = 4096
+)
+
 type diskHashInput struct {
 	ContainerImage string `json:"containerImage"`
 	SSHPublicKey   string `json:"sshPublicKey,omitempty"`
@@ -34,11 +40,11 @@ func DiskHash(spec api.ToeholdTemplateSpec, sshPublicKey string) string {
 func ConfigHash(spec api.ToeholdTemplateSpec) string {
 	cpu := spec.Resources.CPU
 	if cpu == 0 {
-		cpu = 2
+		cpu = DefaultCPU
 	}
 	mem := spec.Resources.MemoryMiB
 	if mem == 0 {
-		mem = 4096
+		mem = DefaultMemoryMiB
 	}
 	return hash(configHashInput{
 		Network:   spec.Network,
