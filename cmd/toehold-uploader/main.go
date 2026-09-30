@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/kubev2v/forklift/pkg/controller/base"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
 	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
@@ -34,7 +34,7 @@ func run(ctx context.Context) error {
 
 	url := os.Getenv(settings.VCenterURL)
 	log.Info("Connecting to vCenter", "url", url)
-	gc, err := base.ConnectGovmomi(
+	gc, err := libvsphere.ConnectProvider(
 		ctx,
 		url,
 		os.Getenv(settings.VCenterUser),

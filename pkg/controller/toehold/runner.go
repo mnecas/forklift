@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
 	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
 	vimtypes "github.com/vmware/govmomi/vim25/types"
@@ -233,7 +233,7 @@ func (r Reconciler) providerContext(ctx context.Context, toehold *api.ToeholdTem
 	if err != nil {
 		return nil, err
 	}
-	gc, err := base.ConnectGovmomi(
+	gc, err := libvsphere.ConnectProvider(
 		ctx,
 		provider.Spec.URL,
 		string(secret.Data["user"]),

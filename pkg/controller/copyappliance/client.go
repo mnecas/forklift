@@ -8,7 +8,6 @@ import (
 	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/controller/base"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
@@ -62,7 +61,7 @@ func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, prov
 		Log:             log,
 		NbdSsl:          provider.ToeholdNbdSsl(),
 	}
-	ac.VCenter, err = base.ConnectGovmomi(
+	ac.VCenter, err = libvsphere.ConnectProvider(
 		ctx,
 		provider.Spec.URL,
 		string(secret.Data["user"]),

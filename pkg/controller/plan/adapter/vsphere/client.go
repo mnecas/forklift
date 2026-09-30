@@ -550,7 +550,7 @@ func nullableHosts() (hosts map[string]*v1beta1.Host, err error) {
 // Connect to the vSphere API.
 func (r *Client) connect() error {
 	r.Close()
-	client, err := base.ConnectGovmomi(
+	client, err := libvsphere.ConnectProvider(
 		context.TODO(),
 		r.Source.Provider.Spec.URL,
 		r.user(),
