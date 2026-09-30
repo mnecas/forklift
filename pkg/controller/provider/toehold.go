@@ -18,6 +18,7 @@ import (
 	"github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
+	"github.com/kubev2v/forklift/pkg/lib/logging"
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	v1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
@@ -50,7 +51,10 @@ type applianceCheck struct {
 func newApplianceCheck(client client.Client, provider *api.Provider) *applianceCheck {
 	return &applianceCheck{
 		client:     client,
-		appliances: copyappliance.Ensurer{Client: client},
+		appliances: copyappliance.Ensurer{
+			Client: client,
+			Log:    logging.WithName("provider|appliance-check"),
+		},
 		provider:   provider,
 		build: func(provider *api.Provider, toehold *api.ToeholdTemplate) (*api.CopyAppliance, error) {
 			builder, err := copyappliance.NewBuilder(provider)
@@ -94,7 +98,17 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 		return
 	}
 
-	inputs := inputsOf(toehold)
+	// Items the verdict is keyed on: rebuild the template or change the image
+	// and the last verdict says nothing about what is there now.
+	items := []string{
+		toehold.Status.Template.Moref,
+		toehold.Status.Template.DiskHash,
+		toehold.Status.Template.ConfigHash,
+		Settings.CopyAppliance.ContainerImage,
+	}
+	describe := fmt.Sprintf("template %s (disk %s, config %s), appliance image %s",
+		items[0], items[1], items[2], items[3])
+
 	appliance, err := c.appliances.Find(ctx,
 		c.provider.Namespace,
 		c.appliances.Labeler.CheckLabels(c.provider),
@@ -107,26 +121,26 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 
 	// A verdict already reached for these inputs stands, and the appliance it
 	// was reached with has served its purpose.
-	if recorded := c.provider.Status.FindCondition(ToeholdApplianceChecked); inputs.Match(recorded) {
+	if recorded := c.provider.Status.FindCondition(ToeholdApplianceChecked); recorded != nil && slices.Equal(recorded.Items, items) {
 		if recorded.Reason != ToeholdCheckPassed {
 			c.block(ToeholdCheckFailed, recorded.Message)
 		}
 		return c.teardown(ctx, appliance)
 	}
-	// The inputs have changed, so any verdict on record is about something else.
 	c.provider.Status.DeleteCondition(ToeholdApplianceChecked)
 
 	switch {
 	case appliance == nil:
 		err = c.deploy(ctx, toehold)
-	case appliance.Status.Phase == copyappliance.PhaseDeployCompleted:
-		c.pass(inputs)
+	case copyappliance.IsDeployReady(appliance):
+		// Same readiness the plan waits for before using an appliance.
+		c.pass(items, describe)
 		err = c.teardown(ctx, appliance)
 	case appliance.Status.Phase == copyappliance.PhaseDeployFailed:
-		c.fail(inputs, copyappliance.FailureReason(appliance))
+		c.fail(items, describe, copyappliance.FailureReason(appliance))
 		err = c.teardown(ctx, appliance)
 	case time.Since(appliance.CreationTimestamp.Time) > toeholdCheckDeadline:
-		c.fail(inputs, fmt.Sprintf(
+		c.fail(items, describe, fmt.Sprintf(
 			"the appliance did not come up within %s", toeholdCheckDeadline))
 		err = c.teardown(ctx, appliance)
 	default:
@@ -136,7 +150,8 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 	return
 }
 
-// deploy creates the check appliance and blocks the provider while it comes up.
+// deploy creates the check appliance the same way a migration does (via the
+// ensurer) and blocks the provider while it comes up.
 func (c *applianceCheck) deploy(ctx context.Context, toehold *api.ToeholdTemplate) (err error) {
 	defer func() {
 		if err != nil {
@@ -147,20 +162,15 @@ func (c *applianceCheck) deploy(ctx context.Context, toehold *api.ToeholdTemplat
 
 	appliance, err := c.build(c.provider, toehold)
 	if err != nil {
-		err = liberr.Wrap(err)
-		return
+		return liberr.Wrap(err)
 	}
 	// Owned by the provider, so deleting the provider takes the appliance with
 	// it even if the check never settles.
-	err = k8sutil.SetControllerReference(c.provider, appliance, c.client.Scheme())
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
+	if err = k8sutil.SetControllerReference(c.provider, appliance, c.client.Scheme()); err != nil {
+		return liberr.Wrap(err)
 	}
-	err = c.client.Create(ctx, appliance)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
+	if _, err = c.appliances.Appliance(ctx, appliance); err != nil {
+		return err
 	}
 	c.block(ToeholdCheckPending, "Copy appliance check started.")
 	return
@@ -169,18 +179,18 @@ func (c *applianceCheck) deploy(ctx context.Context, toehold *api.ToeholdTemplat
 // teardown deletes the check appliance, if there is one still to delete. The
 // check is a one-off: once the verdict is recorded the appliance has no further
 // purpose, and it holds a vCenter VM open until it goes.
-func (c *applianceCheck) teardown(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+func (c *applianceCheck) teardown(ctx context.Context, appliance *api.CopyAppliance) error {
 	if appliance == nil || appliance.DeletionTimestamp != nil {
-		return
+		return nil
 	}
-	err = c.client.Delete(ctx, appliance)
+	err := c.client.Delete(ctx, appliance)
 	if k8serr.IsNotFound(err) {
-		err = nil
+		return nil
 	}
 	if err != nil {
-		err = liberr.Wrap(err, "appliance", appliance.Name)
+		return liberr.Wrap(err, "appliance", appliance.Name)
 	}
-	return
+	return nil
 }
 
 // block records that the provider may not be used until the appliance has been
@@ -198,26 +208,23 @@ func (c *applianceCheck) block(reason, message string) {
 	})
 }
 
-// pass records that the check succeeded, and what it was a check of. Durable,
-// so that it survives staging: it is the only reason a check that has already
-// run is not run again. Advisory, so that it never blocks a pass.
-func (c *applianceCheck) pass(inputs checkInputs) {
+// pass records that the check succeeded. Durable so it survives staging;
+// Advisory so it never blocks a pass.
+func (c *applianceCheck) pass(items []string, describe string) {
 	c.provider.Status.SetCondition(libcnd.Condition{
 		Type:     ToeholdApplianceChecked,
 		Status:   True,
 		Reason:   ToeholdCheckPassed,
 		Category: Advisory,
 		Durable:  true,
-		Items:    inputs.Items(),
-		Message:  fmt.Sprintf("Copy appliance check passed: %s.", inputs.Describe()),
+		Items:    items,
+		Message:  fmt.Sprintf("Copy appliance check passed: %s.", describe),
 	})
 }
 
-// fail records the failure and blocks on it in one call, so that the two cannot
-// drift apart. The record keeps the check from running again until the inputs
-// change; the blocker keeps the provider out of use until it does.
-func (c *applianceCheck) fail(inputs checkInputs, reason string) {
-	message := fmt.Sprintf("Copy appliance check failed: %s (%s).", reason, inputs.Describe())
+// fail records the failure and blocks on it together so the two cannot drift.
+func (c *applianceCheck) fail(items []string, describe, reason string) {
+	message := fmt.Sprintf("Copy appliance check failed: %s (%s).", reason, describe)
 	c.provider.Status.SetCondition(
 		libcnd.Condition{
 			Type:     ToeholdApplianceChecked,
@@ -225,7 +232,7 @@ func (c *applianceCheck) fail(inputs checkInputs, reason string) {
 			Reason:   ToeholdCheckFailed,
 			Category: Advisory,
 			Durable:  true,
-			Items:    inputs.Items(),
+			Items:    items,
 			Message:  message,
 		},
 		libcnd.Condition{
@@ -237,75 +244,30 @@ func (c *applianceCheck) fail(inputs checkInputs, reason string) {
 		})
 }
 
-// checkInputs is what a check is a check of. A verdict is only good for the
-// inputs it was reached with: rebuild the template or change the appliance
-// image and the last verdict says nothing about what is there now.
-type checkInputs struct {
-	moref      string
-	diskHash   string
-	configHash string
-	image      string
-}
-
-func inputsOf(toehold *api.ToeholdTemplate) checkInputs {
-	return checkInputs{
-		moref:      toehold.Status.Template.Moref,
-		diskHash:   toehold.Status.Template.DiskHash,
-		configHash: toehold.Status.Template.ConfigHash,
-		image:      Settings.CopyAppliance.ContainerImage,
-	}
-}
-
-// Items is the inputs as the condition carries them, and the only place their
-// order is written. Match is the only place it is read.
-func (i checkInputs) Items() []string {
-	return []string{i.moref, i.diskHash, i.configHash, i.image}
-}
-
-// Match reports whether a recorded verdict was reached with these inputs.
-func (i checkInputs) Match(recorded *libcnd.Condition) bool {
-	return recorded != nil && slices.Equal(recorded.Items, i.Items())
-}
-
-// Describe names the inputs for the condition message. Items is documented as
-// a list of the items referenced in the message, so the message references them.
-func (i checkInputs) Describe() string {
-	return fmt.Sprintf("template %s (disk %s, config %s), appliance image %s",
-		i.moref, i.diskHash, i.configHash, i.image)
-}
-
 // toeholdSync keeps a provider's toehold template in step with the provider's
 // settings and the controller's own image settings. The template itself is
 // created by the console or the API; this only maintains one that is already
 // there. Built for a single reconcile pass and discarded.
 type toeholdSync struct {
-	client    client.Client
-	provider  *api.Provider
-	datastore string
-	folder    string
-	network   string
+	client   client.Client
+	provider *api.Provider
 }
 
-// newToeholdSync reads the placement settings once, so that the gate in Run and
-// the write in apply cannot disagree about them.
 func newToeholdSync(client client.Client, provider *api.Provider) *toeholdSync {
-	return &toeholdSync{
-		client:    client,
-		provider:  provider,
-		datastore: provider.Setting(api.ToeholdDatastore),
-		folder:    provider.Setting(api.ToeholdFolder),
-		network:   provider.Setting(api.ToeholdNetwork),
-	}
+	return &toeholdSync{client: client, provider: provider}
 }
 
 // Run applies the provider's settings to its toehold template.
-func (s *toeholdSync) Run(ctx context.Context) (err error) {
+func (s *toeholdSync) Run(ctx context.Context) error {
 	if !inventoryReady(s.provider) {
-		return
+		return nil
 	}
+	datastore := s.provider.Setting(api.ToeholdDatastore)
+	folder := s.provider.Setting(api.ToeholdFolder)
+	network := s.provider.Setting(api.ToeholdNetwork)
 	if Settings.Toehold.BaseDiskContainerImage == "" ||
-		s.datastore == "" || s.folder == "" || s.network == "" {
-		return
+		datastore == "" || folder == "" || network == "" {
+		return nil
 	}
 
 	template := &api.ToeholdTemplate{}
@@ -313,57 +275,49 @@ func (s *toeholdSync) Run(ctx context.Context) (err error) {
 		Namespace: s.provider.Namespace,
 		Name:      s.provider.ToeholdTemplateName(),
 	}
-	err = s.client.Get(ctx, key, template)
+	err := s.client.Get(ctx, key, template)
 	if k8serr.IsNotFound(err) {
 		// Created explicitly by the console or the API; not ours to make.
-		err = nil
-		return
+		return nil
 	}
 	if err != nil {
-		err = liberr.Wrap(err, "template", key.Name)
-		return
+		return liberr.Wrap(err, "template", key.Name)
 	}
 
 	found := template.DeepCopy()
-	s.apply(&template.Spec)
-	err = k8sutil.SetControllerReference(s.provider, template, s.client.Scheme())
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	if reflect.DeepEqual(found.Spec, template.Spec) &&
-		reflect.DeepEqual(found.OwnerReferences, template.OwnerReferences) {
-		return
-	}
-	// Update rather than Patch: a patch is sent even when the diff is empty,
-	// which would turn every pass into a write.
-	err = s.client.Update(ctx, template)
-	if err != nil {
-		err = liberr.Wrap(err, "template", key.Name)
-	}
-	return
-}
-
-// apply writes the fields of the spec that the provider dictates. The rest —
-// TargetNamespace, TransferNetwork, NodeSelector and RetainTemplate — belong to
-// whoever created the template (console/API), and are left as they were found.
-func (s *toeholdSync) apply(spec *api.ToeholdTemplateSpec) {
-	spec.Provider = v1.ObjectReference{
+	// Fields the provider dictates. The rest — TargetNamespace,
+	// TransferNetwork, NodeSelector and RetainTemplate — belong to whoever
+	// created the template and are left as found.
+	template.Spec.Provider = v1.ObjectReference{
 		Name:      s.provider.Name,
 		Namespace: s.provider.Namespace,
 	}
-	spec.TemplateName = s.provider.ToeholdTemplateName()
-	spec.BaseDisk = api.ToeholdBaseDisk{
+	template.Spec.TemplateName = s.provider.ToeholdTemplateName()
+	template.Spec.BaseDisk = api.ToeholdBaseDisk{
 		ContainerImage: Settings.Toehold.BaseDiskContainerImage,
 	}
-	spec.Resources = api.ToeholdResources{
+	template.Spec.Resources = api.ToeholdResources{
 		CPU:       Settings.Toehold.TemplateCPU,
 		MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
 	}
-	spec.Datastore = s.datastore
-	spec.Folder = s.folder
-	spec.Network = s.network
-	spec.BuilderImage = Settings.Toehold.BuilderImage
+	template.Spec.Datastore = datastore
+	template.Spec.Folder = folder
+	template.Spec.Network = network
+	template.Spec.BuilderImage = Settings.Toehold.BuilderImage
+
+	if err = k8sutil.SetControllerReference(s.provider, template, s.client.Scheme()); err != nil {
+		return liberr.Wrap(err)
+	}
+	if reflect.DeepEqual(found.Spec, template.Spec) &&
+		reflect.DeepEqual(found.OwnerReferences, template.OwnerReferences) {
+		return nil
+	}
+	// Update rather than Patch: a patch is sent even when the diff is empty,
+	// which would turn every pass into a write.
+	if err = s.client.Update(ctx, template); err != nil {
+		return liberr.Wrap(err, "template", key.Name)
+	}
+	return nil
 }
 
 // Subject names of the issued certificates. The server is named for the logical

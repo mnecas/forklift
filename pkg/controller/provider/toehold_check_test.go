@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,17 @@ func checkAppliance(phase string) *api.CopyAppliance {
 		},
 	}
 	appliance.Status.Phase = phase
+	return appliance
+}
+
+// readyCheckAppliance is DeployCompleted with Ready=True — what IsDeployReady
+// (and the plan wait) requires before treating an appliance as usable.
+func readyCheckAppliance() *api.CopyAppliance {
+	appliance := checkAppliance(copyappliance.PhaseDeployCompleted)
+	appliance.Status.SetCondition(libcnd.Condition{
+		Type:   libcnd.Ready,
+		Status: True,
+	})
 	return appliance
 }
 
@@ -229,7 +241,7 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		},
 		{
 			name:          "an appliance that came up records a pass and is torn down",
-			objects:       []client.Object{checkAppliance(copyappliance.PhaseDeployCompleted)},
+			objects:       []client.Object{readyCheckAppliance()},
 			wantRecorded:  ToeholdCheckPassed,
 			wantMessage:   "passed",
 			wantAppliance: "terminating",
@@ -402,7 +414,7 @@ func TestToeholdApplianceCheckRunsOnce(t *testing.T) {
 	withToeholdSettings(t)
 	provider := checkProvider()
 	c := testCheck(t, provider, provider, checkTemplate(),
-		checkAppliance(copyappliance.PhaseDeployCompleted))
+		readyCheckAppliance())
 
 	if err := runPass(t, c); err != nil {
 		t.Fatalf("first pass: %v", err)
@@ -559,8 +571,9 @@ func TestToeholdCheckReportsAnApplianceReadFailure(t *testing.T) {
 func TestToeholdCheckDoesNotBlockTheStartOfTheNextPass(t *testing.T) {
 	provider := checkProvider()
 	c := &applianceCheck{provider: provider}
-	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
-	c.fail(inputs, "the guest never reported an address")
+	items := []string{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+	c.fail(items, "template vm-900 (disk disk-1, config config-1), appliance image copy-appliance:latest",
+		"the guest never reported an address")
 
 	if !provider.Status.HasBlockerCondition() {
 		t.Fatal("precondition: the failed provider is not blocked")
@@ -572,17 +585,14 @@ func TestToeholdCheckDoesNotBlockTheStartOfTheNextPass(t *testing.T) {
 		t.Error("the provider is blocked before the check has re-run; " +
 			"updateContainer and the template sync will not run")
 	}
-	// The record itself has to still be readable, or the check would run again
-	// every pass.
 	if provider.Status.FindCondition(ToeholdApplianceChecked) == nil {
 		t.Error("the record is not readable during staging; is it durable?")
 	}
 }
 
-// The shape of the two conditions is what makes the pass above work, so it is
-// asserted on directly rather than inferred from a reconcile path.
 func TestToeholdCheckConditions(t *testing.T) {
-	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+	items := []string{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
+	describe := "template vm-900 (disk disk-1, config config-1), appliance image copy-appliance:latest"
 
 	blocked := &applianceCheck{provider: checkProvider()}
 	blocked.block(ToeholdCheckPending, "waiting")
@@ -596,7 +606,7 @@ func TestToeholdCheckConditions(t *testing.T) {
 	}
 
 	passed := &applianceCheck{provider: checkProvider()}
-	passed.pass(inputs)
+	passed.pass(items, describe)
 	switch cnd := passed.provider.Status.FindCondition(ToeholdApplianceChecked); {
 	case cnd == nil:
 		t.Error("pass set no condition")
@@ -604,16 +614,15 @@ func TestToeholdCheckConditions(t *testing.T) {
 		t.Errorf("record category = %s, want %s", cnd.Category, Advisory)
 	case !cnd.Durable:
 		t.Error("the record is not durable; the check would run again every pass")
-	case !inputs.Match(cnd):
-		t.Errorf("record items = %v, want the inputs it was reached with", cnd.Items)
+	case !slices.Equal(cnd.Items, items):
+		t.Errorf("record items = %v, want %v", cnd.Items, items)
 	}
 	if passed.provider.Status.FindCondition(ToeholdApplianceNotReady) != nil {
 		t.Error("a passing check blocked the provider")
 	}
 
-	// The record and the blocker have to agree, which is why one call sets both.
 	failed := &applianceCheck{provider: checkProvider()}
-	failed.fail(inputs, "the guest never reported an address")
+	failed.fail(items, describe, "the guest never reported an address")
 	record := failed.provider.Status.FindCondition(ToeholdApplianceChecked)
 	blocker := failed.provider.Status.FindCondition(ToeholdApplianceNotReady)
 	if record == nil || blocker == nil {
@@ -625,57 +634,10 @@ func TestToeholdCheckConditions(t *testing.T) {
 	if !strings.Contains(record.Message, "the guest never reported an address") {
 		t.Errorf("message = %q, want it to carry the reason", record.Message)
 	}
-	// Items is documented as the items referenced in the Message.
 	for _, item := range record.Items {
 		if !strings.Contains(record.Message, item) {
 			t.Errorf("item %q is not referenced in the message %q", item, record.Message)
 		}
-	}
-}
-
-func TestCheckInputs(t *testing.T) {
-	withToeholdSettings(t)
-	inputs := checkInputs{"vm-900", "disk-1", "config-1", "copy-appliance:latest"}
-
-	// Three come off the template, the fourth off the appliance settings: a
-	// new appliance image is as much a reason to re-check as a new template.
-	if got := inputsOf(checkTemplate()); got != inputs {
-		t.Errorf("inputsOf = %+v, want %+v", got, inputs)
-	}
-
-	tests := []struct {
-		name     string
-		recorded *libcnd.Condition
-		want     bool
-	}{
-		{
-			name:     "the same four match",
-			recorded: &libcnd.Condition{Items: inputs.Items()},
-			want:     true,
-		},
-		{
-			name:     "no record matches nothing",
-			recorded: nil,
-		},
-		{
-			name:     "a rebuilt template does not match",
-			recorded: &libcnd.Condition{Items: []string{"vm-901", "disk-1", "config-1", "copy-appliance:latest"}},
-		},
-		{
-			name:     "a shorter record from an older build does not match",
-			recorded: &libcnd.Condition{Items: []string{"vm-900", "disk-1", "config-1"}},
-		},
-		{
-			name:     "the same four in a different order do not match",
-			recorded: &libcnd.Condition{Items: []string{"disk-1", "vm-900", "config-1", "copy-appliance:latest"}},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := inputs.Match(tt.recorded); got != tt.want {
-				t.Errorf("Match = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }
 

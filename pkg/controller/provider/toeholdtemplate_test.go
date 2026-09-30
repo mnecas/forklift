@@ -6,6 +6,7 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
+	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -32,7 +33,7 @@ func syncProvider() *api.Provider {
 }
 
 // syncTemplate is a toehold template as someone else created it: the fields the
-// provider dictates are empty or wrong, and the three it does not are set.
+// provider dictates are empty or wrong, and the ones it does not are set.
 func syncTemplate() *api.ToeholdTemplate {
 	retain := false
 	return &api.ToeholdTemplate{
@@ -40,6 +41,7 @@ func syncTemplate() *api.ToeholdTemplate {
 		Spec: api.ToeholdTemplateSpec{
 			Datastore:       "the-old-datastore",
 			TargetNamespace: "toehold-builds",
+			TransferNetwork: &core.ObjectReference{Name: "migration-net", Namespace: "openshift-mtv"},
 			NodeSelector:    map[string]string{"kubernetes.io/arch": "amd64"},
 			RetainTemplate:  &retain,
 		},
@@ -80,6 +82,9 @@ func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	spec := getTemplate(t, s).Spec
 	if spec.TargetNamespace != "toehold-builds" {
 		t.Errorf("TargetNamespace = %q, want it left alone", spec.TargetNamespace)
+	}
+	if spec.TransferNetwork == nil || spec.TransferNetwork.Name != "migration-net" {
+		t.Errorf("TransferNetwork = %v, want it left alone", spec.TransferNetwork)
 	}
 	if spec.NodeSelector["kubernetes.io/arch"] != "amd64" {
 		t.Errorf("NodeSelector = %v, want it left alone", spec.NodeSelector)
@@ -169,10 +174,15 @@ func TestToeholdSyncSetsOwnership(t *testing.T) {
 
 	// The spec already matching is not a reason to leave it unowned.
 	t.Run("on a template whose spec already matches", func(t *testing.T) {
-		template := syncTemplate()
-		s := testToeholdSync(t, provider, provider, template)
-		s.apply(&template.Spec)
-		s = testToeholdSync(t, provider, provider, template)
+		s := testToeholdSync(t, provider, provider, syncTemplate())
+		if err := s.Run(context.TODO()); err != nil {
+			t.Fatalf("settle: %v", err)
+		}
+		template := getTemplate(t, s)
+		template.OwnerReferences = nil
+		if err := s.client.Update(context.TODO(), template); err != nil {
+			t.Fatalf("clear ownership: %v", err)
+		}
 
 		if err := s.Run(context.TODO()); err != nil {
 			t.Fatalf("Run: %v", err)

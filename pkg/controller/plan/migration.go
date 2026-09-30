@@ -17,6 +17,7 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
+	appliancectrl "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
@@ -71,6 +72,8 @@ type Migration struct {
 	builder adapter.Builder
 	// Ensurer
 	ensurer adapter.Ensurer
+	// Ensurer for CopyAppliance CRs.
+	copyApplianceEnsurer appliancectrl.Ensurer
 	// kubevirt.
 	kubevirt KubeVirt
 	// Source client.
@@ -193,6 +196,7 @@ func (r *Migration) init() (err error) {
 	if err != nil {
 		return
 	}
+	r.copyApplianceEnsurer = appliancectrl.Ensurer{Client: r.Client, Log: r.Log}
 	r.destinationClient, err = adapter.DestinationClient(r.Context)
 	if err != nil {
 		return
@@ -1067,7 +1071,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
 				break
 			}
-			err = r.releaseCopyAppliance(vm)
+			err = r.setCopyApplianceTarget(vm, api.ExportTargetRelease)
 			if err != nil {
 				step.AddError(err.Error())
 				err = nil
@@ -1098,7 +1102,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
 				break
 			}
-			err = r.refreshCopyAppliance(vm)
+			err = r.setCopyApplianceTarget(vm, api.ExportTargetExport)
 			if err != nil {
 				step.AddError(err.Error())
 				err = nil
