@@ -28,7 +28,7 @@ func TestRunSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
 	ac.Appliance.Status.Phase = PhaseConfigure
 	runner := DeployRunner{context: ac}
 
-	err := runner.Run(context.TODO())
+	_, err := runner.Run(context.TODO())
 
 	if err != nil {
 		t.Fatalf("Run: %v", err)

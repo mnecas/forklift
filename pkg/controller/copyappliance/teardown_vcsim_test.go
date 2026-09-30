@@ -101,7 +101,7 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 	t.Helper()
 	status := &runner.context.Appliance.Status
 	for pass := 0; pass < 10; pass++ {
-		err := runner.Run(ctx)
+		_, err := runner.Run(ctx)
 		if err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
 		}
@@ -182,7 +182,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		err = runner.Run(ctx)
+		_, err = runner.Run(ctx)
 		if err != nil {
 			t.Fatalf("first pass: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatal("the pass recorded no task to wait on")
 		}
 
-		err = runner.Run(ctx)
+		_, err = runner.Run(ctx)
 		if err != nil {
 			t.Fatalf("second pass: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		}
 
 		status.Phase = PhasePowerOff
-		err = runner.execute(ctx)
+		_, err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("PowerOff: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("detach the disks: %v", err)
 		}
 		status.Phase = PhaseDetachDisks
-		err = runner.execute(ctx)
+		_, err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("DetachDisks: %v", err)
 		}
@@ -308,7 +308,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if err := runner.begin(); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		err := runner.Run(ctx)
+		_, err := runner.Run(ctx)
 
 		if err == nil {
 			t.Fatal("teardown accepted a moRef from another vCenter")

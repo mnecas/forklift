@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
+	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
@@ -50,9 +52,18 @@ func (r *DeployRunner) begin() (err error) {
 	return
 }
 
-// Run runs the current deploy phase once. A finished step sets Status.Phase
-// to its successor; the next reconcile picks it up.
-func (r *DeployRunner) Run(ctx context.Context) (err error) {
+// Run runs the current deploy phase once and reports how long to wait before
+// the next pass. A finished step sets Status.Phase to its successor; the next
+// reconcile picks it up.
+func (r *DeployRunner) Run(ctx context.Context) (reQ time.Duration, err error) {
+	// Ended() swallows the error and controller-runtime applies no backoff of
+	// its own, so a failed pass would otherwise retry against vCenter forever
+	// at the error cadence.
+	defer func() {
+		if err != nil {
+			reQ = base.LongReQ
+		}
+	}()
 	// Only an appliance that has not started yet is seeded. A phase outside
 	// the pipeline is a failed deploy, which execute parks; seeding it would
 	// restart the deploy on every pass.
@@ -66,7 +77,7 @@ func (r *DeployRunner) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = r.execute(ctx)
+	reQ, err = r.execute(ctx)
 	if err != nil {
 		r.context.Appliance.Status.Phase = r.failedPhase()
 		log := []interface{}{"phase", r.context.Appliance.Status.Phase}
@@ -112,39 +123,66 @@ func nextPhase(appliance *api.CopyAppliance, itinerary *libitr.Itinerary) {
 	appliance.Status.Phase = step.Name
 }
 
-func (r *DeployRunner) execute(ctx context.Context) (err error) {
+// execute runs the phase the appliance is on and reports how long to wait
+// before running the next one. A step that advances the phase asks for no wait:
+// writing the new phase to the status fires the watch, which brings the next
+// pass back at once. A step still waiting writes nothing, so nothing wakes us,
+// and it names the interval it wants to be polled at. Every wait here is on
+// vSphere, so those intervals are deliberately slow: each reconcile opens and
+// closes a vCenter session, and FastReQ would mean two logins per second per CR.
+func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
 	case PhaseCloneVM:
 		task, cloneErr := r.context.CloneVM(ctx)
 		if cloneErr != nil {
-			return cloneErr
+			err = cloneErr
+			return
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
 	case PhaseWaitForClone:
 		done, waitErr := r.WaitForClone(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		// A vSphere task, which settles in seconds.
+		reQ = base.SlowReQ
 	case PhaseWaitForNetwork:
 		done, waitErr := r.WaitForNetwork(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		// Slower than the task waits. Those are waiting on vSphere, which
+		// settles in seconds; this one is waiting on a guest to boot and on
+		// VMware Tools to start answering, which takes a minute or more.
+		// Polling it at the task cadence buys nothing but vCenter logins.
+		reQ = base.LongReQ
 	case PhaseLoadImage:
 		done, injectErr := r.InjectImage(ctx)
 		if injectErr != nil {
-			return injectErr
+			err = injectErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		// The first step to log in, so the only thing waited on here is sshd
+		// answering on an address the guest has already reported. That gap is
+		// seconds, so backing off to LongReQ would add half a minute to a
+		// deploy that is nearly done. The load itself runs to completion
+		// inside the pass and is never waited on.
+		reQ = base.SlowReQ
 	case PhaseConfigure:
 		// LoadImage used to run after this step and now runs before it. An
 		// appliance an older controller left sitting here has therefore not
@@ -156,15 +194,24 @@ func (r *DeployRunner) execute(ctx context.Context) (err error) {
 		}
 		done, cfgErr := r.Configure(ctx)
 		if cfgErr != nil {
-			return cfgErr
+			err = cfgErr
+			return
 		}
 		if done {
 			r.NextPhase()
+			return
 		}
+		// Two things are waited on here: the appliance not answering yet, and a
+		// supervisor that will not come up. The second one repeats forever,
+		// which is only affordable because the step asks whether the install is
+		// already in place before it does anything: a pass that finds it is two
+		// short commands.
+		reQ = base.SlowReQ
 	case PhaseWaitForExports:
 		done, waitErr := r.context.WaitForExports(ctx)
 		if waitErr != nil {
-			return waitErr
+			err = waitErr
+			return
 		}
 		if done {
 			r.NextPhase()
@@ -176,7 +223,12 @@ func (r *DeployRunner) execute(ctx context.Context) (err error) {
 				Category: libcnd.Required,
 				Message:  "Deploying the copy appliance has succeeded.",
 			})
+			return
 		}
+		// Waiting on the guest to enumerate its disks and bring up a container
+		// for each, which is tens of seconds. Same reasoning as
+		// PhaseWaitForNetwork.
+		reQ = base.LongReQ
 	case PhaseDeployCompleted:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
@@ -191,6 +243,10 @@ func (r *DeployRunner) execute(ctx context.Context) (err error) {
 			Category: libcnd.Critical,
 			Message:  "Deploying the copy appliance has failed.",
 		})
+		// Ended() swallows the error and controller-runtime applies no backoff
+		// of its own, so a failed appliance would otherwise retry against
+		// vCenter forever at the error cadence.
+		reQ = base.LongReQ
 	default:
 		err = liberr.New("unknown phase", "phase", r.context.Appliance.Status.Phase)
 	}

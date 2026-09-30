@@ -97,9 +97,10 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		return
 	}
 
+	var reQ time.Duration
 	appliance.Status.BeginStagingConditions()
 	if deleting {
-		err = r.Teardown(ctx, appliance)
+		reQ, err = r.Teardown(ctx, appliance)
 	} else {
 		patch := client.MergeFrom(appliance.DeepCopy())
 		if controllerutil.AddFinalizer(appliance, api.CopyApplianceFinalizer) {
@@ -115,16 +116,16 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 			PhaseAttachDisks, PhaseWaitForAttachDisks,
 			PhaseRestartOrchestrator,
 			PhaseDeployCompleted, PhaseReleased:
-			err = r.Export(ctx, appliance)
+			reQ, err = r.Export(ctx, appliance)
 		case PhaseWaitForExports:
 			// Shared with deploy; only a set target makes it export's job.
 			if appliance.Spec.Target != "" {
-				err = r.Export(ctx, appliance)
+				reQ, err = r.Export(ctx, appliance)
 			} else {
-				err = r.Deploy(ctx, appliance)
+				reQ, err = r.Deploy(ctx, appliance)
 			}
 		default:
-			err = r.Deploy(ctx, appliance)
+			reQ, err = r.Deploy(ctx, appliance)
 		}
 	}
 	appliance.Status.EndStagingConditions()
@@ -141,7 +142,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		}
 	}
 
-	result.RequeueAfter = requeueFor(appliance.Status.Phase)
+	result.RequeueAfter = reQ
 
 	// Released after the status update, because releasing it lets the API
 	// server delete the object out from under us.
@@ -153,58 +154,6 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 				err = liberr.Wrap(fErr)
 			}
 		}
-	}
-	return
-}
-
-// requeueFor returns how long to wait before the next pass. Every wait here is
-// on vSphere, so it is deliberately slow: each reconcile opens and closes a
-// vCenter session, and FastReQ would mean two logins per second per CR.
-func requeueFor(phase string) (reQ time.Duration) {
-	switch phase {
-	case PhaseWaitForClone,
-		PhaseWaitForPowerOff,
-		PhaseWaitForDetachDisks,
-		PhaseWaitForReleaseDisks,
-		PhaseWaitForAttachDisks,
-		PhaseWaitForDestroyVM:
-		reQ = base.SlowReQ
-	case PhaseRestartOrchestrator:
-		reQ = base.SlowReQ
-	case PhaseWaitForNetwork:
-		// Slower than the task waits above. Those are waiting on vSphere,
-		// which settles in seconds; this one is waiting on a guest to boot and
-		// on VMware Tools to start answering, which takes a minute or more.
-		// Polling it at the task cadence buys nothing but vCenter logins.
-		reQ = base.LongReQ
-	case PhaseLoadImage:
-		// The first step to log in, so this is the phase an appliance sits in
-		// between the guest reporting an address and sshd answering on it. That
-		// gap is seconds, so backing off to LongReQ would add half a minute to
-		// a deploy that is nearly done. The load itself runs to completion
-		// inside the pass and is never waited on here.
-		reQ = base.SlowReQ
-	case PhaseConfigure:
-		// Observable in two ways: the appliance not answering yet, which is the
-		// wait above at the cadence above, and a supervisor that will not come
-		// up. The second one repeats forever, which is only affordable because
-		// the step asks whether the install is already in place before it does
-		// anything: a pass that finds it is two short commands.
-		reQ = base.SlowReQ
-	case PhaseWaitForExports:
-		// Waiting on the guest to enumerate its disks and bring up a container
-		// for each, which is tens of seconds. Same reasoning as
-		// PhaseWaitForNetwork: polling faster buys nothing but vCenter logins.
-		reQ = base.LongReQ
-	case PhaseDeployFailed, PhaseTeardownFailed:
-		// Ended() swallows the error and controller-runtime applies no
-		// backoff of its own, so a failed appliance would otherwise retry
-		// against vCenter forever at the error cadence.
-		reQ = base.LongReQ
-	default:
-		// An action phase is never observed: ExecutePhase falls through it in
-		// the same pass. So this is a completed appliance, or nothing to do
-		// at all, and either way we wait for a watch event.
 	}
 	return
 }
@@ -300,12 +249,15 @@ func (r *Reconciler) applianceSecret(ctx context.Context, appliance *api.CopyApp
 }
 
 // Deploy drives the appliance VM one step closer to running and returns. Each
-// step that has to wait on vSphere leaves a phase behind and lets the requeue
-// bring us back, rather than blocking the worker on a poll loop.
-func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+// step that has to wait on vSphere leaves a phase behind and names the interval
+// it wants to be polled at, rather than blocking the worker on a poll loop.
+// A pass that never reached the runner has no interval to report, so the
+// backoff for a failed connection is chosen here.
+func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		reQ = base.LongReQ
 		err = nil
 		return
 	}
@@ -314,7 +266,7 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := DeployRunner{context: applianceContext}
-	err = runner.Run(ctx)
+	reQ, err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
 		err = nil
@@ -325,10 +277,11 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 }
 
 // Export drives disk release or re-export on a deployed appliance.
-func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		reQ = base.LongReQ
 		err = nil
 		return
 	}
@@ -337,7 +290,7 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := ExportRunner{context: applianceContext}
-	err = runner.Run(ctx)
+	reQ, err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
 		err = nil
@@ -348,12 +301,13 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 }
 
 // Teardown drives the appliance VM one step closer to gone and returns. Each
-// step that has to wait on vSphere leaves a phase behind and lets the requeue
-// bring us back, rather than blocking the worker on a poll loop.
-func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance) (err error) {
+// step that has to wait on vSphere leaves a phase behind and names the interval
+// it wants to be polled at, rather than blocking the worker on a poll loop.
+func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
 		r.setFailed(appliance, PhaseTeardownFailed, "ConnectFailed", err)
+		reQ = base.LongReQ
 		err = nil
 		return
 	}
@@ -362,7 +316,7 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
 	runner := TeardownRunner{context: applianceContext}
-	err = runner.Run(ctx)
+	reQ, err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
 		err = nil
