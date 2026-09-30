@@ -2155,7 +2155,7 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 		dsID         = "ds-1"
 		diskFile     = "[datastore1] test-vm/disk-0.vmdk"
 		storageClass = "test-sc"
-		nbdURI       = "nbd://10.0.0.5:10809"
+		nbdURI       = "nbds://10.0.0.5:10809"
 	)
 
 	warmCopyApplianceBuilder := func(objs ...runtime.Object) *Builder {
@@ -2249,6 +2249,18 @@ func createBuilder(objs ...runtime.Object) *Builder {
 	_ = rbacv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 	v1beta1.SchemeBuilder.AddToScheme(scheme)
+
+	// Add default toehold SSH secret for NBD TLS (enabled by default)
+	toeholdSecret := &core.Secret{
+		ObjectMeta: meta.ObjectMeta{Name: "test-toehold-ssh-key", Namespace: "test"},
+		Data: map[string][]byte{
+			"ca-cert.pem":     []byte("-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----\n"),
+			"client-cert.pem": []byte("-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----\n"),
+			"client-key.pem":  []byte("-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n"),
+		},
+	}
+	objs = append(objs, toeholdSecret)
+
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRuntimeObjects(objs...).
@@ -2270,6 +2282,9 @@ func createBuilder(objs ...runtime.Object) *Builder {
 					Spec: v1beta1.ProviderSpec{
 						Type: (*v1beta1.ProviderType)(ptr.To("vsphere")),
 						URL:  "https://vcenter.test.example.com/sdk",
+					},
+					Status: v1beta1.ProviderStatus{
+						ToeholdSSHPrivateSecret: "test-toehold-ssh-key",
 					},
 				},
 				Inventory: nil,

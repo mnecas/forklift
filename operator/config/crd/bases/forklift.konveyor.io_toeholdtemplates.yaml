@@ -216,7 +216,8 @@ spec:
             description: ToeholdTemplateStatus defines the observed state of ToeholdTemplate.
             properties:
               buildPod:
-                description: Reference to the build pod when a rebuild ran.
+                description: Reference to the build pod when a template was successfully
+                  created.
                 properties:
                   apiVersion:
                     description: API version of the referent.
@@ -316,9 +317,6 @@ spec:
                 - Running
                 - Succeeded
                 - Failed
-                type: string
-              rebuildRequestedAt:
-                description: Last accepted rebuild-requested-at annotation.
                 type: string
               stage:
                 description: ToeholdTemplateStage is the fine-grained pipeline position
