@@ -8,6 +8,10 @@ import (
 
 const ToeholdTemplateFinalizer = "forklift/toehold-template"
 
+// LabelToehold marks build pods owned by a ToeholdTemplate (value is the
+// template name).
+const LabelToehold = "forklift.konveyor.io/toehold"
+
 // ToeholdTemplatePhase is the high-level lifecycle state of a ToeholdTemplate resource.
 type ToeholdTemplatePhase string
 
@@ -71,9 +75,6 @@ type ToeholdTemplateSpec struct {
 	Folder string `json:"folder"`
 	// Port group for OVF network mapping.
 	Network string `json:"network"`
-	// Namespace where the build pod runs. Defaults to the CR namespace.
-	// +optional
-	TargetNamespace string `json:"targetNamespace,omitempty"`
 	// Multus NAD for the OVA build pod (same as Plan.spec.transferNetwork).
 	// +optional
 	TransferNetwork *core.ObjectReference `json:"transferNetwork,omitempty"`
@@ -157,12 +158,4 @@ type ToeholdTemplateList struct {
 
 func init() {
 	SchemeBuilder.Register(&ToeholdTemplate{}, &ToeholdTemplateList{})
-}
-
-// TargetNS returns the namespace for managed resources.
-func (t *ToeholdTemplate) TargetNS() string {
-	if t.Spec.TargetNamespace != "" {
-		return t.Spec.TargetNamespace
-	}
-	return t.Namespace
 }

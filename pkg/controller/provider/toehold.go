@@ -136,7 +136,7 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 		// Same readiness the plan waits for before using an appliance.
 		c.pass(items, describe)
 		err = c.teardown(ctx, appliance)
-	case appliance.Status.Phase == copyappliance.PhaseDeployFailed:
+	case appliance.Status.Phase == api.PhaseDeployFailed:
 		c.fail(items, describe, copyappliance.FailureReason(appliance))
 		err = c.teardown(ctx, appliance)
 	case time.Since(appliance.CreationTimestamp.Time) > toeholdCheckDeadline:
@@ -285,9 +285,9 @@ func (s *toeholdSync) Run(ctx context.Context) error {
 	}
 
 	found := template.DeepCopy()
-	// Fields the provider dictates. The rest — TargetNamespace,
-	// TransferNetwork and NodeSelector — belong to whoever created the
-	// template and are left as found.
+	// Fields the provider dictates. The rest — TransferNetwork and
+	// NodeSelector — belong to whoever created the template and are left
+	// as found.
 	template.Spec.Provider = v1.ObjectReference{
 		Name:      s.provider.Name,
 		Namespace: s.provider.Namespace,

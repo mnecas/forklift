@@ -91,7 +91,7 @@ func checkAppliance(phase string) *api.CopyAppliance {
 // readyCheckAppliance is DeployCompleted with Ready=True — what IsDeployReady
 // (and the plan wait) requires before treating an appliance as usable.
 func readyCheckAppliance() *api.CopyAppliance {
-	appliance := checkAppliance(copyappliance.PhaseDeployCompleted)
+	appliance := checkAppliance(api.PhaseDeployCompleted)
 	appliance.Status.SetCondition(libcnd.Condition{
 		Type:   libcnd.Ready,
 		Status: True,
@@ -202,7 +202,7 @@ func applianceState(t *testing.T, c *applianceCheck) string {
 }
 
 func TestToeholdApplianceCheck(t *testing.T) {
-	failed := checkAppliance(copyappliance.PhaseDeployFailed)
+	failed := checkAppliance(api.PhaseDeployFailed)
 	failed.Status.SetCondition(libcnd.Condition{
 		Type:     libcnd.Ready,
 		Status:   False,
@@ -210,10 +210,10 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		Message:  "the guest never reported an address",
 	})
 
-	stale := checkAppliance(copyappliance.PhaseWaitForNetwork)
+	stale := checkAppliance(api.PhaseWaitForNetwork)
 	stale.CreationTimestamp = meta.NewTime(time.Now().Add(-2 * toeholdCheckDeadline))
 
-	terminating := checkAppliance(copyappliance.PhaseWaitForClone)
+	terminating := checkAppliance(api.PhaseWaitForClone)
 	deleted := meta.Now()
 	terminating.DeletionTimestamp = &deleted
 
@@ -256,9 +256,9 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		},
 		{
 			name:          "an appliance still converging is waited on",
-			objects:       []client.Object{checkAppliance(copyappliance.PhaseWaitForNetwork)},
+			objects:       []client.Object{checkAppliance(api.PhaseWaitForNetwork)},
 			wantBlockedBy: ToeholdCheckPending,
-			wantMessage:   copyappliance.PhaseWaitForNetwork,
+			wantMessage:   api.PhaseWaitForNetwork,
 			wantAppliance: "present",
 		},
 		{

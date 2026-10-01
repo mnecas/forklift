@@ -3596,15 +3596,6 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
-              target:
-                description: |-
-                  Export attaches disks and publishes exports. Release detaches disks and clears exports.
-                  Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
-                  Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
-                enum:
-                - Export
-                - Release
-                type: string
               template:
                 description: |-
                   Inventory path of the VM template the appliance is cloned from. The
@@ -11304,10 +11295,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              targetNamespace:
-                description: Namespace where the build pod runs. Defaults to the CR
-                  namespace.
-                type: string
               templateName:
                 description: vCenter template name after OVF import.
                 type: string

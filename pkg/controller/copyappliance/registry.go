@@ -20,14 +20,6 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// serviceAccountTokenFile is the controller's bearer token, which the cluster's
-// internal registry accepts as a password.
-const serviceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token" // #nosec G101
-
-// registryUser is the username sent with the token. The internal registry
-// validates only the token.
-const registryUser = "serviceaccount"
-
 // ClusterRegistry reads container images for copy appliances. Prefer a fully
 // qualified pull spec (FQIN). An ImageStreamTag in the controller namespace is
 // still accepted and resolved against the cluster's internal registry.

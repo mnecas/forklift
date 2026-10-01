@@ -14,17 +14,6 @@ import (
 	core "k8s.io/api/core/v1"
 )
 
-// sshPrivateKeyData is the key the appliance's SSH secret holds its private key
-// under. It matches the name the provider's SSH key secrets use.
-const sshPrivateKeyData = "private-key"
-
-// sshTimeout bounds one login and the commands run over it. A reconcile must
-// not sit on an appliance that is not answering; the step is re-entered on the
-// next pass.
-const sshTimeout = 30 * time.Second
-
-const SSHFileTransferTimeout = 30 * time.Minute
-
 type SSHClient struct {
 	Client     *ssh.Client
 	conn       net.Conn

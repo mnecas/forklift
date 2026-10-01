@@ -39,7 +39,6 @@ func syncTemplate() *api.ToeholdTemplate {
 		ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "vcenter-toehold"},
 		Spec: api.ToeholdTemplateSpec{
 			Datastore:       "the-old-datastore",
-			TargetNamespace: "toehold-builds",
 			TransferNetwork: &core.ObjectReference{Name: "migration-net", Namespace: "openshift-mtv"},
 			NodeSelector:    map[string]string{"kubernetes.io/arch": "amd64"},
 		},
@@ -78,9 +77,6 @@ func TestToeholdSyncPreservesFieldsTheProviderDoesNotOwn(t *testing.T) {
 	}
 
 	spec := getTemplate(t, s).Spec
-	if spec.TargetNamespace != "toehold-builds" {
-		t.Errorf("TargetNamespace = %q, want it left alone", spec.TargetNamespace)
-	}
 	if spec.TransferNetwork == nil || spec.TransferNetwork.Name != "migration-net" {
 		t.Errorf("TransferNetwork = %v, want it left alone", spec.TransferNetwork)
 	}

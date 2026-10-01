@@ -3,6 +3,8 @@ package copyappliance
 import (
 	"strings"
 	"testing"
+
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 )
 
 func TestBuildCheck(t *testing.T) {
@@ -40,16 +42,16 @@ func TestBuildCheck(t *testing.T) {
 	if appliance.GenerateName != checkPrefix {
 		t.Errorf("GenerateName = %q, want %q", appliance.GenerateName, checkPrefix)
 	}
-	if _, found := appliance.Labels[LabelVM]; found {
-		t.Errorf("label %q is set, but a check appliance has no source VM", LabelVM)
+	if _, found := appliance.Labels[api.LabelVM]; found {
+		t.Errorf("label %q is set, but a check appliance has no source VM", api.LabelVM)
 	}
-	if appliance.Labels[LabelSubapp] != SubappCheck {
+	if appliance.Labels[api.LabelSubapp] != api.SubappCheck {
 		t.Errorf("label %q = %q, want %q",
-			LabelSubapp, appliance.Labels[LabelSubapp], SubappCheck)
+			api.LabelSubapp, appliance.Labels[api.LabelSubapp], api.SubappCheck)
 	}
-	if appliance.Labels[LabelProvider] != string(provider.UID) {
+	if appliance.Labels[api.LabelProvider] != string(provider.UID) {
 		t.Errorf("label %q = %q, want the provider's UID",
-			LabelProvider, appliance.Labels[LabelProvider])
+			api.LabelProvider, appliance.Labels[api.LabelProvider])
 	}
 }
 

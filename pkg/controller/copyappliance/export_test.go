@@ -7,35 +7,33 @@ import (
 )
 
 func TestPendingExportRequest(t *testing.T) {
+	disk := api.AttachedDisk{VMDKPath: "[ds] vm/disk-0.vmdk"}
 	appliance := &api.CopyAppliance{
-		Spec: api.CopyApplianceSpec{
-			Target: api.ExportTargetRelease,
-		},
 		Status: api.CopyApplianceStatus{
-			Phase: PhaseDeployCompleted,
+			Phase: api.PhaseDeployCompleted,
 		},
 	}
 	if !PendingExportRequest(appliance) {
-		t.Fatal("expected pending when DeployCompleted and Release requested")
+		t.Fatal("expected pending when DeployCompleted and AttachDisks cleared")
 	}
 
-	appliance.Spec.Target = api.ExportTargetExport
+	appliance.Spec.AttachDisks = []api.AttachedDisk{disk}
 	if PendingExportRequest(appliance) {
-		t.Fatal("did not expect pending when DeployCompleted and Export requested")
+		t.Fatal("did not expect pending when DeployCompleted and AttachDisks set")
 	}
 
-	appliance.Status.Phase = PhaseReleased
+	appliance.Status.Phase = api.PhaseReleased
 	if !PendingExportRequest(appliance) {
-		t.Fatal("expected pending when Released and Export requested")
+		t.Fatal("expected pending when Released and AttachDisks set")
 	}
 
-	appliance.Spec.Target = api.ExportTargetRelease
+	appliance.Spec.AttachDisks = nil
 	if PendingExportRequest(appliance) {
-		t.Fatal("did not expect pending when Released and Release requested")
+		t.Fatal("did not expect pending when Released and AttachDisks cleared")
 	}
 
-	appliance.Status.Phase = PhaseAttachDisks
-	appliance.Spec.Target = api.ExportTargetExport
+	appliance.Status.Phase = api.PhaseAttachDisks
+	appliance.Spec.AttachDisks = []api.AttachedDisk{disk}
 	if PendingExportRequest(appliance) {
 		t.Fatal("did not expect pending while already in the export pipeline")
 	}
@@ -43,51 +41,33 @@ func TestPendingExportRequest(t *testing.T) {
 
 func TestExportRunner_BeginSetsReleasePhase(t *testing.T) {
 	appliance := &api.CopyAppliance{
-		Spec: api.CopyApplianceSpec{
-			Target: api.ExportTargetRelease,
-		},
 		Status: api.CopyApplianceStatus{
-			Phase: PhaseDeployCompleted,
+			Phase: api.PhaseDeployCompleted,
 		},
 	}
 	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
 	if err := runner.begin(); err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if appliance.Status.Phase != PhaseReleaseDisks {
-		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseReleaseDisks)
+	if appliance.Status.Phase != api.PhaseReleaseDisks {
+		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, api.PhaseReleaseDisks)
 	}
 }
 
 func TestExportRunner_BeginSetsAttachPhase(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Spec: api.CopyApplianceSpec{
-			Target: api.ExportTargetExport,
+			AttachDisks: []api.AttachedDisk{{VMDKPath: "[ds] vm/disk-0.vmdk"}},
 		},
 		Status: api.CopyApplianceStatus{
-			Phase: PhaseReleased,
+			Phase: api.PhaseReleased,
 		},
 	}
 	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
 	if err := runner.begin(); err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if appliance.Status.Phase != PhaseAttachDisks {
-		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseAttachDisks)
-	}
-}
-
-func TestExportRunner_BeginUnknownTarget(t *testing.T) {
-	appliance := &api.CopyAppliance{
-		Spec: api.CopyApplianceSpec{
-			Target: "Sideways",
-		},
-	}
-	runner := ExportRunner{context: &ApplianceContext{Appliance: appliance}}
-	if err := runner.begin(); err == nil {
-		t.Fatal("begin accepted an unknown target")
-	}
-	if appliance.Status.Phase != PhaseDeployFailed {
-		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, PhaseDeployFailed)
+	if appliance.Status.Phase != api.PhaseAttachDisks {
+		t.Fatalf("phase = %q, want %q", appliance.Status.Phase, api.PhaseAttachDisks)
 	}
 }

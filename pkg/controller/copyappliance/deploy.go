@@ -18,16 +18,6 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-// ApplianceContainerImageName is where the image is filed in the appliance's podman
-// store. Deliberately not the cluster pull spec: the appliance has no reason to
-// carry the in-cluster registry's hostname, and a digest reference cannot be a
-// tag in a docker archive.
-const ApplianceContainerImageName = "localhost/forklift-copy-appliance"
-
-// AppliancePodmanLoadCommand reads a docker archive on its standard input and adds
-// what it finds to the appliance's podman store.
-const AppliancePodmanLoadCommand = "/usr/local/bin/toehold-podman load"
-
 // DeployRunner drives the appliance VM from nothing to running. It holds no
 // state of its own: every pass reads where it got to from the appliance status
 // and leaves the next phase behind.
@@ -94,19 +84,19 @@ func (r *DeployRunner) itinerary() *libitr.Itinerary {
 	return &libitr.Itinerary{
 		Name: "Deploy",
 		Pipeline: libitr.Pipeline{
-			{Name: PhaseCloneVM},
-			{Name: PhaseWaitForClone},
-			{Name: PhaseWaitForNetwork},
-			{Name: PhaseLoadImage},
-			{Name: PhaseConfigure},
-			{Name: PhaseWaitForExports},
-			{Name: PhaseDeployCompleted},
+			{Name: api.PhaseCloneVM},
+			{Name: api.PhaseWaitForClone},
+			{Name: api.PhaseWaitForNetwork},
+			{Name: api.PhaseLoadImage},
+			{Name: api.PhaseConfigure},
+			{Name: api.PhaseWaitForExports},
+			{Name: api.PhaseDeployCompleted},
 		},
 	}
 }
 
 func (r *DeployRunner) failedPhase() string {
-	return PhaseDeployFailed
+	return api.PhaseDeployFailed
 }
 
 // NextPhase sets Status.Phase to itinerary.Next of the current phase.
@@ -132,7 +122,13 @@ func nextPhase(appliance *api.CopyAppliance, itinerary *libitr.Itinerary) {
 // closes a vCenter session, and FastReQ would mean two logins per second per CR.
 func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
-	case PhaseCloneVM:
+	case api.PhaseCloneVM:
+		// A concurrent reconcile may already have started the clone or adopted
+		// an existing VM.
+		if r.context.Appliance.Status.TaskRef != "" || r.context.Appliance.Status.MoRef != "" {
+			r.NextPhase()
+			return
+		}
 		task, cloneErr := r.context.CloneVM(ctx)
 		if cloneErr != nil {
 			err = cloneErr
@@ -140,7 +136,7 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
-	case PhaseWaitForClone:
+	case api.PhaseWaitForClone:
 		done, waitErr := r.WaitForClone(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -152,7 +148,7 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		// A vSphere task, which settles in seconds.
 		reQ = base.SlowReQ
-	case PhaseWaitForNetwork:
+	case api.PhaseWaitForNetwork:
 		done, waitErr := r.WaitForNetwork(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -167,7 +163,7 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		// VMware Tools to start answering, which takes a minute or more.
 		// Polling it at the task cadence buys nothing but vCenter logins.
 		reQ = base.LongReQ
-	case PhaseLoadImage:
+	case api.PhaseLoadImage:
 		done, injectErr := r.InjectImage(ctx)
 		if injectErr != nil {
 			err = injectErr
@@ -183,13 +179,13 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		// deploy that is nearly done. The load itself runs to completion
 		// inside the pass and is never waited on.
 		reQ = base.SlowReQ
-	case PhaseConfigure:
+	case api.PhaseConfigure:
 		// LoadImage used to run after this step and now runs before it. An
 		// appliance an older controller left sitting here has therefore not
 		// loaded its image. Send it back, rather than install a supervisor with
 		// no image to run.
 		if r.context.Appliance.Status.ExporterImage == "" {
-			r.context.Appliance.Status.Phase = PhaseLoadImage
+			r.context.Appliance.Status.Phase = api.PhaseLoadImage
 			return
 		}
 		done, cfgErr := r.Configure(ctx)
@@ -207,7 +203,7 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		// already in place before it does anything: a pass that finds it is two
 		// short commands.
 		reQ = base.SlowReQ
-	case PhaseWaitForExports:
+	case api.PhaseWaitForExports:
 		done, waitErr := r.context.WaitForExports(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -227,21 +223,28 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		// Waiting on the guest to enumerate its disks and bring up a container
 		// for each, which is tens of seconds. Same reasoning as
-		// PhaseWaitForNetwork.
+		// api.PhaseWaitForNetwork.
 		reQ = base.LongReQ
-	case PhaseDeployCompleted:
+	case api.PhaseDeployCompleted:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.True,
 			Category: libcnd.Required,
 			Message:  "Deploying the copy appliance has succeeded.",
 		})
-	case PhaseDeployFailed:
+	case api.PhaseDeployFailed:
+		// Keep the detailed fault from setFailed when present; only fall back
+		// to a generic message if nothing recorded the root cause.
+		msg := FailureReason(r.context.Appliance)
+		if msg == "the appliance did not record why it failed" {
+			msg = "Deploying the copy appliance has failed."
+		}
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.False,
+			Reason:   api.PhaseDeployFailed,
 			Category: libcnd.Critical,
-			Message:  "Deploying the copy appliance has failed.",
+			Message:  msg,
 		})
 		// Ended() swallows the error and controller-runtime applies no backoff
 		// of its own, so a failed appliance would otherwise retry against

@@ -144,7 +144,7 @@ func TestTeardownCopyAppliance(t *testing.T) {
 		terminating := testCopyAppliance()
 		now := meta.Now()
 		terminating.DeletionTimestamp = &now
-		terminating.Status.Phase = appliancectrl.PhaseTeardownCompleted
+		terminating.Status.Phase = api.PhaseTeardownCompleted
 		m := testCopyApplianceMigration(t, terminating)
 
 		done, err := m.teardownCopyAppliance(testVM)

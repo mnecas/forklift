@@ -457,8 +457,6 @@ func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
 		SSHUser:        "root",
 		ContainerImage: "copy-appliance:latest",
-		SSHPort:        settings.DefaultCopyApplianceSSHPort,
-		AnnouncePort:   settings.DefaultCopyApplianceAnnouncePort,
 	}
 }
 

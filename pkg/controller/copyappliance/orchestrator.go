@@ -18,20 +18,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 )
 
-// Paths for the nbd-orchestrator. The controller image and the appliance both
-// keep the binary at orchestratorBinary (see build/forklift-controller/Containerfile).
-const (
-	orchestratorBinary  = "/usr/local/bin/nbd-orchestrator"
-	orchestratorUnit    = "nbd-orchestrator.service"
-	orchestratorService = "/etc/systemd/system/" + orchestratorUnit
-	applianceCertsDir   = "/etc/pki/nbd"
-	// Staging beside the destination: cannot overwrite a running binary, and a
-	// rename from /tmp would keep a label systemd will not execute.
-	orchestratorStaging = "/usr/local/bin/.nbd-orchestrator.tmp"
-
-	applianceBasePort = 10809
-)
-
 //go:embed nbd-orchestrator.service.tmpl
 var orchestratorUnitTemplate string
 
@@ -77,7 +63,7 @@ func (r *Orchestrator) renderUnit() (string, error) {
 		Binary:       orchestratorBinary,
 		CertsDir:     applianceCertsDir,
 		Image:        image,
-		AnnouncePort: Settings.CopyAppliance.AnnouncePort,
+		AnnouncePort: applianceAnnouncePort,
 		BasePort:     applianceBasePort,
 		TLS:          r.context.NbdSsl,
 	})

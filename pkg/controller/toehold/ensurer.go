@@ -19,13 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-const (
-	credsSecretSuffix = "-vcenter-creds"
-	labelToehold      = "forklift.konveyor.io/toehold"
-	qemuUser          = int64(107)
-	qemuGroup         = int64(107)
-)
-
 // loadToeholdSSH reads the provider's toehold SSH public key once. Returns the
 // secret name (in the provider namespace) and the key material.
 func (c *ToeholdContext) loadToeholdSSH(ctx context.Context) (secretName, publicKey, providerNS string, err error) {
@@ -76,7 +69,7 @@ func (c *ToeholdContext) setOwner(obj meta.Object) error {
 func (c *ToeholdContext) ensureCredsSecret(ctx context.Context, pctx *providerContext, sshPublicKey string) error {
 	toehold := c.Toehold
 	name := toehold.Name + credsSecretSuffix
-	ns := toehold.TargetNS()
+	ns := toehold.Namespace
 	data := map[string]string{
 		settings.VCenterURL:                 pctx.Provider.Spec.URL,
 		settings.VCenterUser:                string(pctx.Secret.Data["user"]),
@@ -116,8 +109,8 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 	toehold := c.Toehold
 	podList := &core.PodList{}
 	if err := c.Client.List(ctx, podList, &client.ListOptions{
-		Namespace:     toehold.TargetNS(),
-		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
+		Namespace:     toehold.Namespace,
+		LabelSelector: labels.SelectorFromSet(map[string]string{api.LabelToehold: toehold.Name}),
 	}); err != nil {
 		return nil, liberr.Wrap(err)
 	}
@@ -188,9 +181,9 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 	pod := &core.Pod{
 		ObjectMeta: meta.ObjectMeta{
 			GenerateName: toehold.Name + "-build-",
-			Namespace:    toehold.TargetNS(),
+			Namespace:    toehold.Namespace,
 			Labels: map[string]string{
-				labelToehold: toehold.Name,
+				api.LabelToehold: toehold.Name,
 			},
 		},
 		Spec: core.PodSpec{
@@ -279,7 +272,7 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 	if toehold.Spec.TransferNetwork != nil {
 		ns := toehold.Spec.TransferNetwork.Namespace
 		if ns == "" {
-			ns = toehold.TargetNS()
+			ns = toehold.Namespace
 		}
 		nad := &k8snet.NetworkAttachmentDefinition{}
 		err = c.Client.Get(ctx, client.ObjectKey{
@@ -312,8 +305,8 @@ func (c *ToeholdContext) deleteBuildPod(ctx context.Context) error {
 	toehold := c.Toehold
 	podList := &core.PodList{}
 	err := c.Client.List(ctx, podList, &client.ListOptions{
-		Namespace:     toehold.TargetNS(),
-		LabelSelector: labels.SelectorFromSet(map[string]string{labelToehold: toehold.Name}),
+		Namespace:     toehold.Namespace,
+		LabelSelector: labels.SelectorFromSet(map[string]string{api.LabelToehold: toehold.Name}),
 	})
 	if err != nil {
 		return liberr.Wrap(err)
@@ -330,7 +323,7 @@ func (c *ToeholdContext) deleteBuildPod(ctx context.Context) error {
 // build namespace when needed. Pods can only mount secrets from their own namespace.
 // secretName/publicKey/providerNS come from loadToeholdSSH.
 func (c *ToeholdContext) ensureSSHPublicSecret(ctx context.Context, secretName, publicKey, providerNS string) (string, error) {
-	targetNS := c.Toehold.TargetNS()
+	targetNS := c.Toehold.Namespace
 	if targetNS == providerNS {
 		return secretName, nil
 	}

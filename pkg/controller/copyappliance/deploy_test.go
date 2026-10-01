@@ -2,18 +2,9 @@ package copyappliance
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"net"
-	"net/http"
-	"slices"
 	"testing"
-	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
-	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
-	"github.com/kubev2v/forklift/pkg/nbd-container/runner"
 )
 
 // Configure used to run before LoadImage and now runs after it. An appliance
@@ -22,10 +13,8 @@ import (
 // install a supervisor with no image to run and then wait forever for exports
 // that cannot appear.
 func TestRunSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
-	private, public := testKeyPair(t)
-	server := startSSHServer(t, public)
-	ac := sshContext(t, private, server.addr)
-	ac.Appliance.Status.Phase = PhaseConfigure
+	ac := sshContext(t, nil, closedAddr(t))
+	ac.Appliance.Status.Phase = api.PhaseConfigure
 	runner := DeployRunner{context: ac}
 
 	_, err := runner.Run(context.TODO())
@@ -33,172 +22,9 @@ func TestRunSendsBackAnApplianceThatSkippedTheLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if ac.Appliance.Status.Phase != PhaseLoadImage {
-		t.Errorf("phase = %q, want %q", ac.Appliance.Status.Phase, PhaseLoadImage)
+	if ac.Appliance.Status.Phase != api.PhaseLoadImage {
+		t.Errorf("phase = %q, want %q", ac.Appliance.Status.Phase, api.PhaseLoadImage)
 	}
-	if ran := server.Ran(); len(ran) != 0 {
-		t.Errorf("ran %v, want the appliance left alone until it has an image", ran)
-	}
-}
-
-// WaitForExports is the step that proves the appliance works, so it is tested
-// against a real announce server over the same mutual TLS a migration uses.
-func TestWaitForExports(t *testing.T) {
-	// testAppliance has two disks attached, so two exports is the whole set.
-	twoExports := []runner.Export{
-		{WWID: "wwn-abc", Port: 10809, Device: "/dev/sdb"},
-		{WWID: "wwn-def", Port: 10810, Device: "/dev/sdc"},
-	}
-
-	t.Run("an appliance exporting every disk is done", func(t *testing.T) {
-		ac := exportsContext(t, startAnnounce(t, applianceTLS().server, twoExports))
-
-		done, err := ac.WaitForExports(context.TODO())
-
-		if err != nil {
-			t.Fatalf("WaitForExports: %v", err)
-		}
-		if !done {
-			t.Error("done = false, want the appliance exporting its disks")
-		}
-		want := []api.ApplianceExport{
-			{
-				WWID:         "wwn-abc",
-				Port:         10809,
-				Device:       "/dev/sdb",
-				DiskKey:      2000,
-				VMDKPath:     "[datastore13] vm-a/disk-0.vmdk",
-				SourceSerial: "wwn-abc",
-			},
-			{
-				WWID:         "wwn-def",
-				Port:         10810,
-				Device:       "/dev/sdc",
-				DiskKey:      2001,
-				VMDKPath:     "[datastore13] vm-b/disk-0.vmdk",
-				SourceSerial: "wwn-def",
-			},
-		}
-		if !slices.Equal(ac.Appliance.Status.Exports, want) {
-			t.Errorf("exports = %+v, want %+v", ac.Appliance.Status.Exports, want)
-		}
-	})
-
-	// Discovery runs once at startup and the containers come up one at a time,
-	// so a short list is a normal thing to catch mid-flight. Recording it would
-	// hand the migration a set of disks with one missing.
-	t.Run("an appliance short of a disk is not done", func(t *testing.T) {
-		ac := exportsContext(t, startAnnounce(t, applianceTLS().server, twoExports[:1]))
-
-		done, err := ac.WaitForExports(context.TODO())
-
-		if err != nil {
-			t.Fatalf("WaitForExports: %v", err)
-		}
-		if done {
-			t.Error("done = true, want an appliance short of a disk left waiting")
-		}
-		if ac.Appliance.Status.Exports != nil {
-			t.Errorf("exports = %+v, want none recorded", ac.Appliance.Status.Exports)
-		}
-	})
-
-	// Configure only established that systemd has the service running; the
-	// endpoint binds after that. Failing here would fail a deploy that is on
-	// track, and PhaseDeployFailed has no way back.
-	t.Run("an appliance not answering yet is not a failure", func(t *testing.T) {
-		ac := exportsContext(t, closedAddr(t))
-
-		done, err := ac.WaitForExports(context.TODO())
-
-		if err != nil {
-			t.Fatalf("WaitForExports: %v", err)
-		}
-		if done {
-			t.Error("done = true, want the appliance left to come up")
-		}
-	})
-
-	// Something is answering at the appliance's address with a certificate the
-	// controller cannot verify. That does not improve by waiting, and accepting
-	// it would mean taking a migration's disk list from whatever replied.
-	t.Run("an appliance that cannot be verified fails", func(t *testing.T) {
-		otherKey, otherCA, _ := issue(nil, nil, "Unrelated CA", true, "")
-		_, _, certPEM, keyPEM := leaf(otherCA, otherKey, announce.ServerName, x509.ExtKeyUsageServerAuth)
-		impostor, err := tls.X509KeyPair(certPEM, keyPEM)
-		if err != nil {
-			t.Fatalf("keypair: %v", err)
-		}
-		ac := exportsContext(t, startAnnounce(t, impostor, twoExports))
-
-		done, err := ac.WaitForExports(context.TODO())
-
-		if err == nil {
-			t.Fatal("WaitForExports accepted a server it could not verify")
-		}
-		if done {
-			t.Error("done = true, want nothing taken from an unverified server")
-		}
-	})
-
-	t.Run("an appliance reporting no address fails", func(t *testing.T) {
-		ac := exportsContext(t, closedAddr(t))
-		ac.Appliance.Status.Addresses = nil
-
-		_, err := ac.WaitForExports(context.TODO())
-
-		if err == nil {
-			t.Fatal("WaitForExports succeeded with no address to reach the appliance at")
-		}
-		if !errorMentions(t, err, ac.Appliance.Name) {
-			t.Errorf("error = %q, want it to name the appliance", err)
-		}
-	})
-}
-
-// exportsContext is an appliance announcing at addr.
-func exportsContext(t *testing.T, addr string) *ApplianceContext {
-	t.Helper()
-	ac := sshContext(t, nil, addr)
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatalf("split %q: %v", addr, err)
-	}
-	applied := Settings.CopyAppliance
-	applied.AnnouncePort = port
-	withSettings(t, applied)
-	return ac
-}
-
-// startAnnounce stands in for the appliance's orchestrator: the same endpoint,
-// serving with the certificate it is given and requiring a client certificate
-// from the appliance's CA.
-func startAnnounce(t *testing.T, certificate tls.Certificate, exports []runner.Export) (addr string) {
-	t.Helper()
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{certificate},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    applianceTLS().pool,
-	})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = listener.Close()
-	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /disks", func(w http.ResponseWriter, _ *http.Request) {
-		if exports == nil {
-			exports = []runner.Export{}
-		}
-		_ = json.NewEncoder(w).Encode(exports)
-	})
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		_ = server.Serve(listener)
-	}()
-	return listener.Addr().String()
 }
 
 func TestDeployBegin(t *testing.T) {
@@ -211,8 +37,8 @@ func TestDeployBegin(t *testing.T) {
 			t.Fatalf("begin: %v", err)
 		}
 
-		if appliance.Status.Phase != PhaseCloneVM {
-			t.Errorf("phase = %q, want %q", appliance.Status.Phase, PhaseCloneVM)
+		if appliance.Status.Phase != api.PhaseCloneVM {
+			t.Errorf("phase = %q, want %q", appliance.Status.Phase, api.PhaseCloneVM)
 		}
 		if appliance.Status.TaskRef != "" {
 			t.Errorf("task reference = %q, want it cleared", appliance.Status.TaskRef)

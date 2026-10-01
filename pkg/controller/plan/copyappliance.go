@@ -55,7 +55,6 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) error {
 			appliance.Spec.AttachDisks[i].VMDKPath = appliancectrl.BaseVMDKPath(appliance.Spec.AttachDisks[i].VMDKPath)
 		}
 	}
-	appliance.Spec.Target = api.ExportTargetExport
 	// Plan labels are for cleanupOrphanedResources, not appliance identity.
 	appliance.Labels[convctx.LabelPlan] = string(r.Plan.UID)
 	appliance.Labels[convctx.LabelPlanName] = r.Plan.Name
@@ -67,7 +66,35 @@ func (r *Migration) ensureCopyAppliance(vm *plan.VMStatus) error {
 	return err
 }
 
-func (r *Migration) setCopyApplianceTarget(vm *plan.VMStatus, target string) error {
+func (r *Migration) buildCopyApplianceAttachDisks(vm *plan.VMStatus) ([]api.AttachedDisk, error) {
+	provider := r.Source.Provider
+	if provider == nil {
+		return nil, liberr.New("source provider is not available")
+	}
+	toehold, err := toeholdTemplateForProvider(r.Client, provider)
+	if err != nil {
+		return nil, err
+	}
+	builder, err := appliancectrl.NewBuilder(provider)
+	if err != nil {
+		return nil, err
+	}
+	appliance, err := builder.Appliance(toehold, vm.Ref, r.Migration.UID)
+	if err != nil {
+		return nil, err
+	}
+	disks := appliance.Spec.AttachDisks
+	if r.Plan.IsWarm() {
+		for i := range disks {
+			disks[i].VMDKPath = appliancectrl.BaseVMDKPath(disks[i].VMDKPath)
+		}
+	}
+	return disks, nil
+}
+
+// setCopyApplianceAttachDisks patches Spec.AttachDisks. Nil releases disks;
+// a non-empty list re-exports them.
+func (r *Migration) setCopyApplianceAttachDisks(vm *plan.VMStatus, disks []api.AttachedDisk) error {
 	appliance, err := r.getCopyAppliance(vm, true)
 	if err != nil {
 		return err
@@ -76,8 +103,20 @@ func (r *Migration) setCopyApplianceTarget(vm *plan.VMStatus, target string) err
 		return liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
 	patch := client.MergeFrom(appliance.DeepCopy())
-	appliance.Spec.Target = target
+	appliance.Spec.AttachDisks = disks
 	return r.Patch(context.TODO(), appliance, patch)
+}
+
+func (r *Migration) releaseCopyApplianceDisks(vm *plan.VMStatus) error {
+	return r.setCopyApplianceAttachDisks(vm, nil)
+}
+
+func (r *Migration) refreshCopyApplianceDisks(vm *plan.VMStatus) error {
+	disks, err := r.buildCopyApplianceAttachDisks(vm)
+	if err != nil {
+		return err
+	}
+	return r.setCopyApplianceAttachDisks(vm, disks)
 }
 
 func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (bool, error) {
@@ -88,13 +127,14 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (bool, error) {
 	if appliance == nil {
 		return false, liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
-	if appliance.Status.Phase == appliancectrl.PhaseDeployFailed {
-		return false, liberr.New("copy appliance deployment failed")
+	if appliance.Status.Phase == api.PhaseDeployFailed {
+		return false, liberr.New(appliancectrl.FailureReason(appliance))
 	}
-	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil && c.Category == libcnd.Critical {
+	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil &&
+		(c.Category == libcnd.Critical || c.Category == libcnd.Error) && c.Message != "" {
 		return false, liberr.New(c.Message)
 	}
-	if appliance.Status.Phase != appliancectrl.PhaseDeployCompleted ||
+	if appliance.Status.Phase != api.PhaseDeployCompleted ||
 		!appliancectrl.IsDeployReady(appliance) {
 		return false, nil
 	}
@@ -110,14 +150,15 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (bool, error
 	if appliance == nil {
 		return false, liberr.New("copy appliance is gone", "vm", vm.ID)
 	}
-	if appliance.Status.Phase == appliancectrl.PhaseDeployFailed {
-		return false, liberr.New("copy appliance deployment failed")
+	if appliance.Status.Phase == api.PhaseDeployFailed {
+		return false, liberr.New(appliancectrl.FailureReason(appliance))
 	}
-	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil && c.Category == libcnd.Critical {
+	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil &&
+		(c.Category == libcnd.Critical || c.Category == libcnd.Error) && c.Message != "" {
 		return false, liberr.New(c.Message)
 	}
-	return appliance.Spec.Target == api.ExportTargetRelease &&
-		appliance.Status.Phase == appliancectrl.PhaseReleased, nil
+	return len(appliance.Spec.AttachDisks) == 0 &&
+		appliance.Status.Phase == api.PhaseReleased, nil
 }
 
 func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (bool, error) {
@@ -136,7 +177,7 @@ func (r *Migration) teardownCopyAppliance(vm *plan.VMStatus) (bool, error) {
 		return false, nil
 	}
 	switch appliance.Status.Phase {
-	case appliancectrl.PhaseTeardownCompleted, appliancectrl.PhaseTeardownFailed:
+	case api.PhaseTeardownCompleted, api.PhaseTeardownFailed:
 		return true, nil
 	default:
 		return false, nil

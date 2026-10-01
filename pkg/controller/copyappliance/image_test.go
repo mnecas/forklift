@@ -139,27 +139,11 @@ func TestStreamImage(t *testing.T) {
 }
 
 func TestInjectImage(t *testing.T) {
-	// sshd can go away between passes, and an appliance that is not answering
-	// is one to come back to rather than one to fail the deploy over.
-	t.Run("an appliance that is not answering is not a failure", func(t *testing.T) {
-		private, _ := testKeyPair(t)
-		runner := DeployRunner{context: sshContext(t, private, closedAddr(t))}
-
-		done, err := runner.InjectImage(context.TODO())
-		if err != nil {
-			t.Fatalf("InjectImage: %v", err)
-		}
-		if done {
-			t.Error("done = true, want the appliance left to come back")
-		}
-	})
-
 	// WaitForNetwork does not hand over until there is one, so this is a phase
 	// reached out of order rather than an appliance still booting.
 	t.Run("an appliance reporting no address fails", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := sshContext(t, private, server.addr)
+		private, _ := testKeyPair(t)
+		ac := sshContext(t, private, closedAddr(t))
 		ac.Appliance.Status.Addresses = nil
 		runner := DeployRunner{context: ac}
 
@@ -174,76 +158,4 @@ func TestInjectImage(t *testing.T) {
 			t.Errorf("error = %q, want it to name the appliance", err)
 		}
 	})
-
-	t.Run("the image is sent and the reference recorded", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := sshContext(t, private, server.addr)
-		spec, img := pushImage(t, testRegistry(t, nil))
-		runner := DeployRunner{
-			context:  ac,
-			registry: applianceRegistry(t, ac, spec),
-		}
-
-		done, err := runner.InjectImage(context.TODO())
-		if err != nil {
-			t.Fatalf("InjectImage: %v", err)
-		}
-		if !done {
-			t.Error("done = false, want the image loaded")
-		}
-		want, err := makeTag(img)
-		if err != nil {
-			t.Fatalf("makeTag: %v", err)
-		}
-		if ac.Appliance.Status.ExporterImage != want.Name() {
-			t.Errorf("recorded %q, want %q", ac.Appliance.Status.ExporterImage, want.Name())
-		}
-		if _, ran := server.Stdin(AppliancePodmanLoadCommand); !ran {
-			t.Errorf("ran %v, want %q", server.Ran(), AppliancePodmanLoadCommand)
-		}
-	})
-
-	// A load that was cut off part way can still leave the image in the store,
-	// so the next pass has to know which reference to ask about even though
-	// this one failed.
-	t.Run("a load that fails still records what to ask about", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public, AppliancePodmanLoadCommand)
-		ac := sshContext(t, private, server.addr)
-		spec, img := pushImage(t, testRegistry(t, nil))
-		runner := DeployRunner{
-			context:  ac,
-			registry: applianceRegistry(t, ac, spec),
-		}
-
-		done, err := runner.InjectImage(context.TODO())
-		if err == nil {
-			t.Fatal("InjectImage succeeded against an appliance that refused the load")
-		}
-		if done {
-			t.Error("done = true, want the load to have failed")
-		}
-		if !errorMentions(t, err, commandFailureOutput) {
-			t.Errorf("error = %q, want it to carry %q", err, commandFailureOutput)
-		}
-		want, err := makeTag(img)
-		if err != nil {
-			t.Fatalf("makeTag: %v", err)
-		}
-		if ac.Appliance.Status.ExporterImage != want.Name() {
-			t.Errorf("recorded %q, want %q", ac.Appliance.Status.ExporterImage, want.Name())
-		}
-	})
-}
-
-// applianceRegistry is a cluster registry that resolves the ImageStreamTag from
-// the appliance spec, which is the tag InjectImage asks for, to the given pull
-// spec.
-func applianceRegistry(t *testing.T, ac *ApplianceContext, spec string) *ClusterRegistry {
-	t.Helper()
-	return testClusterRegistry(
-		t,
-		ac.Appliance.Namespace,
-		map[string]string{ac.Appliance.Spec.ContainerImage: spec})
 }

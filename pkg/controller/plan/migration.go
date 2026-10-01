@@ -1071,7 +1071,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
 				break
 			}
-			err = r.setCopyApplianceTarget(vm, api.ExportTargetRelease)
+			err = r.releaseCopyApplianceDisks(vm)
 			if err != nil {
 				step.AddError(err.Error())
 				err = nil
@@ -1102,7 +1102,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
 				break
 			}
-			err = r.setCopyApplianceTarget(vm, api.ExportTargetExport)
+			err = r.refreshCopyApplianceDisks(vm)
 			if err != nil {
 				step.AddError(err.Error())
 				err = nil
