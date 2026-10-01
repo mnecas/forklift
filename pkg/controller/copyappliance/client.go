@@ -18,6 +18,8 @@ import (
 	"github.com/vmware/govmomi/fault"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
+	"github.com/vmware/govmomi/pbm"
+	pbmtypes "github.com/vmware/govmomi/pbm/types"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 	core "k8s.io/api/core/v1"
@@ -123,9 +125,12 @@ func (r *ApplianceContext) CheckInstance() (err error) {
 	return
 }
 
-// CloneVM clones the template into the appliance VM and returns the task that
-// will do it. If the name is already taken in the target folder, vCenter fails
-// the task with DuplicateName.
+// CloneVM clones the template into the appliance VM. If the name is already
+// taken, vCenter fails the task with DuplicateName.
+//
+// Encrypted sources: inherit the source storage policy on clone (vCenter mints
+// keys), leave disks off, and power on later after attach. Plain Reconfigure
+// encrypt fails when the cluster default crypto key is missing.
 func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err error) {
 	// A concurrent reconcile may already have created the VM. Adopt it instead
 	// of starting a second CloneVM_Task (DuplicateName / permission races).
@@ -150,12 +155,7 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 		err = liberr.Wrap(err, "template", r.Appliance.Spec.Template)
 		return
 	}
-	devices, err := template.Device(ctx)
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	changes, err := r.buildAttachDiskChanges(devices)
+	encrypted, profiles, err := r.sourceEncryption(ctx)
 	if err != nil {
 		return
 	}
@@ -167,11 +167,28 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 			Datastore: &dsRef,
 		},
 		Config: &types.VirtualMachineConfigSpec{
-			DeviceChange: changes,
-			Annotation:   api.CopyApplianceAnnotation,
+			Annotation: api.CopyApplianceAnnotation,
 		},
-		PowerOn:  true,
+		PowerOn:  !encrypted,
 		Template: false,
+	}
+	if encrypted {
+		cloneSpec.Location.Profile = profiles
+		cloneSpec.Config.VmProfile = profiles
+		r.Log.Info("Encrypting copy appliance during clone with source VM storage policy.",
+			"source", r.Appliance.Labels[api.LabelVM])
+	} else {
+		devices, deviceErr := template.Device(ctx)
+		if deviceErr != nil {
+			err = liberr.Wrap(deviceErr)
+			return
+		}
+		changes, changeErr := r.buildAttachDiskChanges(devices)
+		if changeErr != nil {
+			err = changeErr
+			return
+		}
+		cloneSpec.Config.DeviceChange = changes
 	}
 	task, err = template.Clone(ctx, r.folder, r.Appliance.Name, cloneSpec)
 	if err != nil {
@@ -180,6 +197,87 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 	}
 	r.Log.Info("Cloning appliance VM.", "name", r.Appliance.Name)
 	return
+}
+
+// sourceEncryption reports whether the source VM is encrypted and, when it is,
+// the SPBM profiles the appliance clone must inherit.
+func (r *ApplianceContext) sourceEncryption(ctx context.Context) (encrypted bool, profiles []types.BaseVirtualMachineProfileSpec, err error) {
+	if len(r.Appliance.Spec.AttachDisks) == 0 {
+		return
+	}
+	vmID := r.Appliance.Labels[api.LabelVM]
+	if vmID == "" {
+		return
+	}
+	src := object.NewVirtualMachine(r.VCenter.Client, types.ManagedObjectReference{
+		Type:  "VirtualMachine",
+		Value: vmID,
+	})
+	var moVM mo.VirtualMachine
+	if err = src.Properties(ctx, src.Reference(), []string{"config.keyId"}, &moVM); err != nil {
+		err = liberr.Wrap(err, "source", vmID)
+		return
+	}
+	if moVM.Config == nil || moVM.Config.KeyId == nil {
+		return
+	}
+	profiles, err = r.sourceStorageProfiles(ctx, vmID)
+	if err != nil {
+		return
+	}
+	if len(profiles) == 0 {
+		err = liberr.New(
+			"source VM is encrypted but has no associated storage policy to inherit",
+			"source", vmID)
+		return
+	}
+	encrypted = true
+	return
+}
+
+// ensureCloneEncrypted fails when the source is encrypted but the clone did
+// not inherit encryption. Encryption is applied during CloneVM_Task.
+func (r *ApplianceContext) ensureCloneEncrypted(ctx context.Context) (err error) {
+	encrypted, _, err := r.sourceEncryption(ctx)
+	if err != nil || !encrypted {
+		return
+	}
+	vm := r.VM(r.Appliance.Status.MoRef)
+	var moVM mo.VirtualMachine
+	if err = vm.Properties(ctx, vm.Reference(), []string{"config.keyId"}, &moVM); err != nil {
+		err = liberr.Wrap(err, "vm", r.Appliance.Status.MoRef)
+		return
+	}
+	if moVM.Config != nil && moVM.Config.KeyId != nil {
+		return
+	}
+	err = liberr.New(
+		"copy appliance is not encrypted after clone; cannot attach encrypted disks",
+		"vm", r.Appliance.Status.MoRef,
+		"source", r.Appliance.Labels[api.LabelVM])
+	return
+}
+
+// sourceStorageProfiles returns the SPBM profiles associated with the source VM.
+func (r *ApplianceContext) sourceStorageProfiles(ctx context.Context, vmID string) ([]types.BaseVirtualMachineProfileSpec, error) {
+	pbmClient, err := pbm.NewClient(ctx, r.VCenter.Client)
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	ids, err := pbmClient.QueryAssociatedProfile(ctx, pbmtypes.PbmServerObjectRef{
+		ObjectType: string(pbmtypes.PbmObjectTypeVirtualMachine),
+		Key:        vmID,
+	})
+	if err != nil {
+		return nil, liberr.Wrap(err, "source", vmID)
+	}
+	profiles := make([]types.BaseVirtualMachineProfileSpec, 0, len(ids))
+	for _, id := range ids {
+		profiles = append(profiles, &types.VirtualMachineDefinedProfileSpec{
+			ProfileId: id.UniqueId,
+		})
+	}
+	return profiles, nil
 }
 
 // taskFaultMessage prefers LocalizedMessage, and appends missing privileges
