@@ -108,11 +108,6 @@ func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicK
 	diskHash := run.context.Toehold.Status.Template.DiskHash
 	configHash := run.context.Toehold.Status.Template.ConfigHash
 
-	if run.context.Toehold.RebuildRequested() {
-		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
-		run.context.Toehold.Status.RebuildRequestedAt = run.context.Toehold.Annotations[api.AnnRebuildRequestedAt]
-		return run.requireBuild(ctx, pctx)
-	}
 	ref, err := pctx.Client.FindVM(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName, true)
 	if err != nil {
 		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
@@ -125,12 +120,6 @@ func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicK
 	storedDisk, storedConfig := anns[toeholdvsphere.DiskHashAnnotation], anns[toeholdvsphere.ConfigHashAnnotation]
 	if storedDisk == "" || storedDisk != diskHash {
 		_ = pctx.Client.DestroyIfExists(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName)
-		run.context.Toehold.Status.SetCondition(libcnd.Condition{
-			Type:     api.ToeholdTemplateRebuildRequired,
-			Status:   libcnd.True,
-			Category: libcnd.Advisory,
-			Message:  "Template disk hash mismatch; rebuild required.",
-		})
 		return run.requireBuild(ctx, pctx)
 	}
 
