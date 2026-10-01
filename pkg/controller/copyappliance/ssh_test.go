@@ -325,7 +325,7 @@ func TestSSHClient(t *testing.T) {
 		}
 		withSettings(t, testSettings())
 		secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
-		client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+		client, err := NewSSHClient(Settings.SSHUser, host, port, secret)
 		if err != nil {
 			t.Fatalf("NewSSHClient: %v", err)
 		}
@@ -346,7 +346,7 @@ func TestSSHClient(t *testing.T) {
 		}
 		withSettings(t, testSettings())
 		secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
-		client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+		client, err := NewSSHClient(Settings.SSHUser, host, port, secret)
 		if err != nil {
 			t.Fatalf("NewSSHClient: %v", err)
 		}
@@ -406,7 +406,7 @@ func TestSSHClientHonoursTheContextDeadline(t *testing.T) {
 		t.Fatalf("split: %v", err)
 	}
 	secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
-	client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+	client, err := NewSSHClient(Settings.SSHUser, host, port, secret)
 	if err != nil {
 		t.Fatalf("NewSSHClient: %v", err)
 	}
@@ -518,7 +518,7 @@ func loginAt(t *testing.T, private []byte, addr string) *SSHClient {
 	}
 	withSettings(t, testSettings())
 	secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
-	client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+	client, err := NewSSHClient(Settings.SSHUser, host, port, secret)
 	if err != nil {
 		t.Fatalf("NewSSHClient: %v", err)
 	}

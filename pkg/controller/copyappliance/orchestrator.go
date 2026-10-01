@@ -163,7 +163,7 @@ func (r *Orchestrator) installBinary() error {
 	if err != nil {
 		return liberr.Wrap(err, "path", orchestratorBinary)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return r.ssh.RunWithStdin(
 		"cat > "+orchestratorStaging+" && chmod 0755 "+orchestratorStaging+" && mv -f "+orchestratorStaging+" "+orchestratorBinary,
 		f)
@@ -218,7 +218,7 @@ func fileSum(path string) (string, error) {
 	if err != nil {
 		return "", liberr.Wrap(err, "path", path)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", liberr.Wrap(err, "path", path)

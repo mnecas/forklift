@@ -7,6 +7,7 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
+	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	core "k8s.io/api/core/v1"
@@ -170,6 +171,27 @@ func TestFailureReason(t *testing.T) {
 		liberr.New("the guest never reported an address"))
 	if got := FailureReason(failed); got != "the guest never reported an address" {
 		t.Errorf("FailureReason = %q, want the recorded message", got)
+	}
+	// Staging on a later reconcile must not hide the durable fault.
+	failed.Status.BeginStagingConditions()
+	if got := FailureReason(failed); got != "the guest never reported an address" {
+		t.Errorf("FailureReason after BeginStaging = %q, want durable message", got)
+	}
+	failed.Status.EndStagingConditions()
+	if got := FailureReason(failed); got != "the guest never reported an address" {
+		t.Errorf("FailureReason after EndStaging = %q, want durable message", got)
+	}
+	// PhaseDeployFailed promotes Error → Critical; plan still needs the detail.
+	failed.Status.SetCondition(libcnd.Condition{
+		Type:     libcnd.Ready,
+		Status:   libcnd.False,
+		Reason:   api.PhaseDeployFailed,
+		Category: libcnd.Critical,
+		Message:  "task failed: missing privileges: Cryptographer.Encrypt",
+		Durable:  true,
+	})
+	if got := FailureReason(failed); got != "task failed: missing privileges: Cryptographer.Encrypt" {
+		t.Errorf("FailureReason for Critical = %q, want the detailed message", got)
 	}
 
 	converging := &api.CopyAppliance{}

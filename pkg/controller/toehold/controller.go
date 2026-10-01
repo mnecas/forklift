@@ -237,7 +237,7 @@ func (r Reconciler) validate(ctx context.Context, toehold *api.ToeholdTemplate) 
 		return liberr.New("spec.provider.name is required")
 	}
 	if toehold.Spec.BaseDisk.ContainerImage == "" {
-		toehold.Spec.BaseDisk.ContainerImage = Settings.Toehold.BaseDiskContainerImage
+		toehold.Spec.BaseDisk.ContainerImage = Settings.BaseDiskContainerImage
 	}
 	if toehold.Spec.BaseDisk.ContainerImage == "" {
 		return liberr.New("spec.baseDisk.containerImage is required")
