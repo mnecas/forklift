@@ -123,12 +123,6 @@ func nextPhase(appliance *api.CopyAppliance, itinerary *libitr.Itinerary) {
 func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
 	case api.PhaseCloneVM:
-		// A concurrent reconcile may already have started the clone or adopted
-		// an existing VM.
-		if r.context.Appliance.Status.TaskRef != "" || r.context.Appliance.Status.MoRef != "" {
-			r.NextPhase()
-			return
-		}
 		task, cloneErr := r.context.CloneVM(ctx)
 		if cloneErr != nil {
 			err = cloneErr
@@ -257,13 +251,16 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 }
 
 // WaitForClone reports whether the appliance VM has finished cloning, and
-// records the moRef the clone task named it with.
+// records the moRef. Adopt (MoRef set, no task) counts as done.
 func (r *DeployRunner) WaitForClone(ctx context.Context) (done bool, err error) {
 	done, result, err := r.context.WaitForTask(ctx)
 	if err != nil {
 		return
 	}
 	if !done {
+		return
+	}
+	if r.context.Appliance.Status.MoRef != "" && result == nil {
 		return
 	}
 	moRef, ok := result.(types.ManagedObjectReference)
