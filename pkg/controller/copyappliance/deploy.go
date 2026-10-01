@@ -287,6 +287,7 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 			Reason:   api.PhaseDeployFailed,
 			Category: libcnd.Critical,
 			Message:  msg,
+			Durable:  true,
 		})
 		// Ended() swallows the error and controller-runtime applies no backoff
 		// of its own, so a failed appliance would otherwise retry against

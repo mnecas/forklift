@@ -663,7 +663,7 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 		return
 	}
 	client, err = NewSSHClient(
-		Settings.CopyAppliance.SSHUser,
+		Settings.SSHUser,
 		address,
 		ApplianceSSHPort,
 		r.ApplianceSecret)

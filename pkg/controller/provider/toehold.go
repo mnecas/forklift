@@ -265,7 +265,7 @@ func (s *toeholdSync) Run(ctx context.Context) error {
 	datastore := s.provider.Setting(api.ToeholdDatastore)
 	folder := s.provider.Setting(api.ToeholdFolder)
 	network := s.provider.Setting(api.ToeholdNetwork)
-	if Settings.Toehold.BaseDiskContainerImage == "" ||
+	if Settings.BaseDiskContainerImage == "" ||
 		datastore == "" || folder == "" || network == "" {
 		return nil
 	}
@@ -294,7 +294,7 @@ func (s *toeholdSync) Run(ctx context.Context) error {
 	}
 	template.Spec.TemplateName = s.provider.ToeholdTemplateName()
 	template.Spec.BaseDisk = api.ToeholdBaseDisk{
-		ContainerImage: Settings.Toehold.BaseDiskContainerImage,
+		ContainerImage: Settings.BaseDiskContainerImage,
 	}
 	template.Spec.Resources = api.ToeholdResources{
 		CPU:       Settings.Toehold.TemplateCPU,

@@ -219,14 +219,14 @@ func (r *Runner) existingPort(ctx context.Context, wwid string) (int, bool, erro
 		return 0, false, nil
 	}
 	name := running[0]
-	if err := r.verifyUp(ctx, name); err != nil {
-		return 0, false, nil
+	if err := r.verifyUp(ctx, name); err == nil {
+		port, err := r.publishedPort(ctx, name)
+		if err != nil {
+			return 0, false, err
+		}
+		return port, true, nil
 	}
-	port, err := r.publishedPort(ctx, name)
-	if err != nil {
-		return 0, false, err
-	}
-	return port, true, nil
+	return 0, false, nil
 }
 
 func (r *Runner) removeContainers(ctx context.Context, wwid string) error {

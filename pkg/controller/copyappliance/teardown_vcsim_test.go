@@ -97,12 +97,14 @@ func simulatedAppliance(t *testing.T, ctx context.Context, client *govmomi.Clien
 
 // runTeardown drives the runner the way the reconciler does, one pass at a
 // time, until it settles. The bound is what makes a runner that parks on a
-// phase forever a failure instead of a hang.
+// phase forever a failure instead of a hang. When a pass asks to be polled
+// (reQ > 0), sleep briefly so an in-flight vSphere task can finish instead of
+// burning the pass budget on no-op waits.
 func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phases []string) {
 	t.Helper()
 	status := &runner.context.Appliance.Status
-	for pass := 0; pass < 10; pass++ {
-		_, err := runner.Run(ctx)
+	for pass := 0; pass < 40; pass++ {
+		reQ, err := runner.Run(ctx)
 		if err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
 		}
@@ -114,6 +116,9 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 			}
 			return
 		}
+		if reQ > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 	t.Fatalf("teardown did not settle; phases: %v", phases)
 	return
@@ -123,6 +128,11 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 // power off, a reconfigure that removes disks, and a destroy. A hand-rolled
 // fake would assert those assumptions back at us.
 func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
+	// TaskDelay is a process-wide simulator knob; clear it so a prior test
+	// cannot make the happy-path subtest burn its pass budget waiting.
+	simulator.TaskDelay = simulator.DelayConfig{}
+	t.Cleanup(func() { simulator.TaskDelay = simulator.DelayConfig{} })
+
 	t.Run("teardown runs to completion and leaves no VM behind", func(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)

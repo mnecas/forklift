@@ -200,7 +200,7 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 		Name:      provider.Spec.Secret.Name,
 	}
 	secret := &core.Secret{}
-	err = r.Client.Get(ctx, secretKey, secret)
+	err = r.Get(ctx, secretKey, secret)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
@@ -235,7 +235,7 @@ func (r *Reconciler) applianceSecret(ctx context.Context, appliance *api.CopyApp
 	}
 	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
 	found := &core.Secret{}
-	err = r.Client.Get(ctx, key, found)
+	err = r.Get(ctx, key, found)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			r.Log.Info("The appliance secret is not there.",
@@ -354,6 +354,8 @@ func (r *Reconciler) forgetForeignVM(appliance *api.CopyAppliance, instanceUUID 
 // setFailed records a failed pass as a not-ready condition and a failed phase.
 // The phase is passed in because a failure during teardown must not be recorded
 // as a deployment failure: they requeue the same way but read very differently.
+// Durable so staging on the next reconcile does not drop the root-cause message
+// before PhaseDeployFailed / the plan can read it.
 func (r *Reconciler) setFailed(appliance *api.CopyAppliance, phase, reason string, err error) {
 	appliance.Status.Phase = phase
 	appliance.Status.SetCondition(libcnd.Condition{
@@ -362,15 +364,19 @@ func (r *Reconciler) setFailed(appliance *api.CopyAppliance, phase, reason strin
 		Reason:   reason,
 		Category: libcnd.Error,
 		Message:  err.Error(),
+		Durable:  true,
 	})
 }
 
 // FailureReason returns the message the appliance recorded when it failed. The
 // category is checked because setConverging writes a Ready condition too, on
-// every non-terminal phase, and that one is not a failure.
+// every non-terminal phase, and that one is not a failure. setFailed writes
+// Error; PhaseDeployFailed / PhaseTeardownFailed promote it to Critical — both
+// carry the root cause.
 func FailureReason(appliance *api.CopyAppliance) string {
 	cnd := appliance.Status.FindCondition(libcnd.Ready)
-	if cnd != nil && cnd.Category == libcnd.Error && cnd.Message != "" {
+	if cnd != nil && cnd.Message != "" &&
+		(cnd.Category == libcnd.Error || cnd.Category == libcnd.Critical) {
 		return cnd.Message
 	}
 	return "the appliance did not record why it failed"

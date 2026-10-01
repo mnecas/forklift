@@ -130,7 +130,7 @@ func (r *Migration) waitForCopyAppliance(vm *plan.VMStatus) (bool, error) {
 	if appliance.Status.Phase == api.PhaseDeployFailed {
 		return false, liberr.New(appliancectrl.FailureReason(appliance))
 	}
-	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil &&
+	if c := appliance.Status.FindCondition(libcnd.Ready); c != nil &&
 		(c.Category == libcnd.Critical || c.Category == libcnd.Error) && c.Message != "" {
 		return false, liberr.New(c.Message)
 	}
@@ -153,7 +153,7 @@ func (r *Migration) waitForCopyApplianceReleased(vm *plan.VMStatus) (bool, error
 	if appliance.Status.Phase == api.PhaseDeployFailed {
 		return false, liberr.New(appliancectrl.FailureReason(appliance))
 	}
-	if c := appliance.Status.Conditions.FindCondition(libcnd.Ready); c != nil &&
+	if c := appliance.Status.FindCondition(libcnd.Ready); c != nil &&
 		(c.Category == libcnd.Critical || c.Category == libcnd.Error) && c.Message != "" {
 		return false, liberr.New(c.Message)
 	}
