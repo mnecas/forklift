@@ -111,28 +111,6 @@ func PowerOff(ctx context.Context, vm *object.VirtualMachine) (*object.Task, err
 	return task, nil
 }
 
-// PowerOn powers on a VM. Already-on or missing VMs are no-ops.
-func PowerOn(ctx context.Context, vm *object.VirtualMachine) (*object.Task, error) {
-	state, err := vm.PowerState(ctx)
-	if err != nil {
-		if fault.Is(err, &types.ManagedObjectNotFound{}) {
-			return nil, nil //nolint:nilnil // no task: VM is already gone
-		}
-		return nil, liberr.Wrap(err, "vm", vm.Reference().Value)
-	}
-	if state == types.VirtualMachinePowerStatePoweredOn {
-		return nil, nil //nolint:nilnil // no task: already on
-	}
-	task, err := vm.PowerOn(ctx)
-	if err != nil {
-		if fault.Is(err, &types.ManagedObjectNotFound{}) || fault.Is(err, &types.InvalidPowerState{}) {
-			return nil, nil //nolint:nilnil // no task: gone or already on
-		}
-		return nil, liberr.Wrap(err, "vm", vm.Reference().Value)
-	}
-	return task, nil
-}
-
 // DestroyVM destroys a VM shell. Missing VMs are a no-op.
 func DestroyVM(ctx context.Context, vm *object.VirtualMachine) (*object.Task, error) {
 	task, err := vm.Destroy(ctx)

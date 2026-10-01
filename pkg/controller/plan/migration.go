@@ -1970,7 +1970,8 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 
 		// Failed warm migration can't follow its planned itinerary to snapshot removal phase
 		// so we remove the snapshot here to prevent an orphaned snapshot.
-		if r.Plan.IsWarm() && !vm.HasCondition(api.ConditionFailed) && !r.IsResumeConversion() {
+		firstFailure := !vm.HasCondition(api.ConditionFailed)
+		if r.Plan.IsWarm() && firstFailure && !r.IsResumeConversion() {
 			r.removeLastWarmSnapshot(vm)
 		}
 
@@ -1982,6 +1983,11 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				Message:  "The VM migration has FAILED.",
 				Durable:  true,
 			})
+		if firstFailure {
+			if delErr := r.deleteCopyAppliance(vm); delErr != nil {
+				r.Log.Error(delErr, "Deleting copy appliance after failed migration.", "vm", vm.String())
+			}
+		}
 	}
 
 	return
