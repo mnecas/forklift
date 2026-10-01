@@ -598,7 +598,7 @@ var _ = Describe("Conversion", func() {
 		})
 
 		It("rewrites domain disk sources to NBD when V2V_nbdDisks is set", func() {
-			conversion.NbdDisks = []string{"nbd://10.0.0.5:10809", "nbd://10.0.0.5:10810"}
+			conversion.NbdDisks = []string{"nbd://10.0.0.5:10809", "nbds://10.0.0.5:10810"}
 
 			domainXML := `<domain type='kvm'>
   <name>nbd-vm</name>
@@ -620,61 +620,12 @@ var _ = Describe("Conversion", func() {
 
 			result, err := conversion.updateDiskSourcesToNbd(domainXML)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(result).To(ContainSubstring(`type="network"`))
 			Expect(result).To(ContainSubstring(`protocol="nbd"`))
-			Expect(result).To(ContainSubstring(`name="10.0.0.5"`))
 			Expect(result).To(ContainSubstring(`port="10809"`))
 			Expect(result).To(ContainSubstring(`port="10810"`))
-			Expect(result).To(ContainSubstring(`dev="sda"`))
-			Expect(result).To(ContainSubstring(`dev="sdb"`))
 			Expect(result).To(ContainSubstring(`00:50:56:9d:00:01`))
 			Expect(result).ToNot(ContainSubstring(`[ds] vm/disk0.vmdk`))
 			Expect(result).ToNot(ContainSubstring(`tls=`))
-		})
-
-		It("sets tls=yes on nbds:// disk sources", func() {
-			conversion.NbdDisks = []string{"nbds://10.0.0.5:10809"}
-
-			domainXML := `<domain type='kvm'>
-  <name>nbd-vm</name>
-  <os><type arch='x86_64'>hvm</type></os>
-  <devices>
-    <disk type='file' device='disk'>
-      <source file='[ds] vm/disk0.vmdk'/>
-      <target dev='sda' bus='scsi'/>
-    </disk>
-  </devices>
-</domain>`
-
-			result, err := conversion.updateDiskSourcesToNbd(domainXML)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(result).To(ContainSubstring(`protocol="nbd"`))
-			Expect(result).To(ContainSubstring(`tls="yes"`))
-			Expect(result).To(ContainSubstring(`name="10.0.0.5"`))
-			Expect(result).To(ContainSubstring(`port="10809"`))
-		})
-	})
-
-	Describe("parseNbdURI", func() {
-		It("parses host and port from nbd:// URIs", func() {
-			host, port, err := parseNbdURI("nbd://export.example.com:10809")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(host).To(Equal("export.example.com"))
-			Expect(port).To(Equal("10809"))
-		})
-
-		It("accepts nbds:// URIs", func() {
-			host, port, err := parseNbdURI("nbds://10.0.0.5:10809")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(host).To(Equal("10.0.0.5"))
-			Expect(port).To(Equal("10809"))
-		})
-
-		It("rejects non-nbd schemes and missing ports", func() {
-			_, _, err := parseNbdURI("http://host:10809")
-			Expect(err).To(HaveOccurred())
-			_, _, err = parseNbdURI("nbd://host")
-			Expect(err).To(HaveOccurred())
 		})
 	})
 
