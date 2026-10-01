@@ -89,7 +89,7 @@ func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicK
 	if err != nil {
 		return
 	}
-	defer pctx.Client.Close(ctx)
+	defer func() { _ = pctx.Client.Close(ctx) }()
 
 	if _, err = run.context.ensureSSHPublicSecret(ctx, sshSecretName, sshPublicKey, sshProviderNS); err != nil {
 		return
@@ -192,7 +192,7 @@ func (run *Runner) buildAndUpload(ctx context.Context, sshSecretName, sshPublicK
 	if err != nil {
 		return false, err
 	}
-	defer pctx.Client.Close(ctx)
+	defer func() { _ = pctx.Client.Close(ctx) }()
 	ref, err := pctx.Client.FindVM(ctx, run.context.Toehold.Spec.Folder, run.context.Toehold.Spec.TemplateName, true)
 	if err != nil {
 		return false, fmt.Errorf("find template %q after build: %w", run.context.Toehold.Spec.TemplateName, err)

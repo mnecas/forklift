@@ -118,6 +118,6 @@ func IsDeployReady(appliance *api.CopyAppliance) bool {
 	if appliance.Status.Phase != PhaseDeployCompleted {
 		return false
 	}
-	ready := appliance.Status.Conditions.FindCondition(libcnd.Ready)
+	ready := appliance.Status.FindCondition(libcnd.Ready)
 	return ready != nil && ready.Status == libcnd.True
 }

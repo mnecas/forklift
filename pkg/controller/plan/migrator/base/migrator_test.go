@@ -239,6 +239,7 @@ func TestItinerary_CopyApplianceCold_IncludesAppliancePhases(t *testing.T) {
 func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	settings.Settings.Features.Toehold = true
 	settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	settings.Settings.VddkImage = ""
 
 	p := &api.Plan{Spec: api.PlanSpec{Warm: true, MigrateSharedDisks: true}}
 	migrator := newBaseMigratorWithProvider(t, p, nil)

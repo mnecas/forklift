@@ -102,7 +102,7 @@ func (r *ApplianceContext) InstanceUUID() (uuid string) {
 	if r.VCenter == nil {
 		return
 	}
-	uuid = r.VCenter.Client.ServiceContent.About.InstanceUuid
+	uuid = r.VCenter.ServiceContent.About.InstanceUuid
 	return
 }
 
@@ -383,7 +383,7 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 		return
 	}
 
-	exports, err := client.Disks(ctx, net.JoinHostPort(address, Settings.CopyAppliance.AnnouncePort))
+	exports, err := client.Disks(ctx, net.JoinHostPort(address, Settings.AnnouncePort))
 	if err != nil {
 		var timeout interface{ Timeout() bool }
 		if isStarting(err) ||

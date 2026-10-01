@@ -186,7 +186,7 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 		Name:      appliance.Spec.Provider.Name,
 	}
 	provider := &api.Provider{}
-	err = r.Client.Get(ctx, providerKey, provider)
+	err = r.Get(ctx, providerKey, provider)
 	if err != nil {
 		err = liberr.Wrap(err)
 		return
@@ -366,7 +366,7 @@ func (r *Reconciler) setFailed(appliance *api.CopyAppliance, phase, reason strin
 // category is checked because setConverging writes a Ready condition too, on
 // every non-terminal phase, and that one is not a failure.
 func FailureReason(appliance *api.CopyAppliance) string {
-	cnd := appliance.Status.Conditions.FindCondition(libcnd.Ready)
+	cnd := appliance.Status.FindCondition(libcnd.Ready)
 	if cnd != nil && cnd.Category == libcnd.Error && cnd.Message != "" {
 		return cnd.Message
 	}

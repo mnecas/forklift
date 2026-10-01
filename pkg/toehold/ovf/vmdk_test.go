@@ -15,7 +15,7 @@ func TestDiskCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const sectors = 20 * 1024 * 1024 // 10 GiB
 	header := make([]byte, 512)

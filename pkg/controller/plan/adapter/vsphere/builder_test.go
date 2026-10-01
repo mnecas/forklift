@@ -2161,6 +2161,7 @@ var _ = Describe("Copy appliance DataVolumes", func() {
 	warmCopyApplianceBuilder := func(objs ...runtime.Object) *Builder {
 		settings.Settings.Features.Toehold = true
 		settings.Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+		settings.Settings.VddkImage = ""
 
 		vm := model.VM{
 			ConnectionState: string(types.VirtualMachineConnectionStateConnected),

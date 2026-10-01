@@ -42,7 +42,7 @@ func (c *Client) ImportOVF(ctx context.Context, opts ImportOptions) (*VMRef, err
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	stat, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -230,7 +230,7 @@ func uploadLeaseFile(ctx context.Context, c *Client, item nfc.FileItem, f io.Rea
 		opts.Method = "POST"
 		opts.Type = "application/x-vnd.vmware-streamVmdk"
 	}
-	err := c.Client.Client.Upload(ctx, f, item.URL, &opts)
+	err := c.Client.Upload(ctx, f, item.URL, &opts)
 	if err == nil {
 		return nil
 	}

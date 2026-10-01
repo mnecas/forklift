@@ -148,7 +148,7 @@ func (c *ToeholdContext) ensureBuildPod(ctx context.Context, sshSecretName, sshP
 		return nil, err
 	}
 
-	builderImage := Settings.Toehold.BuilderImage
+	builderImage := Settings.BuilderImage
 	if toehold.Spec.BuilderImage != "" {
 		builderImage = toehold.Spec.BuilderImage
 	}

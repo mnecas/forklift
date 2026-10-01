@@ -49,7 +49,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	opts := toeholdvsphere.ImportOptions{
 		FolderPath:         settings.Lookup(settings.ToeholdFolder, ""),

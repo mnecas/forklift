@@ -11,8 +11,10 @@ import (
 func TestCopyApplianceEnabledForPlan(t *testing.T) {
 	Settings.Features.Toehold = true
 	Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	Settings.VddkImage = ""
 
 	vsphere, openshift := api.VSphere, api.OpenShift
+	source := &api.Provider{Spec: api.ProviderSpec{Type: &vsphere}}
 	p := &api.Plan{
 		Spec: api.PlanSpec{
 			Type:               api.MigrationCold,
@@ -25,7 +27,7 @@ func TestCopyApplianceEnabledForPlan(t *testing.T) {
 			Provider: struct {
 				Source, Destination *api.Provider
 			}{
-				Source:      &api.Provider{Spec: api.ProviderSpec{Type: &vsphere}},
+				Source:      source,
 				Destination: &api.Provider{Spec: api.ProviderSpec{Type: &openshift, URL: "https://remote.example.com"}},
 			},
 		},
@@ -34,6 +36,19 @@ func TestCopyApplianceEnabledForPlan(t *testing.T) {
 	if !Settings.CopyAppliance.EnabledForPlan(p) {
 		t.Fatal("expected copy appliance path for vSphere cold migration with toehold enabled")
 	}
+
+	source.Spec.Settings = map[string]string{api.VDDK: "quay.io/example/vddk:latest"}
+	if Settings.CopyAppliance.EnabledForPlan(p) {
+		t.Fatal("expected VDDK to take priority over toehold")
+	}
+
+	// Global VDDK_IMAGE still wins when the provider has no vddkInitImage setting.
+	source.Spec.Settings = nil
+	Settings.VddkImage = "quay.io/example/vddk-global:latest"
+	if Settings.CopyAppliance.EnabledForPlan(p) {
+		t.Fatal("expected global VDDK image to take priority over toehold")
+	}
+	Settings.VddkImage = ""
 
 	Settings.Features.Toehold = false
 	if Settings.CopyAppliance.EnabledForPlan(p) {
