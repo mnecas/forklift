@@ -30,12 +30,9 @@ func TestExistingPort(t *testing.T) {
 		if !ok || port != 10809 {
 			t.Errorf("existingPort = (%d, %v), want the running container's port", port, ok)
 		}
-		if command, ran := podman.ran("rm -f " + testContainer); ran {
-			t.Errorf("%q removed a container that was serving an export", command)
-		}
 	})
 
-	t.Run("a running container with restarts is removed rather than reused", func(t *testing.T) {
+	t.Run("a running container with restarts is not reused", func(t *testing.T) {
 		podman := stubPodman(t)
 		podman.running(testContainer)
 		podman.port("10809")
@@ -49,17 +46,9 @@ func TestExistingPort(t *testing.T) {
 		if ok {
 			t.Errorf("existingPort = (%d, true), want a crash-looping export not reused", port)
 		}
-		if _, ran := podman.ran("rm -f " + testContainer); !ran {
-			t.Errorf("the dead container was not removed; ran %v", podman.commands())
-		}
 	})
 
-	// This is what an appliance looks like after a power loss or a SIGKILL: the
-	// containers outlive the supervisor as "exited". A stopped container
-	// publishes no port, so it cannot be announced, and it holds the name the
-	// replacement needs -- so leaving it alone means exporting nothing, on this
-	// start and on every start after it.
-	t.Run("a container left by an unclean shutdown is removed rather than reused", func(t *testing.T) {
+	t.Run("a stopped container is not reused", func(t *testing.T) {
 		podman := stubPodman(t)
 		podman.all(testContainer)
 
@@ -71,15 +60,11 @@ func TestExistingPort(t *testing.T) {
 		if ok {
 			t.Errorf("existingPort = (%d, true), want a stopped container not reused", port)
 		}
-		if _, ran := podman.ran("rm -f " + testContainer); !ran {
-			t.Errorf("the stale container was not removed; ran %v", podman.commands())
-		}
 	})
 }
 
-// The whole point of the systemd unit is that the supervisor comes back after a
-// reboot, and an unclean one is the case that has to work: nothing ran on the
-// way down to clear the containers, and nothing clears them at startup either.
+// After an unclean shutdown, exited containers still hold the name; Reconcile
+// must remove them and start a replacement.
 func TestReconcileReplacesAStaleContainer(t *testing.T) {
 	podman := stubPodman(t)
 	podman.all(testContainer)

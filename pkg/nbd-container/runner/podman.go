@@ -67,12 +67,16 @@ func (r *Runner) Reconcile(ctx context.Context, devices []blockdev.Device) ([]Ex
 	var errs []error
 	nextPort := r.cfg.BasePort
 	for _, d := range devices {
-		// Reuse an existing container for this WWID if present (idempotency).
 		if port, ok, err := r.existingPort(ctx, d.WWID); err != nil {
 			errs = append(errs, fmt.Errorf("%s: checking existing container: %w", d.Path, err))
 			continue
 		} else if ok {
 			exports = append(exports, Export{WWID: d.WWID, Port: port, Device: d.Path, Size: d.Size})
+			continue
+		}
+
+		if err := r.removeContainers(ctx, d.WWID); err != nil {
+			errs = append(errs, fmt.Errorf("%s: removing stale containers: %w", d.Path, err))
 			continue
 		}
 
@@ -205,43 +209,38 @@ func (r *Runner) lastLog(ctx context.Context, name string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// existingPort returns the published host port of an already-running container for the
-// given WWID, if one exists.
-//
-// Only a healthy running container counts (verifyUp). A crash-looping or non-running
-// remnant is removed so the caller can create a fresh one.
+// existingPort returns the host port of a healthy running container for wwid.
 func (r *Runner) existingPort(ctx context.Context, wwid string) (int, bool, error) {
 	running, err := r.containers(ctx, wwid, "running")
 	if err != nil {
 		return 0, false, err
 	}
-	if len(running) > 0 {
-		name := running[0]
-		port, err := r.publishedPort(ctx, name)
-		if err != nil {
-			return 0, false, err
-		}
-		if err := r.verifyUp(ctx, name); err == nil {
-			return port, true, nil
-		}
-		if out, err := exec.CommandContext(ctx, "podman", "rm", "-f", name).CombinedOutput(); err != nil {
-			return 0, false, fmt.Errorf("removing dead container %s: %w: %s",
-				name, err, strings.TrimSpace(string(out)))
-		}
+	if len(running) == 0 {
 		return 0, false, nil
 	}
-
-	stale, err := r.containers(ctx, wwid, "")
+	name := running[0]
+	if err := r.verifyUp(ctx, name); err != nil {
+		return 0, false, nil
+	}
+	port, err := r.publishedPort(ctx, name)
 	if err != nil {
 		return 0, false, err
 	}
-	for _, name := range stale {
+	return port, true, nil
+}
+
+func (r *Runner) removeContainers(ctx context.Context, wwid string) error {
+	names, err := r.containers(ctx, wwid, "")
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
 		if out, err := exec.CommandContext(ctx, "podman", "rm", "-f", name).CombinedOutput(); err != nil {
-			return 0, false, fmt.Errorf("removing stale container %s: %w: %s",
+			return fmt.Errorf("removing container %s: %w: %s",
 				name, err, strings.TrimSpace(string(out)))
 		}
 	}
-	return 0, false, nil
+	return nil
 }
 
 // containers lists the names of this tool's containers for one WWID. An empty state means
@@ -329,7 +328,6 @@ func (r *Runner) usedPorts(ctx context.Context) (map[int]bool, error) {
 
 var nonAlnum = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
-// sanitize makes a WWID safe for use in a container name.
 func sanitize(s string) string {
 	return strings.Trim(nonAlnum.ReplaceAllString(s, "-"), "-")
 }
