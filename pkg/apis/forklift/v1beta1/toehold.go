@@ -8,9 +8,6 @@ import (
 
 const ToeholdTemplateFinalizer = "forklift/toehold-template"
 
-// AnnRebuildRequestedAt requests a one-shot rebuild; acknowledged in status.rebuildRequestedAt.
-const AnnRebuildRequestedAt = "forklift.konveyor.io/rebuild-requested-at"
-
 // ToeholdTemplatePhase is the high-level lifecycle state of a ToeholdTemplate resource.
 type ToeholdTemplatePhase string
 
@@ -33,9 +30,8 @@ const (
 
 // Condition types set on ToeholdTemplate status.
 const (
-	ToeholdTemplateFailed          = "ToeholdTemplateFailed"
-	ToeholdTemplateUpToDate        = "TemplateUpToDate"
-	ToeholdTemplateRebuildRequired = "RebuildRequired"
+	ToeholdTemplateFailed   = "ToeholdTemplateFailed"
+	ToeholdTemplateUpToDate = "TemplateUpToDate"
 )
 
 // ToeholdResources defines CPU and memory for the OVF descriptor.
@@ -126,14 +122,11 @@ type ToeholdTemplateStatus struct {
 	Stage ToeholdTemplateStage `json:"stage,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
-	// Reference to the build pod when a rebuild ran.
+	// Reference to the build pod when a template was successfully created.
 	// +optional
 	BuildPod *core.ObjectReference `json:"buildPod,omitempty"`
 	// +optional
 	Template TemplateStatus `json:"template,omitempty"`
-	// Last accepted rebuild-requested-at annotation.
-	// +optional
-	RebuildRequestedAt string `json:"rebuildRequestedAt,omitempty"`
 	// +optional
 	CompletionTime *meta.Time `json:"completionTime,omitempty"`
 }
@@ -172,10 +165,4 @@ func (t *ToeholdTemplate) TargetNS() string {
 		return t.Spec.TargetNamespace
 	}
 	return t.Namespace
-}
-
-// RebuildRequested is true when AnnRebuildRequestedAt is set and not yet acknowledged.
-func (t *ToeholdTemplate) RebuildRequested() bool {
-	req := t.Annotations[AnnRebuildRequestedAt]
-	return req != "" && req != t.Status.RebuildRequestedAt
 }

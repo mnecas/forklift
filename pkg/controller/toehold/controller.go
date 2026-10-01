@@ -89,23 +89,20 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	}
 
 	if toehold.Status.Phase == api.ToeholdTemplatePhaseSucceeded {
-		if toehold.Status.ObservedGeneration >= toehold.Generation && !toehold.RebuildRequested() {
+		if toehold.Status.ObservedGeneration >= toehold.Generation {
 			return
 		}
 		toehold.Status.Phase = api.ToeholdTemplatePhaseRunning
 		toehold.Status.Stage = api.StageEnsureTemplate
 	}
 	if toehold.Status.Phase == api.ToeholdTemplatePhaseFailed {
-		if toehold.Status.ObservedGeneration >= toehold.Generation && !toehold.RebuildRequested() {
+		if toehold.Status.ObservedGeneration >= toehold.Generation {
 			return
 		}
 		toehold.Status.Phase = api.ToeholdTemplatePhaseRunning
-		if toehold.RebuildRequested() {
-			toehold.Status.Stage = api.StageEnsureTemplate
-		}
+		toehold.Status.Stage = api.StageEnsureTemplate
 		log.Info("retrying failed toehold template after spec change",
 			"toeholdTemplate", toehold.Name,
-			"stage", toehold.Status.Stage,
 			"generation", toehold.Generation,
 		)
 	}
@@ -218,10 +215,7 @@ func (r ToeholdPredicate) Update(e event.TypedUpdateEvent[*api.ToeholdTemplate])
 			ObjectNew: e.ObjectNew,
 		})
 	}
-	if object.Status.Phase == api.ToeholdTemplatePhaseSucceeded || object.Status.Phase == api.ToeholdTemplatePhaseFailed {
-		return changed || object.RebuildRequested()
-	}
-	return true
+	return changed || object.Status.Phase == api.ToeholdTemplatePhaseRunning
 }
 
 func (r ToeholdPredicate) Delete(e event.TypedDeleteEvent[*api.ToeholdTemplate]) bool {
