@@ -60,3 +60,17 @@ func TestDeployBegin(t *testing.T) {
 		}
 	})
 }
+
+func TestWaitForCloneAcceptsAdoptedMoRef(t *testing.T) {
+	appliance := testAppliance()
+	appliance.Status.MoRef = "vm-42"
+	runner := DeployRunner{context: testContext(appliance, "uuid-a")}
+
+	done, err := runner.WaitForClone(context.TODO())
+	if err != nil {
+		t.Fatalf("WaitForClone: %v", err)
+	}
+	if !done {
+		t.Error("WaitForClone = false, want true when MoRef is set with no task")
+	}
+}
