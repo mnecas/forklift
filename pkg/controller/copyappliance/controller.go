@@ -218,16 +218,15 @@ func (r *Reconciler) ApplianceContext(ctx context.Context, appliance *api.CopyAp
 
 // applianceSecret resolves the secret the appliance is reached with: the SSH
 // key pair it is configured over and the mutual-TLS material it serves its
-// exports with. A secret that is not there is reported as none rather than as
-// an error: failing here would stop a teardown too, leaving an appliance that
-// cannot be deleted and read locks on the source vmdks with nothing left to
-// release them. Only the configure and export steps need it, and they name the
-// secret when it is missing.
+// exports with. Spec.Secret.Name is required. A named secret that is not there
+// is reported as none rather than as an error: failing here would stop a
+// teardown too, leaving an appliance that cannot be deleted and read locks on
+// the source vmdks with nothing left to release them. Only the configure and
+// export steps need the object, and they name the secret when it is missing.
 func (r *Reconciler) applianceSecret(ctx context.Context, appliance *api.CopyAppliance) (secret *core.Secret, err error) {
 	ref := appliance.Spec.Secret
 	if ref.Name == "" {
-		// An unnamed secret is not something to look up. Get would reject it
-		// as a malformed request rather than as a missing object.
+		err = liberr.New("the appliance secret is required")
 		return
 	}
 	namespace := ref.Namespace

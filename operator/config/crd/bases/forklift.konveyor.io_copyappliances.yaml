@@ -355,12 +355,9 @@ spec:
                 type: string
               phase:
                 description: |-
-                  The step of the deploy or teardown itinerary the appliance has reached.
-                  Every phase here is one the appliance can actually be observed in: a
-                  step that need not wait on vSphere is passed through within a single
-                  reconcile. The terminal phases are DeployCompleted, DeployFailed,
-                  Released, TeardownCompleted and TeardownFailed. DeployCompleted means
-                  Export has converged; Released means Release has converged.
+                  Current deploy, export, or teardown phase. Terminal: DeployCompleted
+                  (exporting), DeployFailed, Released (detached), TeardownCompleted,
+                  TeardownFailed.
                 type: string
               taskRef:
                 description: |-

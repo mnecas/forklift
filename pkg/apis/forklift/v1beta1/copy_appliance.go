@@ -66,6 +66,7 @@ type CopyApplianceSpec struct {
 	// Source provider in which the appliance VM is created.
 	Provider core.ObjectReference `json:"provider" ref:"Provider"`
 	// Secret holding everything the controller reaches the appliance with.
+	// Name is required; Namespace defaults to the CopyAppliance namespace.
 	//
 	// The SSH private key is read from the "private-key" data key; the matching
 	// public key is expected to be installed in the appliance image already.
@@ -191,14 +192,9 @@ type CopyApplianceStatus struct {
 	// until the appliance is serving all of them.
 	// +optional
 	Exports []ApplianceExport `json:"exports,omitempty"`
-	// The step of the deploy or teardown itinerary the appliance has reached.
-	// Every phase here is one the appliance can actually be observed in: a
-	// step that need not wait on vSphere is passed through within a single
-	// reconcile. The terminal phases are DeployCompleted, DeployFailed,
-	// Released, TeardownCompleted and TeardownFailed. DeployCompleted means
-	// Spec.AttachDisks are attached and exporting; Released means they have
-	// been detached. Clearing or restoring AttachDisks while terminal
-	// re-enters the export itinerary.
+	// Current deploy, export, or teardown phase. Terminal: DeployCompleted
+	// (exporting), DeployFailed, Released (detached), TeardownCompleted,
+	// TeardownFailed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 	// The managed object reference ID of the vSphere task the current phase is
