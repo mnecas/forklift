@@ -308,6 +308,7 @@ type Datastore struct {
 	Type                        string            `sql:""`
 	Capacity                    int64             `sql:""`
 	Free                        int64             `sql:""`
+	Accessible                  bool              `sql:""`
 	MaintenanceMode             string            `sql:""`
 	BackingDevicesNames         []string          `sql:""`
 	NasRemoteHost               string            `sql:""`
