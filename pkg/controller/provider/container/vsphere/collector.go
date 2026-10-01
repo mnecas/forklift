@@ -116,6 +116,7 @@ const (
 	fDsType                           = "summary.type"
 	fCapacity                         = "summary.capacity"
 	fFreeSpace                        = "summary.freeSpace"
+	fAccessible                       = "summary.accessible"
 	fDsMaintMode                      = "summary.maintenanceMode"
 	fVmfsExtent                       = "info"
 	fDsCapabilityStorageIORMSupported = "capability.storageIORMSupported"
@@ -1046,6 +1047,7 @@ func (r *Collector) propertySpec() []types.PropertySpec {
 				fDsType,
 				fCapacity,
 				fFreeSpace,
+				fAccessible,
 				fDsMaintMode,
 				fVmfsExtent,
 				fHost,
@@ -1267,6 +1269,9 @@ func (r *Collector) selectAdapter(u types.ObjectUpdate) (Adapter, bool) {
 				Base: model.Base{
 					ID: datastoreId,
 				},
+				// Assume accessible until summary.accessible says otherwise so a
+				// partial update never leaves every datastore looking dead.
+				Accessible: true,
 			},
 		}
 	case ResourcePool:

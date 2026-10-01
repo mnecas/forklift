@@ -687,6 +687,10 @@ func (v *DatastoreAdapter) Apply(u types.ObjectUpdate) {
 				if n, cast := p.Val.(int64); cast {
 					v.model.Free = n
 				}
+			case fAccessible:
+				if b, cast := p.Val.(bool); cast {
+					v.model.Accessible = b
+				}
 			case fDsMaintMode:
 				if s, cast := p.Val.(string); cast {
 					v.model.MaintenanceMode = s
