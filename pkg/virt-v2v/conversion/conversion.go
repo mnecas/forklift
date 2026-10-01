@@ -251,10 +251,8 @@ func (c *Conversion) addVirtV2vVsphereArgs(cmd utils.CommandBuilder) (err error)
 	return nil
 }
 
-// addVirtV2vNbdLibvirtArgs points virt-v2v at copy-appliance NBD exports by
-// fetching the source domain from libvirt and rewriting disk sources to
-// network/nbd (same pattern as in-place GetDomainXML + updateDiskPaths).
-// TLS (nbds://) is handled by virt-v2v via -io nbd-tls-certificates=.
+// addVirtV2vNbdLibvirtArgs fetches the source domain XML and rewrites disk
+// sources to the copy-appliance NBD exports (nbd:// or nbds://).
 func (c *Conversion) addVirtV2vNbdLibvirtArgs(cmd utils.CommandBuilder) error {
 	domainXML, err := c.fetchDomainXML()
 	if err != nil {
@@ -268,39 +266,17 @@ func (c *Conversion) addVirtV2vNbdLibvirtArgs(cmd utils.CommandBuilder) error {
 		return fmt.Errorf("write nbd domain XML: %w", err)
 	}
 	cmd.AddArg("-i", "libvirtxml")
-	if c.nbdNeedsTLS() {
-		cmd.AddArg("-io", "nbd-tls-certificates=/etc/secret")
+	for _, u := range c.NbdDisks {
+		if strings.HasPrefix(u, "nbds://") {
+			cmd.AddArg("-io", "nbd-tls-certificates=/etc/secret")
+			break
+		}
 	}
 	if err := c.addCommonArgs(cmd); err != nil {
 		return err
 	}
 	cmd.AddPositional(c.LibvirtDomainFile)
 	return nil
-}
-
-func parseNbdURI(raw string) (host, port string, err error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", "", fmt.Errorf("parse nbd URI %q: %w", raw, err)
-	}
-	if u.Scheme != "nbd" && u.Scheme != "nbds" {
-		return "", "", fmt.Errorf("unsupported nbd URI scheme %q in %q", u.Scheme, raw)
-	}
-	host = u.Hostname()
-	port = u.Port()
-	if host == "" || port == "" {
-		return "", "", fmt.Errorf("nbd URI %q must include host and port", raw)
-	}
-	return host, port, nil
-}
-
-func (c *Conversion) nbdNeedsTLS() bool {
-	for _, raw := range c.NbdDisks {
-		if strings.HasPrefix(raw, "nbds://") {
-			return true
-		}
-	}
-	return false
 }
 
 // addVirtV2vVsphereArgsForInspection adds vSphere-specific args WITHOUT conversion extra args
@@ -607,8 +583,7 @@ func (c *Conversion) UpdateDiskPaths(domainXML string) (string, error) {
 	return modifiedXML, nil
 }
 
-// updateDiskSourcesToNbd rewrites domain disk sources to copy-appliance NBD
-// exports, preserving the rest of the domain (firmware, NICs, targets, …).
+// updateDiskSourcesToNbd rewrites domain disks to NBD exports.
 func (c *Conversion) updateDiskSourcesToNbd(domainXML string) (string, error) {
 	if len(c.NbdDisks) == 0 {
 		return "", fmt.Errorf("no NBD disks configured")
@@ -629,21 +604,22 @@ func (c *Conversion) updateDiskSourcesToNbd(domainXML string) (string, error) {
 		if diskIdx >= len(c.NbdDisks) {
 			return "", fmt.Errorf("domain has more disks than NBD exports (%d)", len(c.NbdDisks))
 		}
-		host, port, err := parseNbdURI(c.NbdDisks[diskIdx])
+		u, err := url.Parse(c.NbdDisks[diskIdx])
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("parse nbd URI %q: %w", c.NbdDisks[diskIdx], err)
 		}
-		network := &libvirtxml.DomainDiskSourceNetwork{
-			Protocol: "nbd",
-			Hosts: []libvirtxml.DomainDiskSourceHost{{
-				Name: host,
-				Port: port,
-			}},
+		if (u.Scheme != "nbd" && u.Scheme != "nbds") || u.Hostname() == "" || u.Port() == "" {
+			return "", fmt.Errorf("nbd URI %q must be nbd[s]://host:port", c.NbdDisks[diskIdx])
 		}
-		if strings.HasPrefix(c.NbdDisks[diskIdx], "nbds://") {
-			network.TLS = "yes"
+		disk.Source = &libvirtxml.DomainDiskSource{
+			Network: &libvirtxml.DomainDiskSourceNetwork{
+				Protocol: "nbd",
+				Hosts: []libvirtxml.DomainDiskSourceHost{{
+					Name: u.Hostname(),
+					Port: u.Port(),
+				}},
+			},
 		}
-		disk.Source = &libvirtxml.DomainDiskSource{Network: network}
 		disk.Driver = &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"}
 		updatedDisks = append(updatedDisks, disk)
 		diskIdx++
@@ -652,11 +628,9 @@ func (c *Conversion) updateDiskSourcesToNbd(domainXML string) (string, error) {
 		return "", fmt.Errorf("NBD exports (%d) do not match domain disks (%d)", len(c.NbdDisks), diskIdx)
 	}
 	domain.Devices.Disks = updatedDisks
-
 	modifiedXML, err := domain.Marshal()
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal modified domain XML: %w", err)
 	}
-
 	return modifiedXML, nil
 }
