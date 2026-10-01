@@ -219,7 +219,7 @@ func (r *Orchestrator) Log() string {
 	if err != nil {
 		return "(no journal)"
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	out, _ := session.CombinedOutput("journalctl -u " + orchestratorUnit + " --no-pager -n 20")
 	if tail := strings.TrimSpace(string(out)); tail != "" {
 		return tail

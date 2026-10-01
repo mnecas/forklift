@@ -182,7 +182,7 @@ func (r Reconciler) finalize(ctx context.Context, toehold *api.ToeholdTemplate) 
 	}
 	tc := &ToeholdContext{Client: r.Client, Scheme: r.Scheme, Toehold: toehold}
 	if pctx, err := tc.providerContext(ctx); err == nil {
-		defer pctx.Client.Close(ctx)
+		defer func() { _ = pctx.Client.Close(ctx) }()
 		if ref, findErr := pctx.Client.FindVM(ctx, toehold.Spec.Folder, toehold.Spec.TemplateName, true); findErr == nil {
 			_ = libvsphere.Destroy(ctx, ref.VM)
 		}

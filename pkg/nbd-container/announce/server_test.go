@@ -36,7 +36,7 @@ func TestAnnounceRequiresClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() { _ = srv.http.Serve(ln) }()
 	addr := ln.Addr().String()
 
@@ -53,7 +53,7 @@ func TestAnnounceRequiresClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request with client cert failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var got []runner.Export
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
@@ -69,7 +69,7 @@ func TestAnnounceRequiresClientCert(t *testing.T) {
 	}}}
 	rejected, err := noCert.Get("https://" + addr + "/disks")
 	if err == nil {
-		rejected.Body.Close()
+		_ = rejected.Body.Close()
 		t.Error("request without client cert succeeded; mutual TLS not enforced")
 	}
 }
@@ -147,7 +147,7 @@ func writePEM(t *testing.T, path, blockType string, der []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := pem.Encode(f, &pem.Block{Type: blockType, Bytes: der}); err != nil {
 		t.Fatal(err)
 	}

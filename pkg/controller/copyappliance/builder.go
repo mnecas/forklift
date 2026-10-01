@@ -73,7 +73,7 @@ func (r *Builder) build(toehold *api.ToeholdTemplate) (*api.CopyAppliance, error
 			"copy appliances are only supported for vSphere providers; %s is %s",
 			provider.Name, provider.Type()))
 	}
-	if Settings.CopyAppliance.ContainerImage == "" {
+	if Settings.ContainerImage == "" {
 		return nil, liberr.New(
 			"the copy appliance container image is not configured; set " +
 				settings.CopyApplianceContainerImage)
@@ -93,7 +93,7 @@ func (r *Builder) build(toehold *api.ToeholdTemplate) (*api.CopyAppliance, error
 			Namespace: provider.Namespace,
 			Name:      provider.Status.ToeholdSSHPrivateSecret,
 		},
-		ContainerImage: Settings.CopyAppliance.ContainerImage,
+		ContainerImage: Settings.ContainerImage,
 	}
 	if err := r.placement(toehold, &spec); err != nil {
 		return nil, err

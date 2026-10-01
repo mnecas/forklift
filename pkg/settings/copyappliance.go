@@ -51,7 +51,7 @@ func (r *CopyAppliance) Load() error {
 }
 
 // EnabledForPlan reports whether disk transfer should use a copy appliance
-// exporting source disks over NBD.
+// exporting source disks over NBD. VDDK takes priority when configured.
 func (r *CopyAppliance) EnabledForPlan(p *api.Plan) bool {
 	if !Settings.Features.Toehold {
 		return false
@@ -63,6 +63,13 @@ func (r *CopyAppliance) EnabledForPlan(p *api.Plan) bool {
 		return false
 	}
 	if p.IsUsingOffloadPlugin() {
+		return false
+	}
+	var providerSettings map[string]string
+	if p.Provider.Source != nil {
+		providerSettings = p.Provider.Source.Spec.Settings
+	}
+	if GetVDDKImage(providerSettings) != "" {
 		return false
 	}
 	return true

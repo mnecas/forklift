@@ -353,10 +353,14 @@ func (r *Builder) PodEnvironment(vmRef ref.Ref, sourceSecret *core.Secret) (env 
 }
 
 // nbdDiskURIsForVM returns ordered nbd:// URIs for virt-v2v when a copy appliance
-// is exporting the VM's disks. Empty when CDI already transferred (!useV2vForTransfer)
-// or when there is no appliance — conversion must not require NBD after release.
+// is exporting the VM's disks. Empty when CDI already transferred (!useV2vForTransfer),
+// when the plan uses VDDK instead of a copy appliance, or when there is no appliance —
+// conversion must not require NBD after release.
 func (r *Builder) nbdDiskURIsForVM(vmRef ref.Ref, vm *model.VM) ([]string, error) {
 	if r.Migration == nil || r.Migration.UID == "" {
+		return nil, nil
+	}
+	if !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
 		return nil, nil
 	}
 	useV2vForTransfer, err := r.Plan.ShouldUseV2vForTransfer(vmRef)
