@@ -87,13 +87,15 @@ func NewApplianceContext(ctx context.Context, appliance *api.CopyAppliance, prov
 	return
 }
 
-// Close the connection to the vSphere API.
+// Close drops the local client without Logout. Encrypt-during-clone crypto
+// callbacks use the creating session; Logout mid-task yields a false
+// NoPermission Cryptographer.Encrypt even for Administrator.
 func (r *ApplianceContext) Close() {
-	if r.VCenter != nil {
-		_ = r.VCenter.Logout(context.TODO())
-		r.VCenter.CloseIdleConnections()
-		r.VCenter = nil
+	if r.VCenter == nil {
+		return
 	}
+	r.VCenter.CloseIdleConnections()
+	r.VCenter = nil
 }
 
 // InstanceUUID returns the instance UUID of the connected vCenter. A managed
@@ -169,7 +171,7 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 		Config: &types.VirtualMachineConfigSpec{
 			Annotation: api.CopyApplianceAnnotation,
 		},
-		PowerOn:  !encrypted,
+		PowerOn:  true,
 		Template: false,
 	}
 	if encrypted {
@@ -177,19 +179,18 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 		cloneSpec.Config.VmProfile = profiles
 		r.Log.Info("Encrypting copy appliance during clone with source VM storage policy.",
 			"source", r.Appliance.Labels[api.LabelVM])
-	} else {
-		devices, deviceErr := template.Device(ctx)
-		if deviceErr != nil {
-			err = liberr.Wrap(deviceErr)
-			return
-		}
-		changes, changeErr := r.buildAttachDiskChanges(devices)
-		if changeErr != nil {
-			err = changeErr
-			return
-		}
-		cloneSpec.Config.DeviceChange = changes
 	}
+	devices, deviceErr := template.Device(ctx)
+	if deviceErr != nil {
+		err = liberr.Wrap(deviceErr)
+		return
+	}
+	changes, changeErr := r.buildAttachDiskChanges(devices)
+	if changeErr != nil {
+		err = changeErr
+		return
+	}
+	cloneSpec.Config.DeviceChange = changes
 	task, err = template.Clone(ctx, r.folder, r.Appliance.Name, cloneSpec)
 	if err != nil {
 		err = liberr.Wrap(err, "template", r.Appliance.Spec.Template)

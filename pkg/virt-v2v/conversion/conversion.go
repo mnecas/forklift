@@ -254,6 +254,7 @@ func (c *Conversion) addVirtV2vVsphereArgs(cmd utils.CommandBuilder) (err error)
 // addVirtV2vNbdLibvirtArgs points virt-v2v at copy-appliance NBD exports by
 // fetching the source domain from libvirt and rewriting disk sources to
 // network/nbd (same pattern as in-place GetDomainXML + updateDiskPaths).
+// TLS (nbds://) is handled by virt-v2v via -io nbd-tls-certificates=.
 func (c *Conversion) addVirtV2vNbdLibvirtArgs(cmd utils.CommandBuilder) error {
 	domainXML, err := c.fetchDomainXML()
 	if err != nil {
@@ -267,6 +268,9 @@ func (c *Conversion) addVirtV2vNbdLibvirtArgs(cmd utils.CommandBuilder) error {
 		return fmt.Errorf("write nbd domain XML: %w", err)
 	}
 	cmd.AddArg("-i", "libvirtxml")
+	if c.nbdNeedsTLS() {
+		cmd.AddArg("-io", "nbd-tls-certificates=/etc/secret")
+	}
 	if err := c.addCommonArgs(cmd); err != nil {
 		return err
 	}
@@ -279,7 +283,7 @@ func parseNbdURI(raw string) (host, port string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("parse nbd URI %q: %w", raw, err)
 	}
-	if u.Scheme != "nbd" {
+	if u.Scheme != "nbd" && u.Scheme != "nbds" {
 		return "", "", fmt.Errorf("unsupported nbd URI scheme %q in %q", u.Scheme, raw)
 	}
 	host = u.Hostname()
@@ -288,6 +292,15 @@ func parseNbdURI(raw string) (host, port string, err error) {
 		return "", "", fmt.Errorf("nbd URI %q must include host and port", raw)
 	}
 	return host, port, nil
+}
+
+func (c *Conversion) nbdNeedsTLS() bool {
+	for _, raw := range c.NbdDisks {
+		if strings.HasPrefix(raw, "nbds://") {
+			return true
+		}
+	}
+	return false
 }
 
 // addVirtV2vVsphereArgsForInspection adds vSphere-specific args WITHOUT conversion extra args
@@ -620,15 +633,17 @@ func (c *Conversion) updateDiskSourcesToNbd(domainXML string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		disk.Source = &libvirtxml.DomainDiskSource{
-			Network: &libvirtxml.DomainDiskSourceNetwork{
-				Protocol: "nbd",
-				Hosts: []libvirtxml.DomainDiskSourceHost{{
-					Name: host,
-					Port: port,
-				}},
-			},
+		network := &libvirtxml.DomainDiskSourceNetwork{
+			Protocol: "nbd",
+			Hosts: []libvirtxml.DomainDiskSourceHost{{
+				Name: host,
+				Port: port,
+			}},
 		}
+		if strings.HasPrefix(c.NbdDisks[diskIdx], "nbds://") {
+			network.TLS = "yes"
+		}
+		disk.Source = &libvirtxml.DomainDiskSource{Network: network}
 		disk.Driver = &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"}
 		updatedDisks = append(updatedDisks, disk)
 		diskIdx++

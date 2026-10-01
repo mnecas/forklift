@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Builder builds an uncreated CopyAppliance from a toehold template.
+// Builder builds an uncreated CopyAppliance from aPowerOn:  !encrypted toehold template.
 type Builder struct {
 	Provider  *api.Provider
 	Inventory web.Client

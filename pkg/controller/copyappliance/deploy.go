@@ -15,7 +15,6 @@ import (
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
-	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -87,10 +86,6 @@ func (r *DeployRunner) itinerary() *libitr.Itinerary {
 		Pipeline: libitr.Pipeline{
 			{Name: api.PhaseCloneVM},
 			{Name: api.PhaseWaitForClone},
-			{Name: api.PhaseAttachSourceDisks},
-			{Name: api.PhaseWaitForAttachSourceDisks},
-			{Name: api.PhasePowerOnVM},
-			{Name: api.PhaseWaitForPowerOn},
 			{Name: api.PhaseWaitForNetwork},
 			{Name: api.PhaseLoadImage},
 			{Name: api.PhaseConfigure},
@@ -146,49 +141,6 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 			return
 		}
 		// A vSphere task, which settles in seconds.
-		reQ = base.SlowReQ
-	case api.PhaseAttachSourceDisks:
-		if err = r.context.ensureCloneEncrypted(ctx); err != nil {
-			return
-		}
-		vm := r.context.VM(r.context.Appliance.Status.MoRef)
-		task, attachErr := r.context.AttachDisks(ctx, vm)
-		if attachErr != nil {
-			err = attachErr
-			return
-		}
-		r.context.SetTask(task)
-		r.NextPhase()
-	case api.PhaseWaitForAttachSourceDisks:
-		done, _, waitErr := r.context.WaitForTask(ctx)
-		if waitErr != nil {
-			err = waitErr
-			return
-		}
-		if done {
-			r.NextPhase()
-			return
-		}
-		reQ = base.SlowReQ
-	case api.PhasePowerOnVM:
-		vm := r.context.VM(r.context.Appliance.Status.MoRef)
-		task, powerErr := libvsphere.PowerOn(ctx, vm)
-		if powerErr != nil {
-			err = powerErr
-			return
-		}
-		r.context.SetTask(task)
-		r.NextPhase()
-	case api.PhaseWaitForPowerOn:
-		done, _, waitErr := r.context.WaitForTask(ctx)
-		if waitErr != nil {
-			err = waitErr
-			return
-		}
-		if done {
-			r.NextPhase()
-			return
-		}
 		reQ = base.SlowReQ
 	case api.PhaseWaitForNetwork:
 		done, waitErr := r.WaitForNetwork(ctx)
