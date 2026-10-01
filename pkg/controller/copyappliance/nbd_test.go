@@ -72,7 +72,7 @@ func TestExportNbdConnectionsWarmSnapshotPath(t *testing.T) {
 func TestIsDeployReady(t *testing.T) {
 	appliance := &api.CopyAppliance{
 		Status: api.CopyApplianceStatus{
-			Phase: PhaseDeployCompleted,
+			Phase: api.PhaseDeployCompleted,
 			Conditions: libcnd.Conditions{
 				List: []libcnd.Condition{{
 					Type:   libcnd.Ready,

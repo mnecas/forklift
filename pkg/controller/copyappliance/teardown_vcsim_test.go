@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
@@ -106,8 +107,8 @@ func runTeardown(t *testing.T, ctx context.Context, runner TeardownRunner) (phas
 			t.Fatalf("pass %d: %v", pass, err)
 		}
 		phases = append(phases, status.Phase)
-		if status.Phase == PhaseTeardownCompleted || status.Phase == PhaseTeardownFailed {
-			if status.Phase == PhaseTeardownCompleted && status.MoRef != "" {
+		if status.Phase == api.PhaseTeardownCompleted || status.Phase == api.PhaseTeardownFailed {
+			if status.Phase == api.PhaseTeardownCompleted && status.MoRef != "" {
 				// TeardownCompleted clears MoRef on the pass that runs it.
 				continue
 			}
@@ -132,8 +133,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		phases := runTeardown(t, ctx, runner)
 
 		status := applianceContext.Appliance.Status
-		if status.Phase != PhaseTeardownCompleted {
-			t.Fatalf("phase = %q after %v, want %q", status.Phase, phases, PhaseTeardownCompleted)
+		if status.Phase != api.PhaseTeardownCompleted {
+			t.Fatalf("phase = %q after %v, want %q", status.Phase, phases, api.PhaseTeardownCompleted)
 		}
 		if status.MoRef != "" || status.TaskRef != "" || status.Addresses != nil {
 			t.Errorf("status still names a VM, a task or an address: %+v", status)
@@ -159,14 +160,14 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if len(phases) != 1 {
 			t.Errorf("took %d passes (%v), want 1", len(phases), phases)
 		}
-		if appliance.Status.Phase != PhaseTeardownCompleted {
-			t.Errorf("phase = %q, want %q", appliance.Status.Phase, PhaseTeardownCompleted)
+		if appliance.Status.Phase != api.PhaseTeardownCompleted {
+			t.Errorf("phase = %q, want %q", appliance.Status.Phase, api.PhaseTeardownCompleted)
 		}
 	})
 
 	// Teardown used to record the phase the pass started on rather than the one
 	// it stopped in. A pass that started the power off and found the task still
-	// running recorded PhasePowerOff, so the next pass started a second power
+	// running recorded api.PhasePowerOff, so the next pass started a second power
 	// off and overwrote the reference to the first — which nothing then
 	// observed, because an action phase is requeued immediately on the
 	// assumption that the pass walks straight through it. Teardown is the
@@ -187,9 +188,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("first pass: %v", err)
 		}
 
-		if status.Phase != PhaseWaitForPowerOff {
+		if status.Phase != api.PhaseWaitForPowerOff {
 			t.Fatalf("phase = %q, want %q: the pass started the power off and stopped waiting for it",
-				status.Phase, PhaseWaitForPowerOff)
+				status.Phase, api.PhaseWaitForPowerOff)
 		}
 		started := status.TaskRef
 		if started == "" {
@@ -201,8 +202,8 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("second pass: %v", err)
 		}
 
-		if status.Phase != PhaseWaitForPowerOff {
-			t.Errorf("phase = %q on the second pass, want %q", status.Phase, PhaseWaitForPowerOff)
+		if status.Phase != api.PhaseWaitForPowerOff {
+			t.Errorf("phase = %q on the second pass, want %q", status.Phase, api.PhaseWaitForPowerOff)
 		}
 		if status.TaskRef != started {
 			t.Errorf("task = %q, want the first pass's %q: the second pass started another power off",
@@ -228,13 +229,13 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 			t.Fatalf("power off the simulated VM: %v", err)
 		}
 
-		status.Phase = PhasePowerOff
+		status.Phase = api.PhasePowerOff
 		_, err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("PowerOff: %v", err)
 		}
-		if status.Phase != PhaseWaitForPowerOff {
-			t.Fatalf("phase = %q, want %q", status.Phase, PhaseWaitForPowerOff)
+		if status.Phase != api.PhaseWaitForPowerOff {
+			t.Fatalf("phase = %q, want %q", status.Phase, api.PhaseWaitForPowerOff)
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM that is already off started task %q", status.TaskRef)
@@ -248,13 +249,13 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("detach the disks: %v", err)
 		}
-		status.Phase = PhaseDetachDisks
+		status.Phase = api.PhaseDetachDisks
 		_, err = runner.execute(ctx)
 		if err != nil {
 			t.Fatalf("DetachDisks: %v", err)
 		}
-		if status.Phase != PhaseWaitForDetachDisks {
-			t.Fatalf("phase = %q, want %q", status.Phase, PhaseWaitForDetachDisks)
+		if status.Phase != api.PhaseWaitForDetachDisks {
+			t.Fatalf("phase = %q, want %q", status.Phase, api.PhaseWaitForDetachDisks)
 		}
 		if status.TaskRef != "" {
 			t.Errorf("a VM with no disks started task %q", status.TaskRef)
@@ -291,9 +292,9 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		}
 		phases := runTeardown(t, ctx, runner)
 
-		if applianceContext.Appliance.Status.Phase != PhaseTeardownCompleted {
+		if applianceContext.Appliance.Status.Phase != api.PhaseTeardownCompleted {
 			t.Errorf("phase = %q after %v, want %q",
-				applianceContext.Appliance.Status.Phase, phases, PhaseTeardownCompleted)
+				applianceContext.Appliance.Status.Phase, phases, api.PhaseTeardownCompleted)
 		}
 	})
 

@@ -1,7 +1,6 @@
 package copyappliance
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -38,7 +37,7 @@ func TestRenderUnit(t *testing.T) {
 		for _, want := range []string{
 			"-image=" + testLoadedImage,
 			"-certs-dir=" + applianceCertsDir,
-			"-listen=:" + Settings.CopyAppliance.AnnouncePort,
+			"-listen=:" + applianceAnnouncePort,
 			orchestratorBinary,
 			// Without this the supervisor does not come back after a reboot,
 			// which is the reason for using systemd at all.
@@ -94,10 +93,7 @@ func orchestratorLogin(t *testing.T, failing ...string) (*ApplianceContext, *ssh
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public, failing...)
 	ac := sshContext(t, private, server.addr)
-	orch, ready, err := NewOrchestrator(context.TODO(), ac, sshTimeout)
-	if err != nil || !ready {
-		t.Fatalf("NewOrchestrator: (%v, %v)", ready, err)
-	}
+	orch := &Orchestrator{context: ac, ssh: loginAt(t, private, server.addr)}
 	t.Cleanup(func() { _ = orch.Close() })
 	return ac, server, orch
 }

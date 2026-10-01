@@ -16,16 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// An appliance is cloned under the name its CR was given, and vCenter rejects a
-// VM name over 80 characters. The API server appends a ~5-char suffix to a
-// GenerateName, so the prefixes below stay well short of that. Nothing reads
-// these names back; appliances are found by their labels.
-const (
-	rootResourcePool = "Resources"
-	appliancePrefix  = "forklift-copy-"
-	checkPrefix      = "forklift-copy-check-"
-)
-
 // Builder builds an uncreated CopyAppliance from a toehold template.
 type Builder struct {
 	Provider  *api.Provider

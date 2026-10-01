@@ -13,12 +13,6 @@ const CopyApplianceFinalizer = "forklift/copy-appliance"
 // recognize it.
 const CopyApplianceAnnotation = "Forklift Copy Appliance"
 
-// Export targets for CopyApplianceSpec.Target.
-const (
-	ExportTargetExport  = "Export"
-	ExportTargetRelease = "Release"
-)
-
 // CopyAppliance specification.
 //
 // The appliance VM is a clone of Template, named after the CopyAppliance
@@ -62,7 +56,10 @@ type CopyApplianceSpec struct {
 	Folder string `json:"folder"`
 	// Disks to attach to the appliance VM for export. Each entry names an
 	// existing VMDK and carries the VMware identifiers needed to correlate
-	// guest exports with source inventory.
+	// guest exports with source inventory. Empty means disks should be
+	// detached (release); non-empty means they should be attached and
+	// exporting. Changing the set while terminal re-enters the export
+	// itinerary.
 	// Capped so that the root disk plus the attached disks fit within the
 	// four SCSI controllers vSphere permits per VM (4 x 15 addressable
 	// units = 60 disks).
@@ -75,12 +72,6 @@ type CopyApplianceSpec struct {
 	// which the clone inherits as-is.
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
-	// Export attaches disks and publishes exports. Release detaches disks and clears exports.
-	// Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
-	// Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
-	// +kubebuilder:validation:Enum=Export;Release
-	// +optional
-	Target string `json:"target,omitempty"`
 }
 
 // AttachedDisk is an existing VMDK to attach to the copy appliance.
@@ -161,7 +152,9 @@ type CopyApplianceStatus struct {
 	// step that need not wait on vSphere is passed through within a single
 	// reconcile. The terminal phases are DeployCompleted, DeployFailed,
 	// Released, TeardownCompleted and TeardownFailed. DeployCompleted means
-	// Export has converged; Released means Release has converged.
+	// Spec.AttachDisks are attached and exporting; Released means they have
+	// been detached. Clearing or restoring AttachDisks while terminal
+	// re-enters the export itinerary.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 	// The managed object reference ID of the vSphere task the current phase is

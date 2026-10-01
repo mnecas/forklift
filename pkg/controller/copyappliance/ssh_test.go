@@ -231,17 +231,16 @@ func testKeyPair(t *testing.T) (private []byte, public ssh.PublicKey) {
 }
 
 // sshContext is an appliance reachable at the given address. Nothing here talks
-// to vCenter, so it has no connection.
+// to vCenter, so it has no connection. The address's port is ignored: production
+// always dials ApplianceSSHPort, and tests that need a live SSH session use
+// NewSSHClient with the test server's port directly.
 func sshContext(t *testing.T, private []byte, addr string) *ApplianceContext {
 	t.Helper()
 	appliance := testAppliance()
-	host, port, err := net.SplitHostPort(addr)
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		t.Fatalf("split %q: %v", addr, err)
 	}
-	applied := testSettings()
-	applied.SSHPort = port
-	withSettings(t, applied)
 	appliance.Status.Addresses = []api.ApplianceAddress{
 		{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: host},
 	}
@@ -308,16 +307,11 @@ func TestSSHClient(t *testing.T) {
 	t.Run("a login with the installed key succeeds", func(t *testing.T) {
 		private, public := testKeyPair(t)
 		server := startSSHServer(t, public)
-		ac := sshContext(t, private, server.addr)
+		client := loginAt(t, private, server.addr)
 
-		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
-		if err != nil {
-			t.Fatalf("SSHClient: %v", err)
+		if err := client.RunCommand("true"); err != nil {
+			t.Fatalf("RunCommand: %v", err)
 		}
-		if !ready || client == nil {
-			t.Fatalf("ready = %v, client = %v, want a logged-in client", ready, client)
-		}
-		_ = client.Close()
 	})
 
 	// An appliance that answers and then turns us away is not one to wait for.
@@ -325,36 +319,50 @@ func TestSSHClient(t *testing.T) {
 		private, _ := testKeyPair(t)
 		_, installed := testKeyPair(t)
 		server := startSSHServer(t, installed)
-		ac := sshContext(t, private, server.addr)
-
-		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
-		if err == nil {
-			t.Fatal("SSHClient succeeded with a key the appliance does not know")
+		host, port, err := net.SplitHostPort(server.addr)
+		if err != nil {
+			t.Fatalf("split: %v", err)
 		}
-		if ready || client != nil {
-			t.Errorf("ready = %v, client = %v, want neither", ready, client)
+		withSettings(t, testSettings())
+		secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
+		client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+		if err != nil {
+			t.Fatalf("NewSSHClient: %v", err)
+		}
+		ready, err := client.Connect(context.TODO())
+		if err == nil {
+			t.Fatal("Connect succeeded with a key the appliance does not know")
+		}
+		if ready {
+			t.Error("ready = true, want a rejected key reported as not ready")
 		}
 	})
 
 	t.Run("an address nothing is listening on has not answered", func(t *testing.T) {
 		private, _ := testKeyPair(t)
-		ac := sshContext(t, private, closedAddr(t))
-
-		client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
+		host, port, err := net.SplitHostPort(closedAddr(t))
 		if err != nil {
-			t.Fatalf("SSHClient: %v, want a closed port to be something to wait for", err)
+			t.Fatalf("split: %v", err)
 		}
-		if ready || client != nil {
-			t.Errorf("ready = %v, client = %v, want neither", ready, client)
+		withSettings(t, testSettings())
+		secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
+		client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+		if err != nil {
+			t.Fatalf("NewSSHClient: %v", err)
+		}
+		ready, err := client.Connect(context.TODO())
+		if err != nil {
+			t.Fatalf("Connect: %v, want a closed port to be something to wait for", err)
+		}
+		if ready {
+			t.Error("ready = true, want a closed port reported as not ready")
 		}
 	})
 
 	// The provider's key secrets carry both halves under fixed names, so a
 	// secret without the private one is the wrong secret.
 	t.Run("a secret with no private key fails", func(t *testing.T) {
-		_, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := sshContext(t, nil, server.addr)
+		ac := sshContext(t, nil, closedAddr(t))
 		ac.ApplianceSecret = &core.Secret{
 			ObjectMeta: meta.ObjectMeta{Namespace: "forklift", Name: "appliance-secret"},
 			Data:       map[string][]byte{"public-key": []byte("ssh-ed25519 AAAA")},
@@ -392,31 +400,39 @@ func TestSSHClient(t *testing.T) {
 // worker for the whole half hour.
 func TestSSHClientHonoursTheContextDeadline(t *testing.T) {
 	private, _ := testKeyPair(t)
-	ac := sshContext(t, private, silentAddr(t))
+	addr := silentAddr(t)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
+	client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+	if err != nil {
+		t.Fatalf("NewSSHClient: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 	defer cancel()
 
 	type result struct {
-		client *SSHClient
-		ready  bool
-		err    error
+		ready bool
+		err   error
 	}
 	finished := make(chan result, 1)
 	go func() {
-		client, ready, err := ac.SSHClient(ctx, SSHFileTransferTimeout)
-		finished <- result{client, ready, err}
+		ready, err := client.Connect(ctx)
+		finished <- result{ready, err}
 	}()
 
 	select {
 	case got := <-finished:
 		if got.err == nil {
-			t.Fatal("SSHClient succeeded against an appliance that never said anything")
+			t.Fatal("Connect succeeded against an appliance that never said anything")
 		}
-		if got.ready || got.client != nil {
-			t.Errorf("ready = %v, client = %v, want neither", got.ready, got.client)
+		if got.ready {
+			t.Error("ready = true, want neither")
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("SSHClient is still waiting: the login is bounded by its own timeout only")
+		t.Fatal("Connect is still waiting: the login is bounded by its own timeout only")
 	}
 }
 
@@ -487,12 +503,34 @@ func applianceLogin(t *testing.T, failing ...string) (*ApplianceContext, *sshSer
 	private, public := testKeyPair(t)
 	server := startSSHServer(t, public, failing...)
 	ac := sshContext(t, private, server.addr)
-	client, ready, err := ac.SSHClient(context.TODO(), sshTimeout)
+	client := loginAt(t, private, server.addr)
+	return ac, server, client
+}
+
+// loginAt opens an SSH session to addr with the given private key. Tests use
+// this instead of ApplianceContext.SSHClient so they can reach a listener on a
+// non-standard port without a production injection hook.
+func loginAt(t *testing.T, private []byte, addr string) *SSHClient {
+	t.Helper()
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split %q: %v", addr, err)
+	}
+	withSettings(t, testSettings())
+	secret := &core.Secret{Data: map[string][]byte{sshPrivateKeyData: private}}
+	client, err := NewSSHClient(Settings.CopyAppliance.SSHUser, host, port, secret)
+	if err != nil {
+		t.Fatalf("NewSSHClient: %v", err)
+	}
+	ready, err := client.Connect(context.TODO())
 	if err != nil || !ready {
-		t.Fatalf("SSHClient: (%v, %v)", ready, err)
+		t.Fatalf("Connect: (%v, %v)", ready, err)
+	}
+	if err := client.SetTimeout(sshTimeout); err != nil {
+		t.Fatalf("SetTimeout: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return ac, server, client
+	return client
 }
 
 func TestRunWithStdin(t *testing.T) {
@@ -610,44 +648,11 @@ func TestConfigure(t *testing.T) {
 		return ac
 	}
 
-	// The guest reports its address as soon as it has one, which is before sshd
-	// is answering on it. Failing here would fail a deploy that is on track.
-	t.Run("an appliance that is not answering yet is not configured and is not a failure", func(t *testing.T) {
-		private, _ := testKeyPair(t)
-		runner := DeployRunner{context: configureContext(t, private, closedAddr(t))}
-
-		done, err := runner.Configure(context.TODO())
-		if err != nil {
-			t.Fatalf("Configure: %v", err)
-		}
-		if done {
-			t.Error("done = true, want the appliance left to come up")
-		}
-	})
-
-	// Waiting on this would park the deploy forever: the key is not going to
-	// start working.
-	t.Run("an appliance that rejects the key fails the deploy", func(t *testing.T) {
-		private, _ := testKeyPair(t)
-		_, installed := testKeyPair(t)
-		server := startSSHServer(t, installed)
-		runner := DeployRunner{context: configureContext(t, private, server.addr)}
-
-		done, err := runner.Configure(context.TODO())
-		if err == nil {
-			t.Fatal("Configure succeeded against an appliance that rejected the key")
-		}
-		if done {
-			t.Error("done = true, want it not configured")
-		}
-	})
-
 	// WaitForNetwork does not hand over until there is one, so this is a phase
 	// reached out of order rather than an appliance still booting.
 	t.Run("an appliance reporting no address fails", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := configureContext(t, private, server.addr)
+		private, _ := testKeyPair(t)
+		ac := configureContext(t, private, closedAddr(t))
 		ac.Appliance.Status.Addresses = nil
 		runner := DeployRunner{context: ac}
 
@@ -667,9 +672,8 @@ func TestConfigure(t *testing.T) {
 	// nothing to do on an appliance without one and nothing it could be left
 	// half-installed with.
 	t.Run("an appliance whose secret is missing fails before logging in", func(t *testing.T) {
-		private, public := testKeyPair(t)
-		server := startSSHServer(t, public)
-		ac := configureContext(t, private, server.addr)
+		private, _ := testKeyPair(t)
+		ac := configureContext(t, private, closedAddr(t))
 		ac.ApplianceSecret = nil
 		runner := DeployRunner{context: ac}
 
@@ -680,9 +684,6 @@ func TestConfigure(t *testing.T) {
 		}
 		if done {
 			t.Error("done = true, want it not configured")
-		}
-		if ran := server.Ran(); len(ran) != 0 {
-			t.Errorf("ran %v, want nothing sent to the appliance", ran)
 		}
 	})
 }

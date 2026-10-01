@@ -72,9 +72,9 @@ func TestRemoveFinalizer(t *testing.T) {
 		phase    string
 		wantHeld bool
 	}{
-		{"the finalizer is held while teardown is in flight", PhaseWaitForDestroyVM, true},
-		{"the finalizer is held when teardown has failed", PhaseTeardownFailed, true},
-		{"the finalizer is released once teardown completes", PhaseTeardownCompleted, false},
+		{"the finalizer is held while teardown is in flight", api.PhaseWaitForDestroyVM, true},
+		{"the finalizer is held when teardown has failed", api.PhaseTeardownFailed, true},
+		{"the finalizer is released once teardown completes", api.PhaseTeardownCompleted, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestApplianceForgetForeignVM(t *testing.T) {
 		appliance.Status.MoRef = "vm-42"
 		appliance.Status.VCenterInstanceUUID = "uuid-a"
 		appliance.Status.TaskRef = "task-7"
-		appliance.Status.Phase = PhaseWaitForClone
+		appliance.Status.Phase = api.PhaseWaitForClone
 		appliance.Status.Addresses = []api.ApplianceAddress{
 			{Network: "VM Network", MAC: "00:50:56:01:02:03", IP: "192.0.2.10"},
 		}
@@ -166,14 +166,14 @@ func TestFailureReason(t *testing.T) {
 	r := &Reconciler{}
 
 	failed := &api.CopyAppliance{}
-	r.setFailed(failed, PhaseDeployFailed, "CloneFailed",
+	r.setFailed(failed, api.PhaseDeployFailed, "CloneFailed",
 		liberr.New("the guest never reported an address"))
 	if got := FailureReason(failed); got != "the guest never reported an address" {
 		t.Errorf("FailureReason = %q, want the recorded message", got)
 	}
 
 	converging := &api.CopyAppliance{}
-	converging.Status.Phase = PhaseWaitForNetwork
+	converging.Status.Phase = api.PhaseWaitForNetwork
 	r.setConverging(converging, "waiting for an address")
 	if got := FailureReason(converging); got == "waiting for an address" {
 		t.Error("FailureReason returned a converging message as a failure")

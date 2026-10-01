@@ -91,7 +91,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 	}()
 
 	deleting := !appliance.DeletionTimestamp.IsZero()
-	terminalPhase := appliance.Status.Phase == PhaseDeployCompleted || appliance.Status.Phase == PhaseReleased
+	terminalPhase := appliance.Status.Phase == api.PhaseDeployCompleted || appliance.Status.Phase == api.PhaseReleased
 	if !deleting && terminalPhase && !PendingExportRequest(appliance) {
 		r.Log.Info("Nothing to do.")
 		return
@@ -110,16 +110,20 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 				r.Log.Error(err, "failed to add finalizer", "appliance", appliance.Name, "namespace", appliance.Namespace)
 				return
 			}
+			// Return after the finalizer patch: continuing would Deploy against a
+			// stale resourceVersion, Status().Update would conflict, and the next
+			// reconcile would restart CloneVM (double CloneVM_Task).
+			return
 		}
 		switch appliance.Status.Phase {
-		case PhaseReleaseDisks, PhaseWaitForReleaseDisks,
-			PhaseAttachDisks, PhaseWaitForAttachDisks,
-			PhaseRestartOrchestrator,
-			PhaseDeployCompleted, PhaseReleased:
+		case api.PhaseReleaseDisks, api.PhaseWaitForReleaseDisks,
+			api.PhaseAttachDisks, api.PhaseWaitForAttachDisks,
+			api.PhaseRestartOrchestrator,
+			api.PhaseDeployCompleted, api.PhaseReleased:
 			reQ, err = r.Export(ctx, appliance)
-		case PhaseWaitForExports:
-			// Shared with deploy; only a set target makes it export's job.
-			if appliance.Spec.Target != "" {
+		case api.PhaseWaitForExports:
+			// Shared with deploy; AttachDisks means export owns this wait.
+			if wantExport(appliance) {
 				reQ, err = r.Export(ctx, appliance)
 			} else {
 				reQ, err = r.Deploy(ctx, appliance)
@@ -162,7 +166,7 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 // not be released sooner: an appliance left behind holds read locks on the
 // source vmdks with nothing left in the cluster to point at it.
 func (r *Reconciler) RemoveFinalizer(ctx context.Context, appliance *api.CopyAppliance) (err error) {
-	if appliance.Status.Phase != PhaseTeardownCompleted {
+	if appliance.Status.Phase != api.PhaseTeardownCompleted {
 		return
 	}
 	patch := client.MergeFrom(appliance.DeepCopy())
@@ -256,7 +260,7 @@ func (r *Reconciler) applianceSecret(ctx context.Context, appliance *api.CopyApp
 func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
-		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		r.setFailed(appliance, api.PhaseDeployFailed, "ConnectFailed", err)
 		reQ = base.LongReQ
 		err = nil
 		return
@@ -268,7 +272,7 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 	runner := DeployRunner{context: applianceContext}
 	reQ, err = runner.Run(ctx)
 	if err != nil {
-		r.setFailed(appliance, PhaseDeployFailed, "DeployFailed", err)
+		r.setFailed(appliance, api.PhaseDeployFailed, "DeployFailed", err)
 		err = nil
 		return
 	}
@@ -280,7 +284,7 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
-		r.setFailed(appliance, PhaseDeployFailed, "ConnectFailed", err)
+		r.setFailed(appliance, api.PhaseDeployFailed, "ConnectFailed", err)
 		reQ = base.LongReQ
 		err = nil
 		return
@@ -292,7 +296,7 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 	runner := ExportRunner{context: applianceContext}
 	reQ, err = runner.Run(ctx)
 	if err != nil {
-		r.setFailed(appliance, PhaseDeployFailed, "ExportFailed", err)
+		r.setFailed(appliance, api.PhaseDeployFailed, "ExportFailed", err)
 		err = nil
 		return
 	}
@@ -306,7 +310,7 @@ func (r *Reconciler) Export(ctx context.Context, appliance *api.CopyAppliance) (
 func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance) (reQ time.Duration, err error) {
 	applianceContext, err := r.ApplianceContext(ctx, appliance)
 	if err != nil {
-		r.setFailed(appliance, PhaseTeardownFailed, "ConnectFailed", err)
+		r.setFailed(appliance, api.PhaseTeardownFailed, "ConnectFailed", err)
 		reQ = base.LongReQ
 		err = nil
 		return
@@ -318,7 +322,7 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 	runner := TeardownRunner{context: applianceContext}
 	reQ, err = runner.Run(ctx)
 	if err != nil {
-		r.setFailed(appliance, PhaseTeardownFailed, "TeardownFailed", err)
+		r.setFailed(appliance, api.PhaseTeardownFailed, "TeardownFailed", err)
 		err = nil
 		return
 	}
@@ -380,9 +384,9 @@ func FailureReason(appliance *api.CopyAppliance) string {
 func (r *Reconciler) setConverging(appliance *api.CopyAppliance, message string) {
 	phase := appliance.Status.Phase
 	switch phase {
-	case PhaseDeployCompleted, PhaseDeployFailed,
-		PhaseReleased,
-		PhaseTeardownCompleted, PhaseTeardownFailed:
+	case api.PhaseDeployCompleted, api.PhaseDeployFailed,
+		api.PhaseReleased,
+		api.PhaseTeardownCompleted, api.PhaseTeardownFailed:
 		return
 	}
 	appliance.Status.SetCondition(libcnd.Condition{

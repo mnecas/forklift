@@ -180,28 +180,20 @@ func (r *Runner) verifyUp(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("podman inspect %s: %w", name, err)
 	}
-	status, restarts, err := parseContainerState(string(out))
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return fmt.Errorf("unexpected inspect output: %q", strings.TrimSpace(string(out)))
+	}
+	status := fields[0]
+	restarts, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return err
+		return fmt.Errorf("parsing restart count %q: %w", fields[1], err)
 	}
 	if status != "running" || restarts > 0 {
 		return fmt.Errorf("container %s failed to start (status=%s, restarts=%d): %s",
 			name, status, restarts, r.lastLog(ctx, name))
 	}
 	return nil
-}
-
-// parseContainerState parses the `{{.State.Status}} {{.RestartCount}}` inspect format.
-func parseContainerState(out string) (status string, restarts int, err error) {
-	fields := strings.Fields(out)
-	if len(fields) != 2 {
-		return "", 0, fmt.Errorf("unexpected inspect output: %q", strings.TrimSpace(out))
-	}
-	restarts, err = strconv.Atoi(fields[1])
-	if err != nil {
-		return "", 0, fmt.Errorf("parsing restart count %q: %w", fields[1], err)
-	}
-	return fields[0], restarts, nil
 }
 
 // lastLog returns the tail of a container's logs for inclusion in error messages.

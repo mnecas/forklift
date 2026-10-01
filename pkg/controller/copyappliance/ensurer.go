@@ -12,39 +12,25 @@ import (
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Label keys. LabelMigration / LabelVM match plan's convctx keys; plan imports
-// this package, not the reverse.
-const (
-	LabelApp       = "app"
-	LabelSubapp    = "subapp"
-	LabelProvider  = "provider"
-	LabelMigration = "migration"
-	LabelVM        = "vmID"
-	AppForklift    = "forklift"
-
-	SubappAppliance = "copy-appliance"
-	SubappCheck     = "copy-appliance-check"
-)
-
 type Labeler struct {
 	labeler.Labeler
 }
 
 func (r *Labeler) ApplianceLabels(provider *api.Provider, migrationUID types.UID, vmID string) map[string]string {
 	return map[string]string{
-		LabelApp:       AppForklift,
-		LabelSubapp:    SubappAppliance,
-		LabelProvider:  string(provider.UID),
-		LabelMigration: string(migrationUID),
-		LabelVM:        vmID,
+		api.LabelApp:       api.AppForklift,
+		api.LabelSubapp:    api.SubappAppliance,
+		api.LabelProvider:  string(provider.UID),
+		api.LabelMigration: string(migrationUID),
+		api.LabelVM:        vmID,
 	}
 }
 
 func (r *Labeler) CheckLabels(provider *api.Provider) map[string]string {
 	return map[string]string{
-		LabelApp:      AppForklift,
-		LabelSubapp:   SubappCheck,
-		LabelProvider: string(provider.UID),
+		api.LabelApp:      api.AppForklift,
+		api.LabelSubapp:   api.SubappCheck,
+		api.LabelProvider: string(provider.UID),
 	}
 }
 

@@ -154,10 +154,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              targetNamespace:
-                description: Namespace where the build pod runs. Defaults to the CR
-                  namespace.
-                type: string
               templateName:
                 description: vCenter template name after OVF import.
                 type: string

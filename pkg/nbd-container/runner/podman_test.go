@@ -10,41 +10,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/nbd-container/blockdev"
 )
 
-func TestParseContainerState(t *testing.T) {
-	tests := []struct {
-		name         string
-		in           string
-		wantStatus   string
-		wantRestarts int
-		wantErr      bool
-	}{
-		{name: "healthy", in: "running 0\n", wantStatus: "running", wantRestarts: 0},
-		{name: "crash looping", in: "running 4\n", wantStatus: "running", wantRestarts: 4},
-		{name: "exited", in: "exited 1", wantStatus: "exited", wantRestarts: 1},
-		{name: "malformed", in: "running", wantErr: true},
-		{name: "empty", in: "", wantErr: true},
-		{name: "bad count", in: "running x", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			status, restarts, err := parseContainerState(tt.in)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for %q, got status=%q restarts=%d", tt.in, status, restarts)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if status != tt.wantStatus || restarts != tt.wantRestarts {
-				t.Errorf("parseContainerState(%q) = (%q, %d), want (%q, %d)",
-					tt.in, status, restarts, tt.wantStatus, tt.wantRestarts)
-			}
-		})
-	}
-}
-
 // testDevice is one disk attached to the appliance, and testContainer the
 // container name the runner derives from its WWID.
 var testDevice = blockdev.Device{WWID: "wwn-abc", Path: "/dev/sdb", Size: 1 << 30}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"time"
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
@@ -18,37 +19,70 @@ import (
 // Name of the controller, used for its logger and its event source.
 const Name = "copy-appliance"
 
+// ApplianceContainerImageName is where the image is filed in the appliance's
+// podman store. Deliberately not the cluster pull spec: the appliance has no
+// reason to carry the in-cluster registry's hostname, and a digest reference
+// cannot be a tag in a docker archive.
+const ApplianceContainerImageName = "localhost/forklift-copy-appliance"
+
+// AppliancePodmanLoadCommand reads a docker archive on its standard input and
+// adds what it finds to the appliance's podman store.
+const AppliancePodmanLoadCommand = "/usr/local/bin/toehold-podman load"
+
+// An appliance is cloned under the name its CR was given, and vCenter rejects a
+// VM name over 80 characters. The API server appends a ~5-char suffix to a
+// GenerateName, so the prefixes below stay well short of that. Nothing reads
+// these names back; appliances are found by their labels.
+const (
+	rootResourcePool = "Resources"
+	appliancePrefix  = "forklift-copy-"
+	checkPrefix      = "forklift-copy-check-"
+)
+
+// Paths for the nbd-orchestrator. The controller image and the appliance both
+// keep the binary at orchestratorBinary (see build/forklift-controller/Containerfile).
+const (
+	orchestratorBinary  = "/usr/local/bin/nbd-orchestrator"
+	orchestratorUnit    = "nbd-orchestrator.service"
+	orchestratorService = "/etc/systemd/system/" + orchestratorUnit
+	applianceCertsDir   = "/etc/pki/nbd"
+	// Staging beside the destination: cannot overwrite a running binary, and a
+	// rename from /tmp would keep a label systemd will not execute.
+	orchestratorStaging = "/usr/local/bin/.nbd-orchestrator.tmp"
+
+	// applianceAnnouncePort is the port the orchestrator serves its export list
+	// on. The appliance image is built with this port alone.
+	applianceAnnouncePort = "8443"
+	applianceBasePort     = 10809
+)
+
+// sshPrivateKeyData is the key the appliance's SSH secret holds its private key
+// under. It matches the name the provider's SSH key secrets use.
+const sshPrivateKeyData = "private-key"
+
+// sshTimeout bounds one login and the commands run over it. A reconcile must
+// not sit on an appliance that is not answering; the step is re-entered on the
+// next pass.
+const sshTimeout = 30 * time.Second
+
+// SSHFileTransferTimeout bounds image load and similar long SSH transfers.
+const SSHFileTransferTimeout = 30 * time.Minute
+
+// ApplianceSSHPort is the port sshd listens on in the appliance image.
+const ApplianceSSHPort = "22"
+
+// serviceAccountTokenFile is the controller's bearer token, which the cluster's
+// internal registry accepts as a password.
+const serviceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token" // #nosec G101
+
+// registryUser is the username sent with the token. The internal registry
+// validates only the token.
+const registryUser = "serviceaccount"
+
 // Settings are the forklift settings the controller reads.
 var Settings = &settings.Settings
 
 var log = logging.WithName(Name)
-
-// Phases of the deploy and teardown itineraries. The runners record where they
-// got to as one of these, and pick up from it on the next reconcile.
-const (
-	PhaseDeployFailed        = "DeployFailed"
-	PhaseCloneVM             = "CloneVM"
-	PhaseWaitForClone        = "WaitForClone"
-	PhaseWaitForNetwork      = "WaitForNetwork"
-	PhaseConfigure           = "Configure"
-	PhaseLoadImage           = "LoadImage"
-	PhaseWaitForExports      = "WaitForExports"
-	PhaseReleased            = "Released"
-	PhaseReleaseDisks        = "ReleaseDisks"
-	PhaseWaitForReleaseDisks = "WaitForReleaseDisks"
-	PhaseAttachDisks         = "AttachDisks"
-	PhaseWaitForAttachDisks  = "WaitForAttachDisks"
-	PhaseRestartOrchestrator = "RestartOrchestrator"
-	PhasePowerOff            = "PowerOff"
-	PhaseWaitForPowerOff     = "WaitForPowerOff"
-	PhaseDetachDisks         = "DetachDisks"
-	PhaseWaitForDetachDisks  = "WaitForDetachDisks"
-	PhaseDestroyVM           = "DestroyVM"
-	PhaseWaitForDestroyVM    = "WaitForDestroyVM"
-	PhaseDeployCompleted     = "DeployCompleted"
-	PhaseTeardownCompleted   = "TeardownCompleted"
-	PhaseTeardownFailed      = "TeardownFailed"
-)
 
 // snapshotVMDKPattern matches VMware snapshot delta suffixes such as -000003.vmdk.
 var snapshotVMDKPattern = regexp.MustCompile(`-\d{6}\.vmdk$`)
@@ -115,7 +149,7 @@ func IsDeployReady(appliance *api.CopyAppliance) bool {
 	if appliance == nil {
 		return false
 	}
-	if appliance.Status.Phase != PhaseDeployCompleted {
+	if appliance.Status.Phase != api.PhaseDeployCompleted {
 		return false
 	}
 	ready := appliance.Status.FindCondition(libcnd.Ready)

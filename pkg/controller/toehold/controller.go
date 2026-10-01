@@ -11,7 +11,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/lib/logging"
 	libref "github.com/kubev2v/forklift/pkg/lib/ref"
 	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
-	"github.com/kubev2v/forklift/pkg/settings"
 	core "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,11 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
-
-const Name = "toehold"
-
-var log = logging.WithName(Name)
-var Settings = &settings.Settings
 
 func Add(mgr manager.Manager) error {
 	reconciler := &Reconciler{
@@ -57,7 +51,7 @@ func Add(mgr manager.Manager) error {
 	return cnt.Watch(
 		source.Kind(mgr.GetCache(), &core.Pod{}, toeholdForBuildPodMapper(),
 			predicate.NewTypedPredicateFuncs(func(obj *core.Pod) bool {
-				_, ok := obj.Labels[labelToehold]
+				_, ok := obj.Labels[api.LabelToehold]
 				return ok
 			})))
 }
@@ -225,7 +219,7 @@ func (r ToeholdPredicate) Delete(e event.TypedDeleteEvent[*api.ToeholdTemplate])
 
 func toeholdForBuildPodMapper() handler.TypedEventHandler[*core.Pod, reconcile.Request] {
 	return handler.TypedEnqueueRequestsFromMapFunc(func(_ context.Context, pod *core.Pod) []reconcile.Request {
-		name := pod.Labels[labelToehold]
+		name := pod.Labels[api.LabelToehold]
 		if name == "" {
 			return nil
 		}

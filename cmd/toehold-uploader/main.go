@@ -11,7 +11,6 @@ import (
 	"github.com/kubev2v/forklift/pkg/settings"
 	"github.com/kubev2v/forklift/pkg/toehold/version"
 	toeholdvsphere "github.com/kubev2v/forklift/pkg/toehold/vsphere"
-	core "k8s.io/api/core/v1"
 )
 
 var log = logging.WithName("toehold-uploader")
@@ -27,20 +26,15 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	creds := &core.Secret{Data: map[string][]byte{}}
-	if settings.LookupBool(settings.VCenterInsecure, false) {
-		creds.Data["insecureSkipVerify"] = []byte("true")
-	}
-
 	url := os.Getenv(settings.VCenterURL)
 	log.Info("Connecting to vCenter", "url", url)
-	gc, err := libvsphere.ConnectProvider(
+	gc, err := libvsphere.Connect(
 		ctx,
 		url,
 		os.Getenv(settings.VCenterUser),
 		os.Getenv(settings.VCenterPassword),
 		os.Getenv(settings.VCenterThumbprint),
-		creds,
+		settings.LookupBool(settings.VCenterInsecure, false),
 	)
 	if err != nil {
 		return err

@@ -16,37 +16,30 @@ type ExportRunner struct {
 	context *ApplianceContext
 }
 
+// wantExport reports whether Spec.AttachDisks should be attached and exporting.
+func wantExport(appliance *api.CopyAppliance) bool {
+	return len(appliance.Spec.AttachDisks) > 0
+}
+
 // PendingExportRequest reports whether a terminal appliance must re-enter the
-// export pipeline. Terminal phase encodes the last converged target
-// (DeployCompleted = Export, Released = Release), so only a mismatched
-// target is pending. Warm precopy always Release→Export; there is no
-// same-target re-export path.
+// export pipeline. DeployCompleted means disks are attached; Released means
+// they are not. Spec.AttachDisks is the desired attachment set, so only a
+// mismatch is pending. Warm precopy always Release→Export.
 func PendingExportRequest(appliance *api.CopyAppliance) bool {
-	target := appliance.Spec.Target
-	if target == "" {
-		return false
-	}
 	switch appliance.Status.Phase {
-	case PhaseDeployCompleted:
-		return target == api.ExportTargetRelease
-	case PhaseReleased:
-		return target == api.ExportTargetExport
+	case api.PhaseDeployCompleted:
+		return !wantExport(appliance)
+	case api.PhaseReleased:
+		return wantExport(appliance)
 	default:
 		return false
 	}
 }
 
-// begin seeds the export pipeline from the requested target.
+// begin seeds the export pipeline from Spec.AttachDisks.
 func (r *ExportRunner) begin() (err error) {
 	r.context.Appliance.Status.TaskRef = ""
-	if r.context.Appliance.Spec.Target == "" {
-		return
-	}
-	itinerary, err := r.itinerary()
-	if err != nil {
-		r.context.Appliance.Status.Phase = r.failedPhase()
-		return
-	}
+	itinerary := r.itinerary()
 	step, err := itinerary.First()
 	if err != nil {
 		r.context.Appliance.Status.Phase = r.failedPhase()
@@ -80,12 +73,6 @@ func (r *ExportRunner) Run(ctx context.Context) (reQ time.Duration, err error) {
 	if err != nil {
 		return
 	}
-	if r.context.Appliance.Spec.Target == "" {
-		err = liberr.New("export target is not set")
-		r.context.Appliance.Status.Phase = r.failedPhase()
-		r.context.Log.Error(err, "Export phase failed.", "phase", r.context.Appliance.Status.Phase)
-		return
-	}
 	reQ, err = r.execute(ctx)
 	if err != nil {
 		r.context.Appliance.Status.Phase = r.failedPhase()
@@ -94,43 +81,35 @@ func (r *ExportRunner) Run(ctx context.Context) (reQ time.Duration, err error) {
 	return
 }
 
-func (r *ExportRunner) itinerary() (*libitr.Itinerary, error) {
-	switch r.context.Appliance.Spec.Target {
-	case api.ExportTargetRelease:
-		return &libitr.Itinerary{
-			Name: "Release",
-			Pipeline: libitr.Pipeline{
-				{Name: PhaseReleaseDisks},
-				{Name: PhaseWaitForReleaseDisks},
-				{Name: PhaseReleased},
-			},
-		}, nil
-	case api.ExportTargetExport:
+func (r *ExportRunner) itinerary() *libitr.Itinerary {
+	if wantExport(r.context.Appliance) {
 		return &libitr.Itinerary{
 			Name: "Export",
 			Pipeline: libitr.Pipeline{
-				{Name: PhaseAttachDisks},
-				{Name: PhaseWaitForAttachDisks},
-				{Name: PhaseRestartOrchestrator},
-				{Name: PhaseWaitForExports},
-				{Name: PhaseDeployCompleted},
+				{Name: api.PhaseAttachDisks},
+				{Name: api.PhaseWaitForAttachDisks},
+				{Name: api.PhaseRestartOrchestrator},
+				{Name: api.PhaseWaitForExports},
+				{Name: api.PhaseDeployCompleted},
 			},
-		}, nil
-	default:
-		return nil, liberr.New("unknown export target", "target", r.context.Appliance.Spec.Target)
+		}
+	}
+	return &libitr.Itinerary{
+		Name: "Release",
+		Pipeline: libitr.Pipeline{
+			{Name: api.PhaseReleaseDisks},
+			{Name: api.PhaseWaitForReleaseDisks},
+			{Name: api.PhaseReleased},
+		},
 	}
 }
 
 func (r *ExportRunner) failedPhase() string {
-	return PhaseDeployFailed
+	return api.PhaseDeployFailed
 }
 
 func (r *ExportRunner) NextPhase() {
-	itinerary, err := r.itinerary()
-	if err != nil {
-		return
-	}
-	nextPhase(r.context.Appliance, itinerary)
+	nextPhase(r.context.Appliance, r.itinerary())
 }
 
 // execute runs the phase the appliance is on and reports how long to wait
@@ -142,7 +121,7 @@ func (r *ExportRunner) NextPhase() {
 func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	phase := r.context.Appliance.Status.Phase
 	switch phase {
-	case PhaseReleaseDisks:
+	case api.PhaseReleaseDisks:
 		detachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		detachTask, detachErr := r.context.DetachAttachedDisks(ctx, detachVM)
 		if detachErr != nil {
@@ -151,7 +130,7 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		r.context.SetTask(detachTask)
 		r.NextPhase()
-	case PhaseWaitForReleaseDisks:
+	case api.PhaseWaitForReleaseDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -171,7 +150,7 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 			Category: libcnd.Required,
 			Message:  "Copy appliance disks have been released.",
 		})
-	case PhaseAttachDisks:
+	case api.PhaseAttachDisks:
 		attachVM := r.context.VM(r.context.Appliance.Status.MoRef)
 		attachTask, attachErr := r.context.AttachDisks(ctx, attachVM)
 		if attachErr != nil {
@@ -180,7 +159,7 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		r.context.SetTask(attachTask)
 		r.NextPhase()
-	case PhaseWaitForAttachDisks:
+	case api.PhaseWaitForAttachDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -192,7 +171,7 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		}
 		// A vSphere task, which settles in seconds.
 		reQ = base.SlowReQ
-	case PhaseRestartOrchestrator:
+	case api.PhaseRestartOrchestrator:
 		address, ok := r.context.Appliance.Address()
 		if !ok {
 			err = liberr.New(
@@ -228,7 +207,7 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 			return
 		}
 		r.NextPhase()
-	case PhaseWaitForExports:
+	case api.PhaseWaitForExports:
 		done, waitErr := r.context.WaitForExports(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -250,9 +229,9 @@ func (r *ExportRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		// for each, which is tens of seconds. Polling that at the task cadence
 		// buys nothing but vCenter logins.
 		reQ = base.LongReQ
-	case PhaseReleased, PhaseDeployCompleted:
+	case api.PhaseReleased, api.PhaseDeployCompleted:
 		msg := "Copy appliance disk export has succeeded."
-		if phase == PhaseReleased {
+		if phase == api.PhaseReleased {
 			msg = "Copy appliance disks have been released."
 		}
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{

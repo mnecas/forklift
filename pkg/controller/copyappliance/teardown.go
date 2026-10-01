@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
@@ -77,19 +78,19 @@ func (r *TeardownRunner) itinerary() *libitr.Itinerary {
 	return &libitr.Itinerary{
 		Name: "Teardown",
 		Pipeline: libitr.Pipeline{
-			{Name: PhasePowerOff},
-			{Name: PhaseWaitForPowerOff},
-			{Name: PhaseDetachDisks},
-			{Name: PhaseWaitForDetachDisks},
-			{Name: PhaseDestroyVM},
-			{Name: PhaseWaitForDestroyVM},
-			{Name: PhaseTeardownCompleted},
+			{Name: api.PhasePowerOff},
+			{Name: api.PhaseWaitForPowerOff},
+			{Name: api.PhaseDetachDisks},
+			{Name: api.PhaseWaitForDetachDisks},
+			{Name: api.PhaseDestroyVM},
+			{Name: api.PhaseWaitForDestroyVM},
+			{Name: api.PhaseTeardownCompleted},
 		},
 	}
 }
 
 func (r *TeardownRunner) failedPhase() string {
-	return PhaseTeardownFailed
+	return api.PhaseTeardownFailed
 }
 
 func (r *TeardownRunner) NextPhase() {
@@ -104,7 +105,7 @@ func (r *TeardownRunner) NextPhase() {
 // and each pass costs a vCenter session.
 func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
-	case PhasePowerOff:
+	case api.PhasePowerOff:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, powerErr := libvsphere.PowerOff(ctx, vm)
 		if powerErr != nil {
@@ -113,7 +114,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
-	case PhaseWaitForPowerOff:
+	case api.PhaseWaitForPowerOff:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -124,7 +125,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 			return
 		}
 		reQ = base.SlowReQ
-	case PhaseDetachDisks:
+	case api.PhaseDetachDisks:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, detachErr := r.context.DetachDisks(ctx, vm)
 		if detachErr != nil {
@@ -133,7 +134,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
-	case PhaseWaitForDetachDisks:
+	case api.PhaseWaitForDetachDisks:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -144,7 +145,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 			return
 		}
 		reQ = base.SlowReQ
-	case PhaseDestroyVM:
+	case api.PhaseDestroyVM:
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, destroyErr := libvsphere.DestroyVM(ctx, vm)
 		if destroyErr != nil {
@@ -153,7 +154,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 		}
 		r.context.SetTask(task)
 		r.NextPhase()
-	case PhaseWaitForDestroyVM:
+	case api.PhaseWaitForDestroyVM:
 		done, _, waitErr := r.context.WaitForTask(ctx)
 		if waitErr != nil {
 			err = waitErr
@@ -164,7 +165,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 			return
 		}
 		reQ = base.SlowReQ
-	case PhaseTeardownCompleted:
+	case api.PhaseTeardownCompleted:
 		// The VM is gone, so the moRef names nothing and the addresses reach
 		// nothing. Clearing them makes a repeated teardown a no-op rather than
 		// a second destroy attempt.
@@ -179,7 +180,7 @@ func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err er
 			Category: libcnd.Required,
 			Message:  "Tearing down the copy appliance has succeeded.",
 		})
-	case PhaseTeardownFailed:
+	case api.PhaseTeardownFailed:
 		r.context.Appliance.Status.SetCondition(libcnd.Condition{
 			Type:     libcnd.Ready,
 			Status:   libcnd.False,

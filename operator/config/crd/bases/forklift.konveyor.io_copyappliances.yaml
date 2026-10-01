@@ -60,7 +60,10 @@ spec:
                 description: |-
                   Disks to attach to the appliance VM for export. Each entry names an
                   existing VMDK and carries the VMware identifiers needed to correlate
-                  guest exports with source inventory.
+                  guest exports with source inventory. Empty means disks should be
+                  detached (release); non-empty means they should be attached and
+                  exporting. Changing the set while terminal re-enters the export
+                  itinerary.
                   Capped so that the root disk plus the attached disks fit within the
                   four SCSI controllers vSphere permits per VM (4 x 15 addressable
                   units = 60 disks).
@@ -214,15 +217,6 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
-              target:
-                description: |-
-                  Export attaches disks and publishes exports. Release detaches disks and clears exports.
-                  Convergence is phase↔target: DeployCompleted means Export is done, Released means Release is done.
-                  Changing target while terminal re-enters the export itinerary. Same-target re-export is unsupported.
-                enum:
-                - Export
-                - Release
-                type: string
               template:
                 description: |-
                   Inventory path of the VM template the appliance is cloned from. The

@@ -127,6 +127,14 @@ func (r *ApplianceContext) CheckInstance() (err error) {
 // will do it. If the name is already taken in the target folder, vCenter fails
 // the task with DuplicateName.
 func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err error) {
+	// A concurrent reconcile may already have created the VM. Adopt it instead
+	// of starting a second CloneVM_Task (DuplicateName / permission races).
+	if existing, findErr := r.finder.VirtualMachine(ctx, r.Appliance.Spec.Folder+"/"+r.Appliance.Name); findErr == nil {
+		r.Appliance.Status.MoRef = existing.Reference().Value
+		r.Log.Info("Adopting existing appliance VM.", "name", r.Appliance.Name, "moref", r.Appliance.Status.MoRef)
+		return
+	}
+
 	pool, err := r.finder.ResourcePool(ctx, r.Appliance.Spec.ResourcePool)
 	if err != nil {
 		err = liberr.Wrap(err)
@@ -174,6 +182,30 @@ func (r *ApplianceContext) CloneVM(ctx context.Context) (task *object.Task, err 
 	return
 }
 
+// taskFaultMessage prefers LocalizedMessage, and appends missing privileges
+// when the fault is NoPermission so operators know what to grant.
+func taskFaultMessage(fault *types.LocalizedMethodFault) string {
+	if fault == nil {
+		return ""
+	}
+	msg := fault.LocalizedMessage
+	np, ok := fault.Fault.(*types.NoPermission)
+	if !ok || np == nil {
+		return msg
+	}
+	var privileges []string
+	for _, entity := range np.MissingPrivileges {
+		privileges = append(privileges, entity.PrivilegeIds...)
+	}
+	if len(privileges) == 0 && np.PrivilegeId != "" {
+		privileges = append(privileges, np.PrivilegeId)
+	}
+	if len(privileges) == 0 {
+		return msg
+	}
+	return msg + " missing privileges: " + strings.Join(privileges, ", ")
+}
+
 // SetTask records the vSphere task the current phase is waiting on. A step that
 // found nothing to do records no task, and its wait step completes immediately.
 func (r *ApplianceContext) SetTask(task *object.Task) {
@@ -201,7 +233,11 @@ func (r *ApplianceContext) WaitForTask(ctx context.Context) (done bool, result a
 		return
 	}
 	if info.State == types.TaskInfoStateError {
-		err = liberr.New("task failed", "task", info.Task, "fault", info.Error.LocalizedMessage)
+		faultMsg := taskFaultMessage(info.Error)
+		if faultMsg == "" {
+			faultMsg = "unknown fault"
+		}
+		err = liberr.New("task failed: "+faultMsg, "task", info.Task)
 		return
 	}
 	result = info.Result
@@ -284,10 +320,11 @@ func (r *ApplianceContext) AttachDisks(ctx context.Context, vm *object.VirtualMa
 	return
 }
 
-// DetachAttachedDisks removes only the source VMDKs listed in the spec from the
-// appliance VM. The template root disk is left in place.
+// DetachAttachedDisks removes the source VMDKs from the appliance VM. Spec
+// disks are preferred; when Spec.AttachDisks is empty (release requested),
+// Status.Exports names what was attached. The template root disk is left.
 func (r *ApplianceContext) DetachAttachedDisks(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
-	attachPaths := attachedDiskPathSet(r.Appliance.Spec)
+	attachPaths := detachDiskPathSet(r.Appliance)
 	devices, err := vm.Device(ctx)
 	if err != nil {
 		if fault.Is(err, &types.ManagedObjectNotFound{}) {
@@ -383,7 +420,7 @@ func (r *ApplianceContext) WaitForExports(ctx context.Context) (done bool, err e
 		return
 	}
 
-	exports, err := client.Disks(ctx, net.JoinHostPort(address, Settings.AnnouncePort))
+	exports, err := client.Disks(ctx, net.JoinHostPort(address, applianceAnnouncePort))
 	if err != nil {
 		var timeout interface{ Timeout() bool }
 		if isStarting(err) ||
@@ -530,7 +567,7 @@ func (r *ApplianceContext) SSHClient(ctx context.Context, timeout time.Duration)
 	client, err = NewSSHClient(
 		Settings.CopyAppliance.SSHUser,
 		address,
-		Settings.CopyAppliance.SSHPort,
+		ApplianceSSHPort,
 		r.ApplianceSecret)
 	if err != nil {
 		return
@@ -598,6 +635,22 @@ func attachedDiskPathSet(spec api.CopyApplianceSpec) map[string]bool {
 	paths := make(map[string]bool, len(spec.AttachDisks))
 	for _, disk := range spec.AttachDisks {
 		paths[disk.VMDKPath] = true
+	}
+	return paths
+}
+
+// detachDiskPathSet is the set of source VMDKs to remove from the appliance.
+// Spec.AttachDisks is preferred; when cleared to request release, Status.Exports
+// still names the disks that were attached.
+func detachDiskPathSet(appliance *api.CopyAppliance) map[string]bool {
+	if len(appliance.Spec.AttachDisks) > 0 {
+		return attachedDiskPathSet(appliance.Spec)
+	}
+	paths := make(map[string]bool, len(appliance.Status.Exports))
+	for _, export := range appliance.Status.Exports {
+		if export.VMDKPath != "" {
+			paths[export.VMDKPath] = true
+		}
 	}
 	return paths
 }
