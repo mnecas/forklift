@@ -11478,9 +11478,6 @@ spec:
                   moref:
                     description: vSphere managed object reference.
                     type: string
-                  reused:
-                    description: True when an existing vCenter template was reused.
-                    type: boolean
                 type: object
             type: object
         type: object

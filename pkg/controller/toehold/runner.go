@@ -123,7 +123,6 @@ func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicK
 		return run.requireBuild(ctx, pctx)
 	}
 
-	run.context.Toehold.Status.Template.Reused = true
 	run.context.Toehold.Status.Template.Moref = ref.Moref
 	if storedConfig != configHash {
 		spec := vimtypes.VirtualMachineConfigSpec{
@@ -156,7 +155,6 @@ func (run *Runner) ensureTemplate(ctx context.Context, sshSecretName, sshPublicK
 }
 
 func (run *Runner) requireBuild(ctx context.Context, pctx *providerContext) (api.ToeholdTemplateStage, error) {
-	run.context.Toehold.Status.Template.Reused = false
 	if err := run.context.deleteBuildPod(ctx); err != nil {
 		return "", err
 	}
@@ -200,7 +198,6 @@ func (run *Runner) buildAndUpload(ctx context.Context, sshSecretName, sshPublicK
 	now := meta.Now()
 	run.context.Toehold.Status.Template.ImportedAt = &now
 	run.context.Toehold.Status.Template.Moref = ref.Moref
-	run.context.Toehold.Status.Template.Reused = false
 	// ImportOVF already stamps disk/config hashes before mark-as-template.
 	return true, nil
 }
