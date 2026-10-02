@@ -251,6 +251,28 @@ func (r Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (r
 		}
 	}
 
+	// Hold the provider until owned CopyAppliances / ToeholdTemplates finish
+	// teardown — they need the provider (and its secret) to destroy the VMs.
+	if provider.Type() == api.VSphere {
+		if provider.DeletionTimestamp != nil {
+			var done bool
+			done, err = r.cleanupVSphereProvider(ctx, provider)
+			if err == nil && !done {
+				result.RequeueAfter = base.SlowReQ
+			}
+			return
+		}
+		if !k8sutil.ContainsFinalizer(provider, api.VSphereProviderFinalizer) {
+			cloned := provider.DeepCopy()
+			k8sutil.AddFinalizer(provider, api.VSphereProviderFinalizer)
+			err = r.Patch(ctx, provider, client.MergeFrom(cloned))
+			if err != nil {
+				err = liberr.Wrap(err)
+			}
+			return
+		}
+	}
+
 	// Validations.
 	err = r.validate(provider)
 	if err != nil {
@@ -714,6 +736,56 @@ func (r *Reconciler) deleteProviderServer(ctx context.Context, provider *api.Pro
 		return r.DeleteHyperVProviderServer(ctx, provider)
 	}
 	return nil
+}
+
+// cleanupVSphereProvider deletes owned CopyAppliances and ToeholdTemplates and
+// waits for them to go away before releasing the provider finalizer.
+func (r *Reconciler) cleanupVSphereProvider(ctx context.Context, provider *api.Provider) (done bool, err error) {
+	if !k8sutil.ContainsFinalizer(provider, api.VSphereProviderFinalizer) {
+		return true, nil
+	}
+	pending := false
+	appliances := &api.CopyApplianceList{}
+	if err = r.List(ctx, appliances, client.InNamespace(provider.Namespace)); err != nil {
+		return false, liberr.Wrap(err)
+	}
+	for i := range appliances.Items {
+		obj := &appliances.Items[i]
+		if !metav1.IsControlledBy(obj, provider) {
+			continue
+		}
+		pending = true
+		if obj.DeletionTimestamp.IsZero() {
+			if delErr := r.Delete(ctx, obj); delErr != nil && !k8serr.IsNotFound(delErr) {
+				return false, liberr.Wrap(delErr)
+			}
+		}
+	}
+	templates := &api.ToeholdTemplateList{}
+	if err = r.List(ctx, templates, client.InNamespace(provider.Namespace)); err != nil {
+		return false, liberr.Wrap(err)
+	}
+	for i := range templates.Items {
+		obj := &templates.Items[i]
+		if !metav1.IsControlledBy(obj, provider) {
+			continue
+		}
+		pending = true
+		if obj.DeletionTimestamp.IsZero() {
+			if delErr := r.Delete(ctx, obj); delErr != nil && !k8serr.IsNotFound(delErr) {
+				return false, liberr.Wrap(delErr)
+			}
+		}
+	}
+	if pending {
+		return false, nil
+	}
+	cloned := provider.DeepCopy()
+	k8sutil.RemoveFinalizer(provider, api.VSphereProviderFinalizer)
+	if err = r.Patch(ctx, provider, client.MergeFrom(cloned)); err != nil {
+		return false, liberr.Wrap(err)
+	}
+	return true, nil
 }
 
 // cleanupProviderServer handles cleanup during provider deletion, including finalizer removal.

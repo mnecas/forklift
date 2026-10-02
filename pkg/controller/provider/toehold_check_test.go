@@ -210,6 +210,9 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		Message:  "the guest never reported an address",
 	})
 
+	released := readyCheckAppliance()
+	released.Status.Phase = api.PhaseReleased
+
 	stale := checkAppliance(api.PhaseWaitForNetwork)
 	stale.CreationTimestamp = meta.NewTime(time.Now().Add(-2 * toeholdCheckDeadline))
 
@@ -242,6 +245,13 @@ func TestToeholdApplianceCheck(t *testing.T) {
 		{
 			name:          "an appliance that came up records a pass and is torn down",
 			objects:       []client.Object{readyCheckAppliance()},
+			wantRecorded:  ToeholdCheckPassed,
+			wantMessage:   "passed",
+			wantAppliance: "terminating",
+		},
+		{
+			name:          "a released check appliance is still a pass",
+			objects:       []client.Object{released},
 			wantRecorded:  ToeholdCheckPassed,
 			wantMessage:   "passed",
 			wantAppliance: "terminating",
