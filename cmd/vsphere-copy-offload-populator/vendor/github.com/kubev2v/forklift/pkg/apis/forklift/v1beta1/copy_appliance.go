@@ -13,6 +13,50 @@ const CopyApplianceFinalizer = "forklift/copy-appliance"
 // recognize it.
 const CopyApplianceAnnotation = "Forklift Copy Appliance"
 
+// Label keys and values applied to CopyAppliance CRs. LabelMigration /
+// LabelVM match plan conversion-context keys.
+const (
+	LabelApp       = "app"
+	LabelSubapp    = "subapp"
+	LabelProvider  = "provider"
+	LabelMigration = "migration"
+	LabelVM        = "vmID"
+	AppForklift    = "forklift"
+
+	SubappAppliance = "copy-appliance"
+	SubappCheck     = "copy-appliance-check"
+)
+
+// Phases of the CopyAppliance deploy, export, and teardown itineraries.
+// Written to Status.Phase; terminal values are DeployCompleted, DeployFailed,
+// Released, TeardownCompleted, and TeardownFailed.
+//
+// PhaseWaitForPowerOff is defined with the plan migration phases in doc.go
+// (same string value) and is reused here.
+const (
+	PhaseDeployFailed        = "DeployFailed"
+	PhaseCloneVM             = "CloneVM"
+	PhaseWaitForClone        = "WaitForClone"
+	PhaseWaitForNetwork      = "WaitForNetwork"
+	PhaseConfigure           = "Configure"
+	PhaseLoadImage           = "LoadImage"
+	PhaseWaitForExports      = "WaitForExports"
+	PhaseReleased            = "Released"
+	PhaseReleaseDisks        = "ReleaseDisks"
+	PhaseWaitForReleaseDisks = "WaitForReleaseDisks"
+	PhaseAttachDisks         = "AttachDisks"
+	PhaseWaitForAttachDisks  = "WaitForAttachDisks"
+	PhaseRestartOrchestrator = "RestartOrchestrator"
+	PhasePowerOff            = "PowerOff"
+	PhaseDetachDisks         = "DetachDisks"
+	PhaseWaitForDetachDisks  = "WaitForDetachDisks"
+	PhaseDestroyVM           = "DestroyVM"
+	PhaseWaitForDestroyVM    = "WaitForDestroyVM"
+	PhaseDeployCompleted     = "DeployCompleted"
+	PhaseTeardownCompleted   = "TeardownCompleted"
+	PhaseTeardownFailed      = "TeardownFailed"
+)
+
 // CopyAppliance specification.
 //
 // The appliance VM is a clone of Template, named after the CopyAppliance
@@ -22,6 +66,7 @@ type CopyApplianceSpec struct {
 	// Source provider in which the appliance VM is created.
 	Provider core.ObjectReference `json:"provider" ref:"Provider"`
 	// Secret holding everything the controller reaches the appliance with.
+	// Name is required; Namespace defaults to the CopyAppliance namespace.
 	//
 	// The SSH private key is read from the "private-key" data key; the matching
 	// public key is expected to be installed in the appliance image already.
@@ -147,14 +192,9 @@ type CopyApplianceStatus struct {
 	// until the appliance is serving all of them.
 	// +optional
 	Exports []ApplianceExport `json:"exports,omitempty"`
-	// The step of the deploy or teardown itinerary the appliance has reached.
-	// Every phase here is one the appliance can actually be observed in: a
-	// step that need not wait on vSphere is passed through within a single
-	// reconcile. The terminal phases are DeployCompleted, DeployFailed,
-	// Released, TeardownCompleted and TeardownFailed. DeployCompleted means
-	// Spec.AttachDisks are attached and exporting; Released means they have
-	// been detached. Clearing or restoring AttachDisks while terminal
-	// re-enters the export itinerary.
+	// Current deploy, export, or teardown phase. Terminal: DeployCompleted
+	// (exporting), DeployFailed, Released (detached), TeardownCompleted,
+	// TeardownFailed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 	// The managed object reference ID of the vSphere task the current phase is
