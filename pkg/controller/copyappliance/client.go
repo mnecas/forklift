@@ -396,11 +396,19 @@ func (r *ApplianceContext) AttachDisks(ctx context.Context, vm *object.VirtualMa
 	return
 }
 
-// DetachAttachedDisks removes the source VMDKs from the appliance VM. Spec
-// disks are preferred; when Spec.AttachDisks is empty (release requested),
-// Status.Exports names what was attached. The template root disk is left.
+// DetachAttachedDisks removes the source VMDKs from the appliance VM. Uses
+// Spec.AttachDisks when set; after a release clears Spec, falls back to
+// Status.Exports. The template root disk is left.
 func (r *ApplianceContext) DetachAttachedDisks(ctx context.Context, vm *object.VirtualMachine) (task *object.Task, err error) {
-	attachPaths := detachDiskPathSet(r.Appliance)
+	toDetach := attachedDiskPathSet(r.Appliance.Spec)
+	if len(toDetach) == 0 {
+		toDetach = make(map[string]bool, len(r.Appliance.Status.Exports))
+		for _, export := range r.Appliance.Status.Exports {
+			if export.VMDKPath != "" {
+				toDetach[export.VMDKPath] = true
+			}
+		}
+	}
 	devices, err := vm.Device(ctx)
 	if err != nil {
 		if fault.Is(err, &types.ManagedObjectNotFound{}) {
@@ -413,7 +421,7 @@ func (r *ApplianceContext) DetachAttachedDisks(ctx context.Context, vm *object.V
 	var detach []types.BaseVirtualDeviceConfigSpec
 	for _, device := range devices.SelectByType((*types.VirtualDisk)(nil)) {
 		path := diskBackingFile(device)
-		if path == "" || !attachPaths[path] {
+		if path == "" || !toDetach[path] {
 			continue
 		}
 		detach = append(detach, &types.VirtualDeviceConfigSpec{
@@ -711,22 +719,6 @@ func attachedDiskPathSet(spec api.CopyApplianceSpec) map[string]bool {
 	paths := make(map[string]bool, len(spec.AttachDisks))
 	for _, disk := range spec.AttachDisks {
 		paths[disk.VMDKPath] = true
-	}
-	return paths
-}
-
-// detachDiskPathSet is the set of source VMDKs to remove from the appliance.
-// Spec.AttachDisks is preferred; when cleared to request release, Status.Exports
-// still names the disks that were attached.
-func detachDiskPathSet(appliance *api.CopyAppliance) map[string]bool {
-	if len(appliance.Spec.AttachDisks) > 0 {
-		return attachedDiskPathSet(appliance.Spec)
-	}
-	paths := make(map[string]bool, len(appliance.Status.Exports))
-	for _, export := range appliance.Status.Exports {
-		if export.VMDKPath != "" {
-			paths[export.VMDKPath] = true
-		}
 	}
 	return paths
 }
