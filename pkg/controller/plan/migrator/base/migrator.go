@@ -279,7 +279,7 @@ func (r *BaseMigrator) Itinerary(vm plan.VM) (itinerary *libitr.Itinerary) {
 	case r.Plan.Spec.Type == api.MigrationOnlyConversion:
 		itinerary = r.onlyConversionItinerary()
 	case r.Plan.IsWarm():
-		if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+		if settings.Settings.EnabledForPlan(r.Plan) {
 			itinerary = r.warmCopyApplianceItinerary()
 		} else {
 			itinerary = r.warmItinerary()
@@ -594,7 +594,7 @@ func (r *BasePredicate) Evaluate(flag libitr.Flag) (allowed bool, err error) {
 	case WaitForFinalSnapshotConsolidation:
 		allowed = settings.Settings.WaitForFinalSnapshotConsolidation
 	case CopyAppliance:
-		allowed = settings.Settings.CopyAppliance.EnabledForPlan(r.context.Plan)
+		allowed = settings.Settings.EnabledForPlan(r.context.Plan)
 	}
 
 	return

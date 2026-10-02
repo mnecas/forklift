@@ -334,7 +334,7 @@ func (r *Builder) nbdDiskURIsForVM(vmRef ref.Ref, vm *model.VM) ([]string, error
 	if r.Migration == nil || r.Migration.UID == "" {
 		return nil, nil
 	}
-	if !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+	if !settings.Settings.EnabledForPlan(r.Plan) {
 		return nil, nil
 	}
 	useV2vForTransfer, err := r.Plan.ShouldUseV2vForTransfer(vmRef)
@@ -776,7 +776,7 @@ func (r *Builder) DataVolumes(vmRef ref.Ref, secret *core.Secret, _ *core.Config
 	disks := vm.SortedDisksAsVmware()
 
 	var nbdConnections map[string]string
-	if settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+	if settings.Settings.EnabledForPlan(r.Plan) {
 		// Copy-appliance itineraries create the appliance before DataVolumes so
 		// NBD URIs are present at DV creation (no direct-VDDK interim window).
 		nbdConnections, err = r.nbdConnectionsForVM(vmRef)

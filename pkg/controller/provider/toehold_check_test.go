@@ -29,8 +29,8 @@ func withToeholdSettings(t *testing.T) {
 	previous := settings.Settings
 	t.Cleanup(func() { settings.Settings = previous })
 	Settings.Features.Toehold = true
-	Settings.Toehold.BaseDiskContainerImage = "registry.example/rhel:9"
-	Settings.CopyAppliance.ContainerImage = "copy-appliance:latest"
+	Settings.BaseDiskContainerImage = "registry.example/rhel:9"
+	Settings.ContainerImage = "copy-appliance:latest"
 }
 
 // checkProvider is a vSphere provider. It carries no conditions: they are set

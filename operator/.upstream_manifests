@@ -3441,7 +3441,10 @@ spec:
                 description: |-
                   Disks to attach to the appliance VM for export. Each entry names an
                   existing VMDK and carries the VMware identifiers needed to correlate
-                  guest exports with source inventory.
+                  guest exports with source inventory. Empty means disks should be
+                  detached (release); non-empty means they should be attached and
+                  exporting. Changing the set while terminal re-enters the export
+                  itinerary.
                   Capped so that the root disk plus the attached disks fit within the
                   four SCSI controllers vSphere permits per VM (4 x 15 addressable
                   units = 60 disks).
@@ -3534,13 +3537,13 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               resourcePool:
-                description: |-
-                  Resource pool in which the appliance VM is created. When omitted, the
-                  controller uses Provider.spec.settings.copyApplianceResourcePool.
+                description: Resource pool in which the appliance VM is created.
+                minLength: 1
                 type: string
               secret:
                 description: |-
                   Secret holding everything the controller reaches the appliance with.
+                  Name is required; Namespace defaults to the CopyAppliance namespace.
 
                   The SSH private key is read from the "private-key" data key; the matching
                   public key is expected to be installed in the appliance image already.
@@ -3609,6 +3612,7 @@ spec:
             - datastore
             - folder
             - provider
+            - resourcePool
             - secret
             - template
             type: object
@@ -11350,7 +11354,8 @@ spec:
             description: ToeholdTemplateStatus defines the observed state of ToeholdTemplate.
             properties:
               buildPod:
-                description: Reference to the build pod when a rebuild ran.
+                description: Reference to the build pod when a template was successfully
+                  created.
                 properties:
                   apiVersion:
                     description: API version of the referent.
@@ -11450,9 +11455,6 @@ spec:
                 - Running
                 - Succeeded
                 - Failed
-                type: string
-              rebuildRequestedAt:
-                description: Last accepted rebuild-requested-at annotation.
                 type: string
               stage:
                 description: ToeholdTemplateStage is the fine-grained pipeline position
