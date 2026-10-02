@@ -8,6 +8,10 @@ import (
 
 const ToeholdTemplateFinalizer = "forklift/toehold-template"
 
+// LabelToehold marks build pods owned by a ToeholdTemplate (value is the
+// template name).
+const LabelToehold = "forklift.konveyor.io/toehold"
+
 // ToeholdTemplatePhase is the high-level lifecycle state of a ToeholdTemplate resource.
 type ToeholdTemplatePhase string
 

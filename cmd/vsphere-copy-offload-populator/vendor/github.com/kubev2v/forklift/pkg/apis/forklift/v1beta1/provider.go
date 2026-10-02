@@ -120,6 +120,7 @@ const (
 
 const OvaProviderFinalizer = "forklift/ova-provider"
 const HyperVProviderFinalizer = "forklift/hyperv-provider"
+const VSphereProviderFinalizer = "forklift/vsphere-provider"
 
 // Defines the desired state of Provider.
 type ProviderSpec struct {

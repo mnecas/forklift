@@ -162,6 +162,7 @@ spec:
               secret:
                 description: |-
                   Secret holding everything the controller reaches the appliance with.
+                  Name is required; Namespace defaults to the CopyAppliance namespace.
 
                   The SSH private key is read from the "private-key" data key; the matching
                   public key is expected to be installed in the appliance image already.
