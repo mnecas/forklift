@@ -1669,7 +1669,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				break
 			}
 			vm.Warm.Precopies[n-1].WithDeltas(deltas)
-			if vm.Phase == api.PhaseStoreSnapshotDeltas && settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+			if vm.Phase == api.PhaseStoreSnapshotDeltas && settings.Settings.EnabledForPlan(r.Plan) {
 				err = r.kubevirt.EnsureNbdConnections(vm)
 				if err != nil {
 					step.AddError(err.Error())

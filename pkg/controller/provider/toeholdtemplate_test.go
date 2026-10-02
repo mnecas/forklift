@@ -17,9 +17,9 @@ import (
 func withSyncSettings(t *testing.T) {
 	t.Helper()
 	withToeholdSettings(t)
-	Settings.Toehold.TemplateCPU = 4
-	Settings.Toehold.TemplateMemoryMiB = 8192
-	Settings.Toehold.BuilderImage = "builder:latest"
+	Settings.TemplateCPU = 4
+	Settings.TemplateMemoryMiB = 8192
+	Settings.BuilderImage = "builder:latest"
 }
 
 // syncProvider is a provider that has connected and built its inventory, which
@@ -209,7 +209,7 @@ func TestToeholdSyncWaitsForTheProvider(t *testing.T) {
 		},
 		{
 			name:     "no base disk image is configured",
-			settings: func() { Settings.Toehold.BaseDiskContainerImage = "" },
+			settings: func() { Settings.BaseDiskContainerImage = "" },
 		},
 		{
 			name:     "no datastore is set",

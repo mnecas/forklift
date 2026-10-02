@@ -236,29 +236,6 @@ func (r *ApplianceContext) sourceEncryption(ctx context.Context) (encrypted bool
 	return
 }
 
-// ensureCloneEncrypted fails when the source is encrypted but the clone did
-// not inherit encryption. Encryption is applied during CloneVM_Task.
-func (r *ApplianceContext) ensureCloneEncrypted(ctx context.Context) (err error) {
-	encrypted, _, err := r.sourceEncryption(ctx)
-	if err != nil || !encrypted {
-		return
-	}
-	vm := r.VM(r.Appliance.Status.MoRef)
-	var moVM mo.VirtualMachine
-	if err = vm.Properties(ctx, vm.Reference(), []string{"config.keyId"}, &moVM); err != nil {
-		err = liberr.Wrap(err, "vm", r.Appliance.Status.MoRef)
-		return
-	}
-	if moVM.Config != nil && moVM.Config.KeyId != nil {
-		return
-	}
-	err = liberr.New(
-		"copy appliance is not encrypted after clone; cannot attach encrypted disks",
-		"vm", r.Appliance.Status.MoRef,
-		"source", r.Appliance.Labels[api.LabelVM])
-	return
-}
-
 // sourceStorageProfiles returns the SPBM profiles associated with the source VM.
 func (r *ApplianceContext) sourceStorageProfiles(ctx context.Context, vmID string) ([]types.BaseVirtualMachineProfileSpec, error) {
 	pbmClient, err := pbm.NewClient(ctx, r.VCenter.Client)

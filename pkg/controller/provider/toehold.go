@@ -104,7 +104,7 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 		toehold.Status.Template.Moref,
 		toehold.Status.Template.DiskHash,
 		toehold.Status.Template.ConfigHash,
-		Settings.CopyAppliance.ContainerImage,
+		Settings.ContainerImage,
 	}
 	describe := fmt.Sprintf("template %s (disk %s, config %s), appliance image %s",
 		items[0], items[1], items[2], items[3])
@@ -299,13 +299,13 @@ func (s *toeholdSync) Run(ctx context.Context) error {
 		ContainerImage: Settings.BaseDiskContainerImage,
 	}
 	template.Spec.Resources = api.ToeholdResources{
-		CPU:       Settings.Toehold.TemplateCPU,
-		MemoryMiB: Settings.Toehold.TemplateMemoryMiB,
+		CPU:       Settings.TemplateCPU,
+		MemoryMiB: Settings.TemplateMemoryMiB,
 	}
 	template.Spec.Datastore = datastore
 	template.Spec.Folder = folder
 	template.Spec.Network = network
-	template.Spec.BuilderImage = Settings.Toehold.BuilderImage
+	template.Spec.BuilderImage = Settings.BuilderImage
 
 	if err = k8sutil.SetControllerReference(s.provider, template, s.client.Scheme()); err != nil {
 		return liberr.Wrap(err)

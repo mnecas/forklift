@@ -1718,7 +1718,7 @@ func (r *KubeVirt) DeleteDataVolumes(vm *plan.VMStatus) (err error) {
 
 // EnsureNbdConnections patches migration DataVolumes with copy-appliance NBD URIs.
 func (r *KubeVirt) EnsureNbdConnections(vm *plan.VMStatus) error {
-	if !settings.Settings.CopyAppliance.EnabledForPlan(r.Plan) {
+	if !settings.Settings.EnabledForPlan(r.Plan) {
 		return nil
 	}
 

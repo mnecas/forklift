@@ -444,7 +444,7 @@ func hasShiftDiskMissingNAS(vm *vsphere.VM, storageMap *api.StorageMap, inventor
 
 // Validate that warm migration is supported from the source provider.
 func planUsesCopyAppliance(plan *api.Plan) bool {
-	return settings.Settings.CopyAppliance.EnabledForPlan(plan)
+	return settings.Settings.EnabledForPlan(plan)
 }
 
 func (r *Reconciler) validateCopyAppliance(ctx *plancontext.Context) error {
@@ -453,7 +453,7 @@ func (r *Reconciler) validateCopyAppliance(ctx *plancontext.Context) error {
 		return nil
 	}
 
-	if settings.Settings.CopyAppliance.ContainerImage == "" {
+	if settings.Settings.ContainerImage == "" {
 		plan.Status.SetCondition(libcnd.Condition{
 			Type:     CopyApplianceNotReady,
 			Status:   True,
