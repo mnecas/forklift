@@ -132,8 +132,10 @@ func (c *applianceCheck) Run(ctx context.Context) (err error) {
 	switch {
 	case appliance == nil:
 		err = c.deploy(ctx, toehold)
-	case copyappliance.IsDeployReady(appliance):
-		// Same readiness the plan waits for before using an appliance.
+	case copyappliance.IsDeployReady(appliance) ||
+		// Check appliances have no AttachDisks, so deploy ends at Released.
+		appliance.Status.Phase == api.PhaseReleased &&
+			appliance.Status.HasCondition(libcnd.Ready):
 		c.pass(items, describe)
 		err = c.teardown(ctx, appliance)
 	case appliance.Status.Phase == api.PhaseDeployFailed:
