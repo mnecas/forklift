@@ -3,19 +3,16 @@ package copyappliance
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/controller/base"
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	"github.com/vmware/govmomi/vim25/types"
+	core "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // DeployRunner drives the appliance VM from nothing to running. It holds no
@@ -23,10 +20,7 @@ import (
 // and leaves the next phase behind.
 type DeployRunner struct {
 	context *ApplianceContext
-	// registry reads the appliance's container image out of the cluster's
-	// internal registry. Nil means the real one, built on first use; a test
-	// supplies its own.
-	registry *ClusterRegistry
+	client  client.Client
 }
 
 // begin seeds the deploy pipeline and records the vCenter the appliance VM
@@ -87,8 +81,7 @@ func (r *DeployRunner) itinerary() *libitr.Itinerary {
 			{Name: api.PhaseCloneVM},
 			{Name: api.PhaseWaitForClone},
 			{Name: api.PhaseWaitForNetwork},
-			{Name: api.PhaseLoadImage},
-			{Name: api.PhaseConfigure},
+			{Name: api.PhaseSetupAppliance},
 			{Name: api.PhaseWaitForExports},
 			{Name: api.PhaseDeployCompleted},
 		},
@@ -157,46 +150,25 @@ func (r *DeployRunner) execute(ctx context.Context) (reQ time.Duration, err erro
 		// VMware Tools to start answering, which takes a minute or more.
 		// Polling it at the task cadence buys nothing but vCenter logins.
 		reQ = base.LongReQ
-	case api.PhaseLoadImage:
-		done, injectErr := r.InjectImage(ctx)
-		if injectErr != nil {
-			err = injectErr
+	case api.PhaseSetupAppliance:
+		done, setupErr := r.SetupAppliance(ctx)
+		if setupErr != nil {
+			err = setupErr
 			return
 		}
 		if done {
 			r.NextPhase()
 			return
 		}
-		// The first step to log in, so the only thing waited on here is sshd
-		// answering on an address the guest has already reported. That gap is
-		// seconds, so backing off to LongReQ would add half a minute to a
-		// deploy that is nearly done. The load itself runs to completion
-		// inside the pass and is never waited on.
-		reQ = base.SlowReQ
-	case api.PhaseConfigure:
-		// LoadImage used to run after this step and now runs before it. An
-		// appliance an older controller left sitting here has therefore not
-		// loaded its image. Send it back, rather than install a supervisor with
-		// no image to run.
-		if r.context.Appliance.Status.ExporterImage == "" {
-			r.context.Appliance.Status.Phase = api.PhaseLoadImage
-			return
-		}
-		done, cfgErr := r.Configure(ctx)
-		if cfgErr != nil {
-			err = cfgErr
-			return
-		}
-		if done {
-			r.NextPhase()
-			return
-		}
-		// Two things are waited on here: the appliance not answering yet, and a
-		// supervisor that will not come up. The second one repeats forever,
-		// which is only affordable because the step asks whether the install is
-		// already in place before it does anything: a pass that finds it is two
-		// short commands.
-		reQ = base.SlowReQ
+		// The pod watch requeues on every change the pod makes, so this is a
+		// backstop for a missed event rather than the poll that drives the
+		// step.
+		reQ = base.LongReQ
+	case api.PhaseLoadImage, api.PhaseConfigure:
+		// Both steps now run in the setup pod, which does the whole job and is
+		// safe to re-enter whatever state the appliance is in. An appliance an
+		// older controller left on either phase restarts there.
+		r.context.Appliance.Status.Phase = api.PhaseSetupAppliance
 	case api.PhaseWaitForExports:
 		done, waitErr := r.context.WaitForExports(ctx)
 		if waitErr != nil {
@@ -302,147 +274,53 @@ func (r *DeployRunner) WaitForNetwork(ctx context.Context) (done bool, err error
 	return
 }
 
-// Configure installs the NBD orchestrator on the appliance and makes sure it is
-// running.
-func (r *DeployRunner) Configure(ctx context.Context) (done bool, err error) {
-	address, _ := r.context.Appliance.Address()
-
-	orch, ready, err := NewOrchestrator(ctx, r.context, SSHFileTransferTimeout)
+// SetupAppliance loads the appliance's container image into its podman store
+// and installs the supervisor, in a pod, and reports whether that pod has
+// finished. The pod is found by label, so it is created once and then only
+// read.
+func (r *DeployRunner) SetupAppliance(ctx context.Context) (done bool, err error) {
+	pod, err := r.setupPod(ctx)
 	if err != nil {
 		return
 	}
-	if !ready {
-		r.context.Log.Info("The appliance is not answering on SSH yet.",
-			"address", address)
+	if pod == nil {
+		err = r.startSetup(ctx)
 		return
 	}
-	defer func() {
-		_ = orch.Close()
-	}()
-
-	installed, err := orch.Installed()
-	if err != nil {
-		return
+	switch pod.Status.Phase {
+	case core.PodSucceeded:
+		done = true
+	case core.PodFailed:
+		err = liberr.New(
+			"setting the appliance up failed",
+			"pod", pod.Name,
+			"reason", setupFailure(pod))
 	}
-	if !installed {
-		err = orch.Install()
-		if err != nil {
-			if !IsExitError(err) {
-				// The link went away part way through. Nothing is known to be
-				// wrong with the appliance, and a deploy that fails here cannot
-				// be restarted, so this is a wait rather than a failure.
-				r.context.Log.Info(
-					"Lost the connection to the appliance while installing the supervisor.",
-					"address", address,
-					"error", err.Error())
-				err = nil
-			}
-			return
-		}
-		r.context.Log.Info("Installed the appliance supervisor.",
-			"address", address, "image", r.context.Appliance.Status.ExporterImage)
-		return
-	}
-
-	active, err := orch.Active()
-	if err != nil {
-		return
-	}
-	if !active {
-		sErr := orch.Start()
-		if sErr != nil {
-			r.context.Log.Error(sErr, "Could not start the appliance supervisor.",
-				"address", address)
-		}
-		r.context.Log.Info("The appliance supervisor is not running.",
-			"address", address,
-			"journal", orch.Log())
-		return
-	}
-
-	r.context.Log.Info("Configured the appliance.", "address", address)
-	done = true
 	return
 }
 
-// InjectImage copies the appliance container image from the cluster registry
-// into the appliance VM's container registry.
-// TODO: Find a way to do the image upload that doesn't block the reconciler.
-func (r *DeployRunner) InjectImage(ctx context.Context) (done bool, err error) {
-	client, ready, err := r.context.SSHClient(ctx, SSHFileTransferTimeout)
+// startSetup resolves the appliance's container image and starts the pod that
+// loads it. The image is resolved here rather than in the pod so that one that
+// is missing or unreadable is reported on the CopyAppliance as an error rather
+// than as a pod that failed, and so the pod can be handed a digest.
+func (r *DeployRunner) startSetup(ctx context.Context) (err error) {
+	img, spec, err := resolveImage(ctx, r.context.Appliance.Spec.ContainerImage)
 	if err != nil {
 		return
 	}
-	if !ready {
-		r.context.Log.Info("The appliance is not answering on SSH yet.")
-		return
-	}
-	defer func() {
-		_ = client.Close()
-	}()
-	if r.registry == nil {
-		r.registry, err = NewClusterRegistry()
-		if err != nil {
-			return
-		}
-	}
-	img, err := r.registry.Image(ctx, r.context.Appliance.Spec.ContainerImage)
-	if err != nil {
-		return
-	}
-	return r.injectImage(client, img)
-}
-
-func (r *DeployRunner) injectImage(client *SSHClient, img v1.Image) (done bool, err error) {
 	tag, err := makeTag(img)
 	if err != nil {
 		return
 	}
+	// Recorded before the pod exists. The orchestrator unit the pod installs
+	// runs this reference, and the export steps read it back.
 	r.context.Appliance.Status.ExporterImage = tag.Name()
-	r.context.Log.Info("Starting to stream the exporter image.",
+	err = r.createSetupPod(ctx, spec, tag.Name())
+	if err != nil {
+		return
+	}
+	r.context.Log.Info("Setting the appliance up in a pod.",
 		"image", r.context.Appliance.Spec.ContainerImage,
 		"as", tag.Name())
-
-	err = r.streamImage(client, img, tag)
-	if err != nil {
-		return
-	}
-	r.context.Log.Info("Done streaming the exporter image.", "image", tag.Name())
-	done = true
-	return
-}
-
-// streamImage writes the image into the appliance's podman store as a docker
-// archive on the load command's standard input.
-func (r *DeployRunner) streamImage(client *SSHClient, img v1.Image, ref name.Tag) (err error) {
-	reader, writer := io.Pipe()
-	go func() {
-		// A failure part way through arrives at the load side as a read error,
-		// rather than as a truncated archive that podman would reject for the
-		// wrong reason.
-		_ = writer.CloseWithError(tarball.Write(ref, img, writer))
-	}()
-	// Closing the read half is what unblocks the writer when the load command
-	// gives up before the archive is finished.
-	defer func() {
-		_ = reader.Close()
-	}()
-
-	err = client.RunWithStdin(AppliancePodmanLoadCommand, reader)
-	return
-}
-
-// makeTag makes a tag for the image from its digest.
-func makeTag(img v1.Image) (tag name.Tag, err error) {
-	digest, err := img.Digest()
-	if err != nil {
-		err = liberr.Wrap(err)
-		return
-	}
-	tag, err = name.NewTag(fmt.Sprintf("%s:%s", ApplianceContainerImageName, digest.Hex), name.WithDefaultRegistry(""))
-	if err != nil {
-		err = liberr.Wrap(err, "digest", digest.String())
-		return
-	}
 	return
 }

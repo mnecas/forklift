@@ -56,6 +56,11 @@ const (
 	applianceBasePort     = 10809
 )
 
+// setupBinary is the appliance setup entry point in the controller image,
+// which the setup pod runs in place of the image's own entry point (see
+// build/forklift-controller/Containerfile).
+const setupBinary = "/usr/local/bin/copy-appliance-setup"
+
 // sshPrivateKeyData is the key the appliance's SSH secret holds its private key
 // under. It matches the name the provider's SSH key secrets use.
 const sshPrivateKeyData = "private-key"
@@ -70,14 +75,6 @@ const SSHFileTransferTimeout = 30 * time.Minute
 
 // ApplianceSSHPort is the port sshd listens on in the appliance image.
 const ApplianceSSHPort = "22"
-
-// serviceAccountTokenFile is the controller's bearer token, which the cluster's
-// internal registry accepts as a password.
-const serviceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token" // #nosec G101
-
-// registryUser is the username sent with the token. The internal registry
-// validates only the token.
-const registryUser = "serviceaccount"
 
 // Settings are the forklift settings the controller reads.
 var Settings = &settings.Settings

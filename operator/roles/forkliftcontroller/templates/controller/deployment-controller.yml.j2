@@ -232,6 +232,12 @@ spec:
           value: "{{ toehold_template_memory_mib | default('4096', true) }}"
         - name: COPY_APPLIANCE_CONTAINER_IMAGE
           value: "{{ copy_appliance_container_image | default('', true) }}"
+        - name: COPY_APPLIANCE_SETUP_IMAGE
+          value: "{{ controller_image_fqin or lookup('env', 'CONTROLLER_IMAGE') or lookup('env', 'RELATED_IMAGE_CONTROLLER') }}"
+        - name: COPY_APPLIANCE_SETUP_TRANSFER_NETWORK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['k8s.v1.cni.cncf.io/networks']
 {% if copy_appliance_ssh_user is defined and copy_appliance_ssh_user != "" %}
         - name: COPY_APPLIANCE_SSH_USER
           value: "{{ copy_appliance_ssh_user }}"
@@ -420,6 +426,12 @@ spec:
           value: "{{ toehold_template_memory_mib | default('4096', true) }}"
         - name: COPY_APPLIANCE_CONTAINER_IMAGE
           value: "{{ copy_appliance_container_image | default('', true) }}"
+        - name: COPY_APPLIANCE_SETUP_IMAGE
+          value: "{{ controller_image_fqin or lookup('env', 'CONTROLLER_IMAGE') or lookup('env', 'RELATED_IMAGE_CONTROLLER') }}"
+        - name: COPY_APPLIANCE_SETUP_TRANSFER_NETWORK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['k8s.v1.cni.cncf.io/networks']
 {% if copy_appliance_ssh_user is defined and copy_appliance_ssh_user != "" %}
         - name: COPY_APPLIANCE_SSH_USER
           value: "{{ copy_appliance_ssh_user }}"

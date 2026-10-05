@@ -456,7 +456,7 @@ func withSettings(t *testing.T, applied settings.CopyAppliance) {
 func testSettings() settings.CopyAppliance {
 	return settings.CopyAppliance{
 		SSHUser:        "root",
-		ContainerImage: "copy-appliance:latest",
+		ContainerImage: "quay.io/kubev2v/nbd-container:latest",
 	}
 }
 
@@ -536,6 +536,30 @@ func TestBuildRejectsAnUnconfiguredContainerImage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), settings.CopyApplianceContainerImage) {
 		t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceContainerImage)
+	}
+}
+
+// The setup pod reads the image with no credential and no cluster-local
+// resolution, so a reference naming no registry would be pulled from Docker
+// Hub. Rejected here, it is reported on the provider rather than as a pod that
+// failed part way through a deploy.
+func TestBuildRejectsAnImageThatIsNotAPullSpec(t *testing.T) {
+	for _, image := range []string{"nbd-container:latest", "kubev2v/nbd-container:latest"} {
+		t.Run(image, func(t *testing.T) {
+			applied := testSettings()
+			applied.ContainerImage = image
+			withSettings(t, applied)
+
+			_, err := (&Builder{Provider: testProvider(), Inventory: testInventory()}).
+				Appliance(testToehold(), testRef, testMigrationUID)
+
+			if err == nil {
+				t.Fatalf("build succeeded with %q as the container image", image)
+			}
+			if !strings.Contains(err.Error(), settings.CopyApplianceContainerImage) {
+				t.Errorf("error = %q, want it to name %s", err, settings.CopyApplianceContainerImage)
+			}
+		})
 	}
 }
 

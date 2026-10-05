@@ -638,52 +638,16 @@ func TestIsExitError(t *testing.T) {
 	})
 }
 
-func TestConfigure(t *testing.T) {
-	// configureContext is an appliance that has been through LoadImage, which
-	// is what Configure renders its unit around.
-	configureContext := func(t *testing.T, private []byte, addr string) *ApplianceContext {
-		t.Helper()
-		ac := sshContext(t, private, addr)
-		ac.Appliance.Status.ExporterImage = testLoadedImage
-		return ac
+// The setup pod installs the supervisor over a login it already holds, so a
+// missing secret has to be caught before the pod is created rather than after.
+func TestConnectApplianceRequiresASecret(t *testing.T) {
+	private, _ := testKeyPair(t)
+	ac := sshContext(t, private, closedAddr(t))
+	ac.ApplianceSecret = nil
+
+	_, err := connectAppliance(context.TODO(), ac)
+
+	if err == nil {
+		t.Fatal("connectAppliance succeeded with no key to log in with")
 	}
-
-	// WaitForNetwork does not hand over until there is one, so this is a phase
-	// reached out of order rather than an appliance still booting.
-	t.Run("an appliance reporting no address fails", func(t *testing.T) {
-		private, _ := testKeyPair(t)
-		ac := configureContext(t, private, closedAddr(t))
-		ac.Appliance.Status.Addresses = nil
-		runner := DeployRunner{context: ac}
-
-		done, err := runner.Configure(context.TODO())
-		if err == nil {
-			t.Fatal("Configure succeeded with no address to reach the appliance at")
-		}
-		if done {
-			t.Error("done = true, want it not configured")
-		}
-		if !errorMentions(t, err, ac.Appliance.Name) {
-			t.Errorf("error = %q, want it to name the appliance", err)
-		}
-	})
-
-	// The secret holds both the login key and the certificates, so there is
-	// nothing to do on an appliance without one and nothing it could be left
-	// half-installed with.
-	t.Run("an appliance whose secret is missing fails before logging in", func(t *testing.T) {
-		private, _ := testKeyPair(t)
-		ac := configureContext(t, private, closedAddr(t))
-		ac.ApplianceSecret = nil
-		runner := DeployRunner{context: ac}
-
-		done, err := runner.Configure(context.TODO())
-
-		if err == nil {
-			t.Fatal("Configure succeeded with no TLS material to install")
-		}
-		if done {
-			t.Error("done = true, want it not configured")
-		}
-	})
 }

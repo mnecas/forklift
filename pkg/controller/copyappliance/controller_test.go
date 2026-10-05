@@ -14,6 +14,7 @@ import (
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -23,21 +24,38 @@ func testLog() logging.LevelLogger {
 
 func testReconciler(t *testing.T, objs ...runtime.Object) *Reconciler {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	err := api.SchemeBuilder.AddToScheme(scheme)
-	if err != nil {
-		t.Fatalf("AddToScheme forklift: %v", err)
-	}
-	cl := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(objs...).
-		Build()
 	return &Reconciler{
 		Reconciler: base.Reconciler{
-			Client: cl,
+			Client: testClient(t, objs...),
 			Log:    testLog(),
 		},
 	}
+}
+
+// testClient is a cluster holding the given objects, which the runners reach
+// the setup pods through.
+func testClient(t *testing.T, objs ...runtime.Object) client.Client {
+	t.Helper()
+	return fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithRuntimeObjects(objs...).
+		Build()
+}
+
+// testScheme knows the forklift kinds plus the core kinds the setup pod is
+// made of.
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		api.SchemeBuilder.AddToScheme,
+		core.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+	return scheme
 }
 
 func testAppliance() *api.CopyAppliance {
@@ -50,7 +68,7 @@ func testAppliance() *api.CopyAppliance {
 		Spec: api.CopyApplianceSpec{
 			Provider:       core.ObjectReference{Namespace: "forklift", Name: "vsphere"},
 			Secret:         core.ObjectReference{Namespace: "forklift", Name: "appliance-secret"},
-			ContainerImage: "copy-appliance:latest",
+			ContainerImage: "quay.io/kubev2v/nbd-container:latest",
 			Datacenter:     "DC0",
 			Datastore:      "datastore1",
 			ResourcePool:   "/DC0/host/cluster/Resources",

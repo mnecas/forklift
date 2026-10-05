@@ -10,6 +10,7 @@ import (
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libitr "github.com/kubev2v/forklift/pkg/lib/itinerary"
 	libvsphere "github.com/kubev2v/forklift/pkg/lib/vsphere"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // TeardownRunner drives the appliance VM from running to gone. It holds no
@@ -17,6 +18,7 @@ import (
 // and leaves the next phase behind.
 type TeardownRunner struct {
 	context *ApplianceContext
+	client  client.Client
 }
 
 // begin seeds the teardown pipeline. An appliance with no recorded VM has
@@ -106,6 +108,13 @@ func (r *TeardownRunner) NextPhase() {
 func (r *TeardownRunner) execute(ctx context.Context) (reQ time.Duration, err error) {
 	switch r.context.Appliance.Status.Phase {
 	case api.PhasePowerOff:
+		// A setup pod still streaming at a VM about to be destroyed is holding
+		// a login into it open for nothing. Failing the teardown over it would
+		// leave an undeletable CR and read locks on the source vmdks, so the
+		// error is logged and the teardown goes on.
+		if podErr := r.deleteSetupPods(ctx); podErr != nil {
+			r.context.Log.Error(podErr, "Could not delete the appliance setup pods.")
+		}
 		vm := r.context.VM(r.context.Appliance.Status.MoRef)
 		task, powerErr := libvsphere.PowerOff(ctx, vm)
 		if powerErr != nil {

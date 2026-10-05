@@ -96,11 +96,11 @@ spec:
                 type: array
               containerImage:
                 description: |-
-                  ImageStreamTag naming the container image loaded into the appliance's
-                  podman store, resolved in the controller's own namespace. The controller
-                  reads the image from the cluster's internal registry and streams it to
+                  Fully qualified pull spec for the container image loaded into the
+                  appliance's podman store. A setup pod reads the image and streams it to
                   the appliance over SSH, so the appliance needs no registry access of its
-                  own.
+                  own. The pod carries no credential, so the image has to be readable
+                  without one.
                 minLength: 1
                 type: string
               datacenter:

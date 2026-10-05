@@ -92,7 +92,11 @@ func simulatedAppliance(t *testing.T, ctx context.Context, client *govmomi.Clien
 	appliance := testAppliance()
 	appliance.Status.MoRef = vm.Reference().Value
 	appliance.Status.VCenterInstanceUUID = client.ServiceContent.About.InstanceUuid
-	return &ApplianceContext{Appliance: appliance, VCenter: client, Log: testLog()}, vm
+	return &ApplianceContext{
+		Appliance: appliance,
+		VCenter:   client,
+		Log:       testLog(),
+	}, vm
 }
 
 // runTeardown drives the runner the way the reconciler does, one pass at a
@@ -136,7 +140,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	t.Run("teardown runs to completion and leaves no VM behind", func(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
-		runner := TeardownRunner{context: applianceContext}
+		runner := TeardownRunner{context: applianceContext, client: testClient(t)}
 
 		// No begin: an appliance that has never been torn down is seeded by
 		// the first pass, which is how the reconciler drives it.
@@ -160,6 +164,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		appliance := testAppliance()
 		runner := TeardownRunner{
 			context: &ApplianceContext{Appliance: appliance, VCenter: client, Log: testLog()},
+			client:  testClient(t),
 		}
 
 		if err := runner.begin(); err != nil {
@@ -186,7 +191,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, _ := simulatedAppliance(t, ctx, client)
 		slowTasks(t, ctx, applianceContext)
-		runner := TeardownRunner{context: applianceContext}
+		runner := TeardownRunner{context: applianceContext, client: testClient(t)}
 		status := &applianceContext.Appliance.Status
 
 		err := runner.begin()
@@ -227,7 +232,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	t.Run("a step with nothing to do starts no task", func(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
-		runner := TeardownRunner{context: applianceContext}
+		runner := TeardownRunner{context: applianceContext, client: testClient(t)}
 		status := &applianceContext.Appliance.Status
 
 		powerOff, err := vm.PowerOff(ctx)
@@ -277,7 +282,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 	t.Run("a VM that is already gone completes teardown", func(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
-		runner := TeardownRunner{context: applianceContext}
+		runner := TeardownRunner{context: applianceContext, client: testClient(t)}
 
 		// vSphere refuses to destroy a running VM, so the simulator does too.
 		powerOff, err := vm.PowerOff(ctx)
@@ -314,7 +319,7 @@ func TestTeardownAgainstSimulatedVCenter(t *testing.T) {
 		ctx, _, client := simulatedVCenter(t)
 		applianceContext, vm := simulatedAppliance(t, ctx, client)
 		applianceContext.Appliance.Status.VCenterInstanceUUID = "some-other-vcenter"
-		runner := TeardownRunner{context: applianceContext}
+		runner := TeardownRunner{context: applianceContext, client: testClient(t)}
 
 		if err := runner.begin(); err != nil {
 			t.Fatalf("begin: %v", err)

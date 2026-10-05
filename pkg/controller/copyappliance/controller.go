@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -50,7 +51,36 @@ func Add(mgr manager.Manager) error {
 		log.Trace(err)
 		return err
 	}
+	// The appliance is set up by a pod, so the pod's progress is what the
+	// PhaseSetupAppliance step is waiting on.
+	err = cnt.Watch(
+		source.Kind(mgr.GetCache(), &core.Pod{}, applianceForSetupPodMapper(),
+			predicate.NewTypedPredicateFuncs(func(obj *core.Pod) bool {
+				_, ok := obj.Labels[api.LabelCopyApplianceSetup]
+				return ok
+			})))
+	if err != nil {
+		log.Trace(err)
+		return err
+	}
 	return nil
+}
+
+// applianceForSetupPodMapper maps a setup pod to the CopyAppliance it was
+// created for, which is in the pod's own namespace.
+func applianceForSetupPodMapper() handler.TypedEventHandler[*core.Pod, reconcile.Request] {
+	return handler.TypedEnqueueRequestsFromMapFunc(func(_ context.Context, pod *core.Pod) []reconcile.Request {
+		name := pod.Labels[api.LabelCopyApplianceSetup]
+		if name == "" {
+			return nil
+		}
+		return []reconcile.Request{{
+			NamespacedName: types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      name,
+			},
+		}}
+	})
 }
 
 var _ reconcile.Reconciler = &Reconciler{}
@@ -268,7 +298,7 @@ func (r *Reconciler) Deploy(ctx context.Context, appliance *api.CopyAppliance) (
 
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
-	runner := DeployRunner{context: applianceContext}
+	runner := DeployRunner{context: applianceContext, client: r.Client}
 	reQ, err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, api.PhaseDeployFailed, "DeployFailed", err)
@@ -318,7 +348,7 @@ func (r *Reconciler) Teardown(ctx context.Context, appliance *api.CopyAppliance)
 
 	r.forgetForeignVM(appliance, applianceContext.InstanceUUID())
 
-	runner := TeardownRunner{context: applianceContext}
+	runner := TeardownRunner{context: applianceContext, client: r.Client}
 	reQ, err = runner.Run(ctx)
 	if err != nil {
 		r.setFailed(appliance, api.PhaseTeardownFailed, "TeardownFailed", err)

@@ -68,6 +68,15 @@ func (r *Builder) build(toehold *api.ToeholdTemplate) (*api.CopyAppliance, error
 			"the copy appliance container image is not configured; set " +
 				settings.CopyApplianceContainerImage)
 	}
+	// The setup pod reads the image with no credential and no cluster-local
+	// resolution, so rejecting it here reports the misconfiguration on the
+	// provider rather than as a pod that failed part way through a deploy.
+	if !isPullSpec(Settings.ContainerImage) {
+		return nil, liberr.New(
+			"the copy appliance container image must be a fully qualified pull spec; set "+
+				settings.CopyApplianceContainerImage,
+			"image", Settings.ContainerImage)
+	}
 	if provider.Status.ToeholdSSHPrivateSecret == "" {
 		return nil, liberr.New(
 			"provider has no toehold SSH private secret yet",
