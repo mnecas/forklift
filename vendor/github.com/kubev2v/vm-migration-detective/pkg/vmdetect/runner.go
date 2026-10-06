@@ -8,6 +8,7 @@ import (
 	internalchecks "github.com/kubev2v/vm-migration-detective/internal/checks"
 	"github.com/kubev2v/vm-migration-detective/internal/inspection"
 	"github.com/kubev2v/vm-migration-detective/internal/persistent"
+	"github.com/kubev2v/vm-migration-detective/internal/tlsconfig"
 	"github.com/kubev2v/vm-migration-detective/internal/vsphere"
 	"github.com/kubev2v/vm-migration-detective/pkg/checks"
 	"github.com/kubev2v/vm-migration-detective/pkg/types"
@@ -60,6 +61,19 @@ func NewDetector(config DetectorConfig) (*Detector, error) {
 		}
 	}
 
+	// Validate TLS configuration and log deprecation warnings
+	if !config.Credentials.TLSInsecure &&
+		config.Credentials.TLSCACert == "" &&
+		config.Credentials.TLSThumbprint == "" {
+		// Log loud deprecation warning
+		tlsconfig.LogDeprecationWarning(config.Logger)
+	} else if config.Credentials.TLSInsecure && config.Logger != nil {
+		// Log explicit insecure warning
+		config.Logger.Warn("TLS verification explicitly DISABLED (TLSInsecure=true)")
+		config.Logger.Warn("This should only be used for testing/development")
+		config.Logger.Warn("vCenter credentials are vulnerable to MITM attacks")
+	}
+
 	// Extract optional string parameters
 	virtInspectorPath := ""
 	if config.VirtInspectorPath != nil {
@@ -78,7 +92,7 @@ func NewDetector(config DetectorConfig) (*Detector, error) {
 	}
 
 	// Create the inspector internally
-	inspector := persistent.NewInspector(
+	inspector, err := persistent.NewInspector(
 		virtInspectorPath,
 		virtV2vInspectorPath,
 		timeout,
@@ -87,6 +101,9 @@ func NewDetector(config DetectorConfig) (*Detector, error) {
 		config.DB,
 		config.VDDKLibDir,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create inspector: %w", err)
+	}
 
 	return &Detector{
 		inspector:   inspector,
@@ -268,13 +285,19 @@ func (r *Detector) Detect(params DetectParams, checkTypes ...checks.CheckType) (
 
 // getSnapshotDiskInfo queries vSphere for snapshot disk information
 func (r *Detector) getSnapshotDiskInfo(ctx context.Context, vmMoref, snapshotMoref string) (*types.SnapshotDiskInfo, error) {
-	// Create vSphere client
+	// Build TLS config from credentials
+	tlsConfig, err := tlsconfig.FromCredentials(r.credentials, r.logger)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TLS configuration: %w", err)
+	}
+
+	// Create vSphere client with TLS configuration
 	vsphereClient, err := vsphere.NewClient(
 		ctx,
 		r.credentials.VCenterURL,
 		r.credentials.Username,
 		r.credentials.Password,
-		true, // insecure - accept self-signed certificates
+		tlsConfig,
 		r.logger,
 	)
 	if err != nil {

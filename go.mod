@@ -27,7 +27,7 @@ require (
 	github.com/hashicorp/go-version v1.7.0
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.6
 	github.com/kubernetes-csi/external-snapshotter/client/v6 v6.3.0
-	github.com/kubev2v/vm-migration-detective v0.0.0-20260908083350-a89447103cf3
+	github.com/kubev2v/vm-migration-detective v0.0.0-20261006023354-140bc9526c2c
 	github.com/masterzen/winrm v0.0.0-20250927112105-5f8e6c707321
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.27.4
@@ -195,5 +195,3 @@ require (
 )
 
 replace github.com/gophercloud/gophercloud => github.com/kubev2v/gophercloud v0.0.0-20230629135522-9d701a75c760
-
-replace github.com/kubev2v/vm-migration-detective => ../vm-migration-detective
