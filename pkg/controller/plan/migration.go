@@ -17,6 +17,7 @@ import (
 
 	api "github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1"
 	"github.com/kubev2v/forklift/pkg/apis/forklift/v1beta1/plan"
+	appliancectrl "github.com/kubev2v/forklift/pkg/controller/copyappliance"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter"
 	"github.com/kubev2v/forklift/pkg/controller/plan/adapter/base"
 	plancontext "github.com/kubev2v/forklift/pkg/controller/plan/context"
@@ -71,6 +72,8 @@ type Migration struct {
 	builder adapter.Builder
 	// Ensurer
 	ensurer adapter.Ensurer
+	// Ensurer for CopyAppliance CRs.
+	copyApplianceEnsurer appliancectrl.Ensurer
 	// kubevirt.
 	kubevirt KubeVirt
 	// Source client.
@@ -193,6 +196,7 @@ func (r *Migration) init() (err error) {
 	if err != nil {
 		return
 	}
+	r.copyApplianceEnsurer = appliancectrl.Ensurer{Client: r.Client, Log: r.Log}
 	r.destinationClient, err = adapter.DestinationClient(r.Context)
 	if err != nil {
 		return
@@ -365,6 +369,9 @@ func (r *Migration) Archive() {
 		if err := r.deleteProviderStorage(); err != nil {
 			r.Log.Error(err, "Failed to clean up the PVC and PV for the provider storage")
 		}
+		if err := r.deleteSMBCSISecrets(); err != nil {
+			r.Log.Error(err, "Failed to clean up SMB CSI credential secrets")
+		}
 	case api.VSphere:
 		r.Log.Info("Deleting validate-VDDK job(s).")
 		if err := r.deleteValidateVddkJob(); err != nil {
@@ -503,6 +510,10 @@ func (r *Migration) cleanup(vm *plan.VMStatus, failOnErr func(error) bool, force
 		}
 	}
 
+	r.Log.Info("Deleting copy appliance.", "vm", vm.String())
+	if err := r.deleteCopyAppliance(vm); failOnErr(err) {
+		return err
+	}
 	r.Log.Info("Deleting importer pods.", "vm", vm.String())
 	if err := r.deleteImporterPods(vm); failOnErr(err) {
 		return err
@@ -734,6 +745,35 @@ func (r *Migration) deleteProviderStorage() (err error) {
 	}
 
 	return r.deleteProviderPVs(getPVsFunc, string(providerType))
+}
+
+// deleteSMBCSISecrets deletes the SMB CSI credential secrets that were copied
+// to the destination cluster for HyperV SMB CSI PVs.
+func (r *Migration) deleteSMBCSISecrets() error {
+	if r.Plan.Provider.Source.Type() != api.HyperV {
+		return nil
+	}
+	matchLabels := map[string]string{
+		"plan":   string(r.Plan.UID),
+		"hyperv": "smb-csi-secret",
+	}
+	list := &core.SecretList{}
+	if err := r.Destination.List(context.TODO(), list,
+		&client.ListOptions{
+			LabelSelector: labels.SelectorFromSet(matchLabels),
+			Namespace:     r.Plan.Spec.TargetNamespace,
+		},
+	); err != nil {
+		return liberr.Wrap(err)
+	}
+	for i := range list.Items {
+		s := &list.Items[i]
+		if err := r.Destination.Delete(context.TODO(), s); err != nil && !k8serr.IsNotFound(err) {
+			return liberr.Wrap(err)
+		}
+		r.Log.V(1).Info("SMB CSI secret deleted.", "secret", path.Join(s.Namespace, s.Name))
+	}
+	return nil
 }
 
 // deleteProviderPVs is a helper function that gets and deletes PVs for a provider type.
@@ -1012,6 +1052,115 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 			} else {
 				vm.Phase = api.PhaseCompleted
 			}
+		case api.PhaseCreateCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			err = r.ensureCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseWaitForCopyAppliance, api.PhaseWaitForRefreshedCopyAppliance,
+			api.PhaseWaitForRefreshedCopyApplianceBeforeFinalize:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			var applianceReady bool
+			applianceReady, err = r.waitForCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !applianceReady {
+				return
+			}
+			err = r.kubevirt.EnsureNbdConnections(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if vm.Phase == api.PhaseWaitForCopyAppliance {
+				step.MarkCompleted()
+			}
+			r.NextPhase(vm)
+		case api.PhaseReleaseCopyAppliance, api.PhaseReleaseCopyApplianceBeforeCutover,
+			api.PhaseReleaseCopyApplianceBeforeFinalSnap:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			err = r.releaseCopyApplianceDisks(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseWaitForCopyApplianceReleased, api.PhaseWaitForCopyApplianceReleasedBeforeCutover,
+			api.PhaseWaitForCopyApplianceReleasedBeforeFinalSnap:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			var released bool
+			released, err = r.waitForCopyApplianceReleased(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !released {
+				return
+			}
+			r.NextPhase(vm)
+		case api.PhaseRefreshCopyAppliance, api.PhaseRefreshCopyApplianceBeforeFinalize:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			err = r.refreshCopyApplianceDisks(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			r.NextPhase(vm)
+		case api.PhaseTeardownCopyAppliance:
+			step, found := vm.FindStep(r.migrator.Step(vm))
+			if !found {
+				vm.AddError(fmt.Sprintf("Step '%s' not found", r.migrator.Step(vm)))
+				break
+			}
+			step.MarkStarted()
+			step.Phase = api.StepRunning
+			var teardownDone bool
+			teardownDone, err = r.teardownCopyAppliance(vm)
+			if err != nil {
+				step.AddError(err.Error())
+				err = nil
+				break
+			}
+			if !teardownDone {
+				return
+			}
+			step.MarkCompleted()
+			r.NextPhase(vm)
 		case api.PhaseCreateDataVolumes:
 			step, found := vm.FindStep(r.migrator.Step(vm))
 			if !found {
@@ -1520,6 +1669,13 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				break
 			}
 			vm.Warm.Precopies[n-1].WithDeltas(deltas)
+			if vm.Phase == api.PhaseStoreSnapshotDeltas && settings.Settings.EnabledForPlan(r.Plan) {
+				err = r.kubevirt.EnsureNbdConnections(vm)
+				if err != nil {
+					step.AddError(err.Error())
+					break
+				}
+			}
 			r.NextPhase(vm)
 		case api.PhaseAddCheckpoint, api.PhaseAddFinalCheckpoint:
 			step, found := vm.FindStep(r.migrator.Step(vm))
@@ -1665,8 +1821,7 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				return
 			}
 
-			switch r.Source.Provider.Type() {
-			case api.Ova, api.VSphere, api.HyperV, api.EC2, api.Azure:
+			if r.Source.Provider.RequiresConversion() {
 				// fetch config from the conversion pod
 				pod, err := r.kubevirt.GetGuestConversionPod(vm)
 				if err != nil {
@@ -1694,8 +1849,6 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 			step.Phase = api.StepRunning
 
 			if settings.Settings.UseConversionCR {
-				snapshotMoref := vm.Warm.Precopies[0].Snapshot
-
 				var cr *api.Conversion
 				cr, err = r.kubevirt.GetDeepInspectionConversion(vm)
 				if err != nil {
@@ -1705,8 +1858,14 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				}
 
 				if cr == nil {
-					_, err = r.kubevirt.CreateDeepInspectionConversion(
-						vm, snapshotMoref, r.Plan.Name, string(r.Plan.UID))
+					if r.Plan.Provider.Source.Type() == api.HyperV {
+						_, err = r.kubevirt.CreateDeepInspectionConversionHyperV(
+							vm, r.Plan.Name, string(r.Plan.UID))
+					} else {
+						snapshotMoref := vm.Warm.Precopies[0].Snapshot
+						_, err = r.kubevirt.CreateDeepInspectionConversion(
+							vm, snapshotMoref, r.Plan.Name, string(r.Plan.UID))
+					}
 					if err != nil {
 						step.AddError(err.Error())
 						err = nil
@@ -1846,7 +2005,8 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 
 		// Failed warm migration can't follow its planned itinerary to snapshot removal phase
 		// so we remove the snapshot here to prevent an orphaned snapshot.
-		if r.Plan.IsWarm() && !vm.HasCondition(api.ConditionFailed) && !r.IsResumeConversion() {
+		firstFailure := !vm.HasCondition(api.ConditionFailed)
+		if r.Plan.IsWarm() && firstFailure && !r.IsResumeConversion() {
 			r.removeLastWarmSnapshot(vm)
 		}
 
@@ -1858,6 +2018,11 @@ func (r *Migration) execute(vm *plan.VMStatus) (err error) {
 				Message:  "The VM migration has FAILED.",
 				Durable:  true,
 			})
+		if firstFailure {
+			if delErr := r.deleteCopyAppliance(vm); delErr != nil {
+				r.Log.Error(delErr, "Deleting copy appliance after failed migration.", "vm", vm.String())
+			}
+		}
 	}
 
 	return
