@@ -508,7 +508,7 @@ build-deep-inspection-image: check_container_runtime ## Build forklift-deep-insp
 		echo "Notice: deep-inspection image build is only supported on amd64 platform."; \
 		echo "Current platform: $(PLATFORM) - skipping deep-inspection image build."; \
 	else \
-		$(CONTAINER_CMD) build $(PLATFORM_FLAG) $(BUILD_LABEL_ARGS) -t $(DEEP_INSPECTION_IMAGE)$(PLATFORM_SUFFIX) -f build/deep-inspection/Containerfile-upstream .; \
+		$(CONTAINER_CMD) build $(PLATFORM_FLAG) $(BUILD_LABEL_ARGS) -t $(DEEP_INSPECTION_IMAGE)$(PLATFORM_SUFFIX) -f build/deep-inspection/Containerfile .; \
 	fi
 
 push-deep-inspection-image: build-deep-inspection-image ## Push forklift-deep-inspection image

@@ -330,7 +330,7 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              copy_appliance_container_image:
+              copy_appliance_container_image_fqin:
                 description: |-
                   Fully-qualified nbd-container image loaded onto copy appliances
                   (e.g. "quay.io/kubev2v/nbd-container:latest"). The setup pod that reads
@@ -726,7 +726,7 @@ spec:
                 description: vSphere xcopy populator image. Optional. If left empty,
                   the operator automatically sets this from the release payload.
                 type: string
-              toehold_base_disk_container_image:
+              toehold_base_disk_container_image_fqin:
                 description: |-
                   Fully-qualified base containerdisk image for toehold templates
                   (e.g. "registry.redhat.io/rhel9/rhel-guest-image:latest").

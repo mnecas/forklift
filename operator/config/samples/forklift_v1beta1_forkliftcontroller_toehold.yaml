@@ -10,5 +10,5 @@ metadata:
 spec:
   feature_toehold: "true"
   toehold_builder_image_fqin: quay.io/kubev2v/toehold-builder:latest
-  toehold_base_disk_container_image: registry.redhat.io/rhel9/rhel-guest-image:latest
-  copy_appliance_container_image: quay.io/kubev2v/nbd-container:latest
+  toehold_base_disk_container_image_fqin: registry.redhat.io/rhel9/rhel-guest-image:latest
+  copy_appliance_container_image_fqin: quay.io/kubev2v/nbd-container:latest

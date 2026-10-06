@@ -4901,11 +4901,11 @@ spec:
                 type: array
               containerImage:
                 description: |-
-                  ImageStreamTag naming the container image loaded into the appliance's
-                  podman store, resolved in the controller's own namespace. The controller
-                  reads the image from the cluster's internal registry and streams it to
+                  Fully qualified pull spec for the container image loaded into the
+                  appliance's podman store. A setup pod reads the image and streams it to
                   the appliance over SSH, so the appliance needs no registry access of its
-                  own.
+                  own. The pod carries no credential, so the image has to be readable
+                  without one.
                 minLength: 1
                 type: string
               datacenter:
@@ -5514,11 +5514,11 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              copy_appliance_container_image:
+              copy_appliance_container_image_fqin:
                 description: |-
                   Fully-qualified nbd-container image loaded onto copy appliances
-                  (e.g. "quay.io/kubev2v/nbd-container:latest"), or an ImageStreamTag in the
-                  controller namespace (e.g. "copy-appliance:latest").
+                  (e.g. "quay.io/kubev2v/nbd-container:latest"). The setup pod that reads
+                  it carries no registry credential, so it has to be readable without one.
                 type: string
               copy_appliance_ssh_user:
                 default: root
@@ -5910,7 +5910,7 @@ spec:
                 description: vSphere xcopy populator image. Optional. If left empty,
                   the operator automatically sets this from the release payload.
                 type: string
-              toehold_base_disk_container_image:
+              toehold_base_disk_container_image_fqin:
                 description: |-
                   Fully-qualified base containerdisk image for toehold templates
                   (e.g. "registry.redhat.io/rhel9/rhel-guest-image:latest").

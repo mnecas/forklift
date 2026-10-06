@@ -275,16 +275,22 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	waitCount := 0
 	teardownCount := 0
 	createApplianceIdx := -1
+	waitApplianceIdx := -1
+	preflightIdx := -1
 	createDVsIdx := -1
 	for i, step := range itr.Pipeline {
 		if step.Name == api.PhaseWaitForCopyAppliance {
 			waitCount++
+			waitApplianceIdx = i
 		}
 		if step.Name == api.PhaseTeardownCopyAppliance {
 			teardownCount++
 		}
 		if step.Name == api.PhaseCreateCopyAppliance {
 			createApplianceIdx = i
+		}
+		if step.Name == api.PhasePreflightInspection {
+			preflightIdx = i
 		}
 		if step.Name == api.PhaseCreateDataVolumes {
 			createDVsIdx = i
@@ -296,6 +302,14 @@ func TestItinerary_CopyApplianceWarm_SelectsWarmCopyAppliance(t *testing.T) {
 	if createApplianceIdx < 0 || createDVsIdx < 0 || createApplianceIdx >= createDVsIdx {
 		t.Fatalf("expected CreateCopyAppliance before CreateDataVolumes, got indices appliance=%d dvs=%d",
 			createApplianceIdx, createDVsIdx)
+	}
+	if waitApplianceIdx < 0 || preflightIdx < 0 || waitApplianceIdx >= preflightIdx {
+		t.Fatalf("expected WaitForCopyAppliance before PreflightInspection, got indices wait=%d preflight=%d",
+			waitApplianceIdx, preflightIdx)
+	}
+	if preflightIdx >= createDVsIdx {
+		t.Fatalf("expected PreflightInspection before CreateDataVolumes, got indices preflight=%d dvs=%d",
+			preflightIdx, createDVsIdx)
 	}
 	if teardownCount != 1 {
 		t.Fatalf("expected one teardown phase at cutover, got %d", teardownCount)

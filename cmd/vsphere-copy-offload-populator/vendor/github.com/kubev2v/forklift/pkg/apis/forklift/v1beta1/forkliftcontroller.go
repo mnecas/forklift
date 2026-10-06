@@ -201,7 +201,7 @@ type ForkliftControllerSpec struct {
 	// (e.g. "registry.redhat.io/rhel9/rhel-guest-image:latest").
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	ToeholdBaseDiskContainerImage string `json:"toehold_base_disk_container_image,omitempty"`
+	ToeholdBaseDiskContainerImageFQIN string `json:"toehold_base_disk_container_image_fqin,omitempty"`
 	// Default OVF CPU count for toehold templates.
 	// +optional
 	// +kubebuilder:default="2"
@@ -220,7 +220,7 @@ type ForkliftControllerSpec struct {
 	// controller namespace (e.g. "copy-appliance:latest").
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
-	CopyApplianceContainerImage string `json:"copy_appliance_container_image,omitempty"`
+	CopyApplianceContainerImageFQIN string `json:"copy_appliance_container_image_fqin,omitempty"`
 	// SSH user the controller logs in to copy appliances as. Defaults to root.
 	// +optional
 	// +kubebuilder:default="root"

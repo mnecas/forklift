@@ -368,9 +368,9 @@ func (r *BaseMigrator) warmCopyApplianceItinerary() *libitr.Itinerary {
 			{Name: api.PhaseCreateInitialSnapshot},
 			{Name: api.PhaseWaitForInitialSnapshot},
 			{Name: api.PhaseStoreInitialSnapshotDeltas, All: VSphere},
-			{Name: api.PhasePreflightInspection, All: RunInspection},
 			{Name: api.PhaseCreateCopyAppliance},
 			{Name: api.PhaseWaitForCopyAppliance},
+			{Name: api.PhasePreflightInspection, All: RunInspection},
 			{Name: api.PhaseCreateDataVolumes},
 			// Precopy loop start
 			{Name: api.PhaseCopyDisks},

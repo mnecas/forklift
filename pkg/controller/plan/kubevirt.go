@@ -42,6 +42,7 @@ import (
 	libcnd "github.com/kubev2v/forklift/pkg/lib/condition"
 	liberr "github.com/kubev2v/forklift/pkg/lib/error"
 	libref "github.com/kubev2v/forklift/pkg/lib/ref"
+	"github.com/kubev2v/forklift/pkg/nbd-container/announce"
 	"github.com/kubev2v/forklift/pkg/settings"
 	v2vconfig "github.com/kubev2v/forklift/pkg/virt-v2v/config"
 	template "github.com/openshift/api/template/v1"
@@ -861,9 +862,40 @@ func (r *KubeVirt) CreateDeepInspectionConversionHyperV(
 func (r *KubeVirt) CreateDeepInspectionConversion(
 	vm *plan.VMStatus, snapshotMoref, planName, planID string,
 ) (*api.Conversion, error) {
+	useToeholdNBD := settings.Settings.EnabledForPlan(r.Plan)
+	convSettings := map[string]string{api.SpecSettingsSnapshotMorefKey: snapshotMoref}
+	vddkImage := settings.GetVDDKImage(r.Source.Provider.Spec.Settings)
+
 	// Connection secret goes to Plan.Namespace on the management cluster
 	// (DeepInspection pods run there, not on the destination cluster).
 	connSecretData := r.buildDeepInspectionConnectionSecretData()
+	if useToeholdNBD {
+		nbdURIs, nbdErr := r.deepInspectionNbdURIs(vm)
+		if nbdErr != nil {
+			return nil, liberr.Wrap(nbdErr)
+		}
+		convSettings[api.SpecSettingsNbdDisksKey] = strings.Join(nbdURIs, ",")
+		vddkImage = ""
+		if r.Source.Provider.ToeholdNbdSsl() {
+			name := r.Source.Provider.Status.ToeholdSSHPrivateSecret
+			if name == "" {
+				return nil, fmt.Errorf("provider has no toehold SSH private secret for NBD TLS")
+			}
+			toeholdSecret := &core.Secret{}
+			if err := r.Get(context.TODO(), types.NamespacedName{
+				Name: name, Namespace: r.Source.Provider.Namespace,
+			}, toeholdSecret); err != nil {
+				return nil, fmt.Errorf("failed to get toehold secret %s for NBD TLS: %w", name, err)
+			}
+			for _, key := range []string{announce.CACert, announce.ClientCert, announce.ClientKey} {
+				pem, found := toeholdSecret.Data[key]
+				if !found || len(pem) == 0 {
+					return nil, fmt.Errorf("toehold secret %s missing %s for NBD TLS", name, key)
+				}
+				connSecretData[key] = pem
+			}
+		}
+	}
 	connLabels := r.getConversionLabels(api.DeepInspection, vm.ID, planID,
 		map[string]string{kConnection: "true"})
 	connSecretSpec := r.buildConversionSecret(
@@ -927,11 +959,9 @@ func (r *KubeVirt) CreateDeepInspectionConversion(
 				Name:      connSecret.Name,
 			},
 		},
-		Settings: map[string]string{
-			api.SpecSettingsSnapshotMorefKey: snapshotMoref,
-		},
+		Settings:         convSettings,
 		XfsCompatibility: r.Plan.Spec.XfsCompatibility,
-		VDDKImage:        settings.GetVDDKImage(r.Source.Provider.Spec.Settings),
+		VDDKImage:        vddkImage,
 		DiskEncryption:   diskEncryption,
 		PodSettings: api.PodSettings{
 			ServiceAccount: resolveServiceAccount(r.Plan),
@@ -939,6 +969,53 @@ func (r *KubeVirt) CreateDeepInspectionConversion(
 	}
 	cr := r.buildConversion(planName, vm.ID, crLabels, spec)
 	return r.ensureConversion(cr)
+}
+
+func (r *KubeVirt) deepInspectionNbdURIs(vm *plan.VMStatus) ([]string, error) {
+	provider := r.Source.Provider
+	ensure := appliancectrl.Ensurer{Client: r.Client, Log: r.Log}
+	appliance, err := ensure.Find(context.TODO(),
+		provider.Namespace,
+		ensure.Labeler.ApplianceLabels(provider, r.Migration.UID, vm.ID),
+		true)
+	if err != nil {
+		return nil, err
+	}
+	if appliance == nil {
+		return nil, liberr.New("copy appliance is gone", "vm", vm.ID)
+	}
+	connections, err := appliancectrl.ExportNbdConnections(appliance, provider.ToeholdNbdSsl())
+	if err != nil {
+		return nil, err
+	}
+	obj, err := r.Source.Inventory.VM(&vm.Ref)
+	if err != nil {
+		return nil, liberr.Wrap(err)
+	}
+	srcVM, ok := obj.(*model.VM)
+	if !ok {
+		return nil, liberr.New("inventory VM is not a vSphere VM", "vm", vm.ID)
+	}
+	var uris []string
+	for _, disk := range srcVM.SortedDisksAsVmware() {
+		if disk.RDM || disk.File == "" {
+			continue
+		}
+		uri, found := connections[disk.File]
+		if !found {
+			uri, found = connections[appliancectrl.BaseVMDKPath(disk.File)]
+		}
+		if !found {
+			return nil, liberr.New("no NBD export for disk", "backing", disk.File)
+		}
+		uris = append(uris, uri)
+	}
+	if len(uris) == 0 {
+		return nil, liberr.New(
+			"copy appliance has exports but no migratable disks mapped for NBD input",
+			"vm", vm.String())
+	}
+	return uris, nil
 }
 
 // DeleteConversion tears down a Conversion CR: pod → snapshot → secrets → CR.
